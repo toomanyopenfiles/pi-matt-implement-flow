@@ -41,3 +41,5 @@ If a required decision was not approved upstream, use `contact_supervisor` with 
 ## Report
 
 Your final message is the return value; the caller saw none of your tool calls. Report by context pointer: headSha, branch, commits, the test command and its result, the seams you tested at, and anything the ticket left ambiguous. Under 200 words; the diff speaks for itself. Fill every field of the structured output schema.
+
+**Acceptance contract**: when your brief carries an `## Acceptance Contract`, your final `structured_output` tool call must have TWO top-level keys: `value` (every field of the schema) and `acceptanceReport` (the object in the contract's shape, with real evidence values and `[]` where nothing applies). `acceptanceReport` is a SIBLING of `value` at the top level of the tool call — never nested inside `value`. This is platform-enforced: a missing or misplaced `acceptanceReport` rejects the run even when the work itself is complete.

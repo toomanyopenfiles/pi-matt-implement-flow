@@ -781,3 +781,24 @@ git add -A && git commit -qm 'chore: init'
 `/code-review` 原文：*Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base)*。
 
 票分支根在 feature 的某个 commit 上时，`git diff <feature>...refs/heads/ticket-N` 的 merge-base 正好落在票的 baseCommit → 精确圈出这一票的改动（即使 feature 已经合进了别的票）。第一轮写的两点 `..` 已全部更正为三点 `...`。
+
+### 10.16 ⚠️ `outputSchema` + `gate` 同用时，`acceptanceReport` 必须是 `structured_output` 调用的**兄弟键**
+
+用自研 coder agent 跑 smoke 时踩到的真机制：
+
+- 带 `gate` 时 runtime 会往 brief 注入 **Acceptance Contract**（`acceptance.ts:492`），要求 child 的最终 `structured_output` 调用里包含 `acceptanceReport` 对象
+- 结构化运行时把工具参数定义为 `{ value: <schema>, acceptanceReport: {type:object} }`，捕获时分开写 `output.json` 与 `acceptance-report.json`（`structured-output.ts:64-71,130-152`）
+- **我们的 coder 把 `acceptanceReport` 嵌进了 `value` 里面** → `acceptance-report.json` 不存在 → 解析回落到「在最终文本里找 ```acceptance-report 围栏」→ 找不到 → `Acceptance rejected: Structured acceptance report not found`——**即使工作全部完成、schema 字段一个不少**（TDD 红→绿、commit 已落地）
+- 修复：persona 的 Report 段必须写明工具调用的确切形状（`value` 与 `acceptanceReport` 是兄弟键，不许嵌套）；修复后 smoke-3 一次通过
+- 推论：**凡是自带「报告格式」纪律的自研 agent，都必须写明这条**，否则模型会把契约要求挤掉；内置 worker 没踩坑是因为它的 persona 没有和契约竞争的强格式约束
+
+### 10.17 注册链路验证（2026-09-15 第二轮探针）
+
+| 验证项 | 结果 |
+|---|---|
+| `pi install <本地路径>` | ✅ settings 写入相对路径 `../../Programs/llm-tools/plugins/...`；`subagents` 段保持空（D11：不需要 agentScanDirs） |
+| 三个 agent 以全名注册 | ✅ `pi-matt-implement-flow.coder/.reviewer/.final-reviewer`，来源 `pi-matt-implement-flow@0.1.0`；与内置 `reviewer`、用户级 `worker`（alias 含 `coder`）零冲突 |
+| `agentOverrides` 的 key | ✅ **必须用全名**：用全名 key 写 `description` 覆盖，capabilities 列表立即生效；移除后恢复（D11 待验证项销项） |
+| agent frontmatter 的 `skills:` 解析 | ✅ `tdd`、`codebase-design`、`code-review` 都能从用户级软链解析（`status.json` 记录 `skills: ['tdd','codebase-design']`）；pi-subagents 的「Proactive skill subagent suggestions」也识别到了两个 reviewer 关联 code-review |
+| 自研 coder 真实跑通 | ✅ TDD 红→绿、commit、结构化输出、D8 闭环（`git branch ticket-09 <SHA>` 成功）——见 §10.16 的 acceptance 形状坑 |
+| D15 父 agent 自管清理 | ✅ 两个失败 smoke 的保留 worktree 删前 `status --porcelain` 自检为空 → `git worktree remove --force` + `git branch -D` 成功 |
