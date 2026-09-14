@@ -1,0 +1,163 @@
+'use strict';
+
+// 自检套件：逐条校验包注册不变量。对包目录全程只读（readFile/stat/exists）。
+// 「模拟破坏」用假想 fixture 喂给纯 checker（绝不改动真实文件），
+// 证明每条不变量恰好被对应的那条测试守住。
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  AGENT_NAMES,
+  PKG_ROOT,
+  readPackageJson,
+  readText,
+  isFileAt,
+  isDirAt,
+  parseFrontmatter,
+  checkSkillFileRegistration,
+  checkAgentDirRegistration,
+  checkSkillFrontmatter,
+  checkAgentFrontmatter,
+  checkAgentRegistration,
+  checkTestScript,
+} = require('./registration-checks.js');
+
+function readAgentFrontmatter() {
+  const frontmatter = {};
+  for (const agentName of AGENT_NAMES) {
+    frontmatter[agentName] = parseFrontmatter(readText(PKG_ROOT, `agents/${agentName}.md`));
+  }
+  return frontmatter;
+}
+
+const manifest = readPackageJson(PKG_ROOT);
+const packageName = manifest.name;
+const skillFrontmatter = parseFrontmatter(readText(PKG_ROOT, 'SKILL.md'));
+
+// --- 真实包树上的注册不变量（每条一个独立测试用例） ---
+
+test('package.json declares a test script invoking node --test', () => {
+  assert.deepEqual(checkTestScript(manifest), []);
+});
+
+test('every pi.skills entry points at an existing file', () => {
+  assert.deepEqual(checkSkillFileRegistration(manifest, { isFile: (p) => isFileAt(PKG_ROOT, p) }), []);
+});
+
+test('every pi.subagents.agents entry points at an existing directory', () => {
+  assert.deepEqual(checkAgentDirRegistration(manifest, { isDir: (p) => isDirAt(PKG_ROOT, p) }), []);
+});
+
+test('SKILL.md has a parseable frontmatter block', () => {
+  // 前置不变量：后续按字段断言的测试都依赖这一条——
+  // frontmatter 不可解析时，本测试先红，字段测试不会被子串过滤掩蔽。
+  assert.ok(skillFrontmatter, 'SKILL.md frontmatter is unparseable');
+});
+
+test('SKILL.md frontmatter name matches the package name', () => {
+  assert.ok(skillFrontmatter, 'SKILL.md frontmatter is unparseable');
+  const problems = checkSkillFrontmatter(skillFrontmatter, packageName).filter((p) =>
+    p.includes('name')
+  );
+  assert.deepEqual(problems, []);
+});
+
+test('SKILL.md frontmatter has a description', () => {
+  assert.ok(skillFrontmatter, 'SKILL.md frontmatter is unparseable');
+  const problems = checkSkillFrontmatter(skillFrontmatter, packageName).filter((p) =>
+    p.includes('description')
+  );
+  assert.deepEqual(problems, []);
+});
+
+test('SKILL.md frontmatter disables model auto-invocation', () => {
+  assert.ok(skillFrontmatter, 'SKILL.md frontmatter is unparseable');
+  const problems = checkSkillFrontmatter(skillFrontmatter, packageName).filter((p) =>
+    p.includes('disable-model-invocation')
+  );
+  assert.deepEqual(problems, []);
+});
+
+test('all three agent files exist: coder, reviewer, final-reviewer', () => {
+  const frontmatter = readAgentFrontmatter();
+  const problems = checkAgentRegistration(frontmatter, packageName).filter((p) =>
+    p.includes('missing agent file')
+  );
+  assert.deepEqual(problems, []);
+});
+
+test('every agent declares its name in package-full-name form (name + package fields)', () => {
+  const frontmatter = readAgentFrontmatter();
+  const problems = checkAgentRegistration(frontmatter, packageName).filter(
+    (p) => !p.includes('missing agent file')
+  );
+  assert.deepEqual(problems, []);
+});
+
+// --- 模拟破坏：假想 fixture，绝不改动真实文件。每条恰好对应一条真实不变量。 ---
+
+test('breakage simulation: a pi.skills entry renamed to a missing file is flagged', () => {
+  const broken = { pi: { skills: ['./SKILL-RENAMED-AWAY.md'] } };
+  const fakeIsFile = () => false;
+  assert.deepEqual(checkSkillFileRegistration(broken, { isFile: fakeIsFile }), [
+    'pi.skills entry points at a missing file: ./SKILL-RENAMED-AWAY.md',
+  ]);
+  // 而真实树不受影响（对照：同一 checker 对假想路径断言，真实声明仍然全绿）。
+  assert.deepEqual(checkSkillFileRegistration(manifest, { isFile: (p) => isFileAt(PKG_ROOT, p) }), []);
+});
+
+test('breakage simulation: a renamed agent directory is flagged', () => {
+  const broken = { pi: { subagents: { agents: ['./agents-renamed'] } } };
+  assert.deepEqual(checkAgentDirRegistration(broken, { isDir: () => false }), [
+    'pi.subagents.agents entry points at a missing directory: ./agents-renamed',
+  ]);
+});
+
+test('breakage simulation: SKILL.md name drifting from the package name is flagged', () => {
+  assert.deepEqual(
+    checkSkillFrontmatter({ name: 'some-other-skill', description: 'd', 'disable-model-invocation': 'true' }, packageName),
+    ['SKILL.md name "some-other-skill" does not match package name "pi-matt-implement-flow"']
+  );
+});
+
+test('breakage simulation: a deleted SKILL.md description is flagged', () => {
+  assert.deepEqual(
+    checkSkillFrontmatter({ name: packageName, 'disable-model-invocation': 'true' }, packageName),
+    ['SKILL.md frontmatter is missing a description']
+  );
+});
+
+test('breakage simulation: re-enabled model invocation is flagged', () => {
+  assert.deepEqual(
+    checkSkillFrontmatter({ name: packageName, description: 'd', 'disable-model-invocation': 'false' }, packageName),
+    [
+      'SKILL.md frontmatter must set disable-model-invocation: true (skill is orchestrator-only, not for model auto-invocation)',
+    ]
+  );
+});
+
+test('breakage simulation: an agent file going missing is flagged', () => {
+  assert.deepEqual(checkAgentFrontmatter(null, 'reviewer', packageName), [
+    'missing agent file for "reviewer"',
+  ]);
+});
+
+test('breakage simulation: an agent losing its package field is flagged', () => {
+  assert.deepEqual(
+    checkAgentFrontmatter({ name: 'coder' }, 'coder', packageName),
+    [
+      'agent "coder" frontmatter is missing the package field — without it the agent registers under its bare name, colliding with builtin reviewer and user aliases',
+    ]
+  );
+});
+
+test('breakage simulation: an agent declaring a wrong package is flagged', () => {
+  assert.deepEqual(
+    checkAgentFrontmatter({ name: 'coder', package: 'other-pkg' }, 'coder', packageName),
+    [
+      'agent "coder" declares package "other-pkg", which does not match package name "pi-matt-implement-flow"',
+    ]
+  );
+});
+
+// --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---
