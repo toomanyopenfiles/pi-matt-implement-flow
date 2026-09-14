@@ -9,6 +9,9 @@ const path = require('node:path');
 
 const PKG_ROOT = path.resolve(__dirname, '..');
 
+// 三个 agent 的名字（不含包前缀）。包全名 = `${packageName}.${agentName}`。
+const AGENT_NAMES = ['coder', 'reviewer', 'final-reviewer'];
+
 // --- 读取（只读原语，供测试装配真实包树） ---
 
 function readPackageJson(root = PKG_ROOT) {
@@ -145,7 +148,7 @@ function checkAgentFrontmatter(frontmatter, agentName, packageName) {
 
 function checkAgentRegistration(agentFrontmatter, packageName) {
   const problems = [];
-  for (const agentName of ['coder', 'reviewer', 'final-reviewer']) {
+  for (const agentName of AGENT_NAMES) {
     problems.push(...checkAgentFrontmatter(agentFrontmatter[agentName], agentName, packageName));
   }
   return problems;
@@ -169,6 +172,7 @@ function checkTestScript(manifest) {
 
 module.exports = {
   PKG_ROOT,
+  AGENT_NAMES,
   readPackageJson,
   readText,
   isFileAt,

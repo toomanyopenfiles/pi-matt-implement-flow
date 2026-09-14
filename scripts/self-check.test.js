@@ -6,8 +6,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
 const {
+  AGENT_NAMES,
   PKG_ROOT,
   readPackageJson,
   readText,
@@ -21,9 +21,6 @@ const {
   checkAgentRegistration,
   checkTestScript,
 } = require('./registration-checks.js');
-const { gitPatchCaptureWarning } = require('./git-patch-capture-guard.js');
-
-const AGENT_NAMES = ['coder', 'reviewer', 'final-reviewer'];
 
 function readAgentFrontmatter() {
   const frontmatter = {};
@@ -35,6 +32,7 @@ function readAgentFrontmatter() {
 
 const manifest = readPackageJson(PKG_ROOT);
 const packageName = manifest.name;
+const skillFrontmatter = parseFrontmatter(readText(PKG_ROOT, 'SKILL.md'));
 
 // --- 真实包树上的注册不变量（每条一个独立测试用例） ---
 
@@ -50,27 +48,33 @@ test('every pi.subagents.agents entry points at an existing directory', () => {
   assert.deepEqual(checkAgentDirRegistration(manifest, { isDir: (p) => isDirAt(PKG_ROOT, p) }), []);
 });
 
+test('SKILL.md has a parseable frontmatter block', () => {
+  // 前置不变量：后续按字段断言的测试都依赖这一条——
+  // frontmatter 不可解析时，本测试先红，字段测试不会被子串过滤掩蔽。
+  assert.ok(skillFrontmatter, 'SKILL.md frontmatter is unparseable');
+});
+
 test('SKILL.md frontmatter name matches the package name', () => {
-  const problems = checkSkillFrontmatter(
-    parseFrontmatter(readText(PKG_ROOT, 'SKILL.md')),
-    packageName
-  ).filter((p) => p.includes('name'));
+  assert.ok(skillFrontmatter, 'SKILL.md frontmatter is unparseable');
+  const problems = checkSkillFrontmatter(skillFrontmatter, packageName).filter((p) =>
+    p.includes('name')
+  );
   assert.deepEqual(problems, []);
 });
 
 test('SKILL.md frontmatter has a description', () => {
-  const problems = checkSkillFrontmatter(
-    parseFrontmatter(readText(PKG_ROOT, 'SKILL.md')),
-    packageName
-  ).filter((p) => p.includes('description'));
+  assert.ok(skillFrontmatter, 'SKILL.md frontmatter is unparseable');
+  const problems = checkSkillFrontmatter(skillFrontmatter, packageName).filter((p) =>
+    p.includes('description')
+  );
   assert.deepEqual(problems, []);
 });
 
 test('SKILL.md frontmatter disables model auto-invocation', () => {
-  const problems = checkSkillFrontmatter(
-    parseFrontmatter(readText(PKG_ROOT, 'SKILL.md')),
-    packageName
-  ).filter((p) => p.includes('disable-model-invocation'));
+  assert.ok(skillFrontmatter, 'SKILL.md frontmatter is unparseable');
+  const problems = checkSkillFrontmatter(skillFrontmatter, packageName).filter((p) =>
+    p.includes('disable-model-invocation')
+  );
   assert.deepEqual(problems, []);
 });
 
@@ -156,15 +160,4 @@ test('breakage simulation: an agent declaring a wrong package is flagged', () =>
   );
 });
 
-// --- 环境诊断：git 版本低于 2.41 时提示 patch 捕获降级（信息性，绝不让测试变红） ---
-
-test('git below 2.41 emits a diagnostic warning but never fails the run', (t) => {
-  const warning = gitPatchCaptureWarning(
-    execFileSync('git', ['--version'], { encoding: 'utf8' })
-  );
-  if (warning) {
-    t.diagnostic(warning);
-  }
-  // 本机 git 可能低于也可能高于阈值：无论哪边，测试都必须通过。
-  assert.ok(true);
-});
+// --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---
