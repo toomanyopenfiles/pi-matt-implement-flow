@@ -92,13 +92,13 @@ README 把这条写成硬不变量：**「同一时刻最多一张 doing 票；`
 
 | 资产 | 路径 |
 |---|---|
-| **知识底本**（要移植的） | `/Users/gaosong/Programs/llm-tools/plugins/implement-orchestrated/` |
-| Matt 的原始草稿 | `/Users/gaosong/Programs/llm-tools/skills/mattpocock-skills/skills/in-progress/implement-spec/` |
-| Matt 技能全集（已软链进 pi） | `/Users/gaosong/Programs/llm-tools/skills/mattpocock-skills/skills/` |
+| **知识底本**（要移植的） | `~/Programs/llm-tools/plugins/implement-orchestrated/` |
+| Matt 的原始草稿 | `~/Programs/llm-tools/skills/mattpocock-skills/skills/in-progress/implement-spec/` |
+| Matt 技能全集（已软链进 pi） | `~/Programs/llm-tools/skills/mattpocock-skills/skills/` |
 | 用户级技能软链 | `~/.pi/agent/skills/` |
-| pi-subagents 扩展（0.67.0） | `/Users/gaosong/.pi/agent/npm/node_modules/pi-subagents/` |
-| pi 内置文档 | `/Users/gaosong/.nvm/versions/node/v24.19.0/lib/node_modules/@earendil-works/pi-coding-agent/docs/` |
-| `pi-matt-flow`（复用对象） | `/Users/gaosong/Programs/llm-tools/plugins/pi-matt-flow/` |
+| pi-subagents 扩展（0.67.0） | `~/.pi/agent/npm/node_modules/pi-subagents/` |
+| pi 内置文档 | `~/.nvm/versions/node/v24.19.0/lib/node_modules/@earendil-works/pi-coding-agent/docs/` |
+| `pi-matt-flow`（复用对象） | `~/Programs/llm-tools/plugins/pi-matt-flow/` |
 
 ## 已定的项目结构（D11 定稿）
 

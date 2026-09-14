@@ -9,7 +9,7 @@ pi 的 implement 阶段编排器：读 spec + 票图 → 算前沿 → 并行派
 包以本地路径安装进 pi：
 
 ```sh
-pi install <本包路径>   # 例如 pi install /Users/gaosong/Programs/llm-tools/plugins/pi-matt-implement-flow
+pi install <本包路径>   # 例如 pi install /path/to/this/package
 ```
 
 安装后无需其他步骤。可运行自检确认注册面完好：

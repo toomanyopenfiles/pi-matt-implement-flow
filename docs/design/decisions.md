@@ -21,7 +21,7 @@
 
 ### D2 · 新建独立 pi 项目，不改造原 Claude Code 插件
 
-**决策**：在 `~/Programs/llm-tools/plugins/pi-matt-implement-flow/` 新建项目。不修改 `/Users/gaosong/Programs/llm-tools/plugins/implement-orchestrated/`。
+**决策**：在 `~/Programs/llm-tools/plugins/pi-matt-implement-flow/` 新建项目。不修改 `~/Programs/llm-tools/plugins/implement-orchestrated/`。
 
 **理由**：用户明确要求「在新项目中实现所有功能，不污染当前项目」。
 
@@ -29,7 +29,7 @@
 
 ### D3 · 项目目录
 
-**决策**：`/Users/gaosong/Programs/llm-tools/plugins/pi-matt-implement-flow/`
+**决策**：`~/Programs/llm-tools/plugins/pi-matt-implement-flow/`
 
 **理由**：用户指定放在 `~/Programs/llm-tools/plugins/`，与其他 pi 插件并列。
 

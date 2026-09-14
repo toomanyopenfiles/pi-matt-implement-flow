@@ -6,8 +6,8 @@
 
 | 组件 | 版本 / 路径 |
 |---|---|
-| pi-coding-agent | `/Users/gaosong/.nvm/versions/node/v24.19.0/lib/node_modules/@earendil-works/pi-coding-agent/`（docs 目录下有 34 个文件） |
-| pi-subagents | `0.67.0` @ `/Users/gaosong/.pi/agent/npm/node_modules/pi-subagents/` |
+| pi-coding-agent | `~/.nvm/versions/node/v24.19.0/lib/node_modules/@earendil-works/pi-coding-agent/`（docs 目录下有 34 个文件） |
+| pi-subagents | `0.67.0` @ `~/.pi/agent/npm/node_modules/pi-subagents/` |
 | pi 用户配置目录 | `~/.pi/agent/`（已有 `agents/` `skills/` `extensions/` `npm/` `missions/`） |
 | **git** | **2.39.5 (Apple Git-154)** ← ⚠️ 直接影响 pi 的 patch 捕获，见 §10.9 |
 
@@ -470,7 +470,7 @@ const board = await runs.lanes([{ key: "api", stages: [
 
 ## 7. `pi-matt-flow` 的实测经验（**本项目必读**）
 
-**出处**：`/Users/gaosong/Programs/llm-tools/plugins/pi-matt-flow/README.md`
+**出处**：`~/Programs/llm-tools/plugins/pi-matt-flow/README.md`
 
 ### 8 条不变量（作者标注：「都是踩过的坑，不是风格偏好」）
 
@@ -526,7 +526,7 @@ cat /tmp/matt-flow-probe.jsonl    # 能看到真实发出的 "/skill:xxx" 消息
 
 ## 8. B（implement-orchestrated）资产清单
 
-**出处**：`/Users/gaosong/Programs/llm-tools/plugins/implement-orchestrated/`
+**出处**：`~/Programs/llm-tools/plugins/implement-orchestrated/`
 
 | 文件 | 行数 | 内容 |
 |---|---|---|

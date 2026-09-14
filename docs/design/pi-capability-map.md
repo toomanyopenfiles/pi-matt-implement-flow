@@ -206,7 +206,7 @@ pi package 的约定目录是 `extensions/` `skills/` `prompts/` `themes/`——
 ```json
 {
   "subagents": {
-    "agentScanDirs": ["/Users/gaosong/Programs/llm-tools/plugins/pi-matt-implement-flow/agents"]
+    "agentScanDirs": ["~/Programs/llm-tools/plugins/pi-matt-implement-flow/agents"]
   }
 }
 ```
