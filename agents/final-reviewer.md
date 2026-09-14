@@ -4,7 +4,7 @@ description: Whole-branch final gate. Runs the two-axis code-review over the ful
 package: pi-matt-implement-flow
 tools: read, grep, find, ls, subagent, contact_supervisor
 allowNestedSubagents: true
-thinking: high
+thinking: max
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

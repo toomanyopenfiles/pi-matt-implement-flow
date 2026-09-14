@@ -4,7 +4,7 @@ description: Per-ticket reviewer. Runs the code-review skill's two-axis process 
 package: pi-matt-implement-flow
 tools: read, grep, find, ls, subagent, contact_supervisor
 allowNestedSubagents: true
-thinking: high
+thinking: max
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
