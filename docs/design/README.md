@@ -124,11 +124,11 @@ pi-matt-implement-flow/
 ## 尚未做的事
 
 - ✅ 设计文档（4 份）
-- ✅ 机制探针（`/tmp/mif-probe`，12 项发现）
-- ❌ 未写 `package.json` / pi manifest
-- ❌ 未写 `agents/{coder,reviewer,final-reviewer}.md`
-- ❌ 未写 `SKILL.md`
-- ❌ 未 `git init`
-- ❌ 未 `pi install` 注册（也就未验证 `agentOverrides` 的全名 key 能否生效）
+- ✅ 机制探针两轮（`/tmp/mif-probe`，§10.1–10.17）
+- ✅ `package.json` + 三个 agent + `pi install` 注册验证（含 agentOverrides 全名 key）
+- ✅ `SKILL.md`
+- ✅ 初始 commit
+- ❌ **首次端到端真实试跑**（在真实目标 repo 上跑通一轮；顺带销掉 §10.14 剩余两个待验证项：轴 child 的 cwd 是否为 reviewer 的 worktree、嵌套 usage 是否向上汇总）
+- ❌ 上游 bug 报告：pi-subagents 在 git < 2.41 上 patch 捕获静默降级为空（§10.9）
 
-**下一步顺序**（见 `decisions.md` 末节）：先 `package.json` + 三个 agent → `pi install` 验证注册链路 → 再写 `SKILL.md` 正文 → 真实 repo 试跑一轮。
+**下一步**：挑一个有真实票的目标 repo（或在本项目用 `to-spec` → `to-tickets` 造一套），跑 `/skill:pi-matt-implement-flow <feature> [N]`。

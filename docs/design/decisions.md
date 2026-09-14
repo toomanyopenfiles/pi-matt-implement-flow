@@ -116,13 +116,14 @@
 }
 ```
 
-**已验证**（非猜测）：
-- 文件型 skill 条目可用：`package-manager.js:2021-2033` 对字面路径做 `statSync().isFile()` 后**直接收下，无目录假设**
+**已验证**（非猜测，§10.17）：
+- 文件型 skill 条目可用：`package-manager.js:2021-2033` 对字面路径做 `statSync().isFile()` 后**直接收下，无目录假设**；且已用 pi 自己的 `loadSkills` 对本包 `SKILL.md` 实际加载成功（name 正确、零 diagnostics）
 - 两个 agent manifest 字段都支持：`agents.ts:517-545` 读 `pi-subagents.agents` 与 `pi.subagents.agents`
 - settings 里的**本地路径包**会被纳入 agent 扫描：`agents.ts:585-602`
+- `pi install` 实测：写入相对路径包条目，三个 agent 以全名注册，`agentOverrides` **必须用全名 key**（全名 key 的 description 覆盖立即生效）
 - 备选路线（软链）也可用但只覆盖 skill 半边：`~/.pi/agent/skills/<name>.md` → `SKILL.md`（文件软链）或目录软链到项目根（内含根 `SKILL.md` 即被发现）——`skills.js:134-177`
 
-**待验证**：`agentOverrides` 的 key 是否必须用全名 `pi-matt-implement-flow.coder`（源码 `applyCustomAgentOverrides` 用 `agent.name`，而 `agent.name` = runtimeName，倾向「必须全名」，但无文档明说，实现时用 `subagent({action:"list",capabilities:true})` 确认）。
+**~~待验证~~ → 已验证**：`agentOverrides` 的 key **必须用全名** `pi-matt-implement-flow.coder`（全名 key 的 description 覆盖立即生效，见 §10.17）。
 
 ### D12 · tracker 支持（Q6）：本地 markdown + 远程 issue 双支持
 
