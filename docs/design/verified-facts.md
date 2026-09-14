@@ -772,8 +772,8 @@ git add -A && git commit -qm 'chore: init'
 | `maxSubagentDepth`（agent frontmatter）**只能收紧**继承的限额 | 同上 |
 | `allowNestedSubagents: true` 授权 child-safe 嵌套 fanout，**不会**把省略的 `tools` 变成白名单；`subagent` 仍必须显式出现在 resolved tools | `docs/agents.md:322,406` |
 | 嵌套 run 出现在父的 status 树里，可按 id `interrupt` / `resume`（⚠️ 修正：第一轮预览说「子代失败对父不可见」是错的） | `docs/workflows.md:466` |
-| 嵌套 child 的 cwd = 启动者的 cwd（即 reviewer 的 worktree）→ 轴 child 直接读票分支文件树 | 待实现时验证 |
-| 轴 child 的 usage 是否向上汇入根级 `usageBudget`：**未证实** | 实现时验证 |
+| 嵌套 child 的 cwd = 启动者的 cwd（即 reviewer 的 worktree）→ 轴 child 直接读票分支文件树 | ✅ **E2E 实测为真**（§10.18-1） |
+| 轴 child 的 usage 是否向上汇入根级 `usageBudget`：**未证实** | E2E 首轮根级未传 usageBudget，无对比面，仍待验证（§10.18-8） |
 | 前台 child 永不加载父的环境扩展；后台 child 默认加载（除非 agent 设 `extensions`） | `docs/agents.md:412` |
 
 ### 10.15 review bundle 用三点 diff
@@ -791,6 +791,21 @@ git add -A && git commit -qm 'chore: init'
 - **我们的 coder 把 `acceptanceReport` 嵌进了 `value` 里面** → `acceptance-report.json` 不存在 → 解析回落到「在最终文本里找 ```acceptance-report 围栏」→ 找不到 → `Acceptance rejected: Structured acceptance report not found`——**即使工作全部完成、schema 字段一个不少**（TDD 红→绿、commit 已落地）
 - 修复：persona 的 Report 段必须写明工具调用的确切形状（`value` 与 `acceptanceReport` 是兄弟键，不许嵌套）；修复后 smoke-3 一次通过
 - 推论：**凡是自带「报告格式」纪律的自研 agent，都必须写明这条**，否则模型会把契约要求挤掉；内置 worker 没踩坑是因为它的 persona 没有和契约竞争的强格式约束
+
+### 10.18 E2E dogfood 实测（2026-09-15，本项目自身跑 spec「self-check」三票全流程）
+
+首个端到端真实跑：`/to-spec`+`/to-tickets` 造 3 票（01 自检基线 → {02 README, 03 git-guard}），N=2，全部闭环，final verdict = `ready`。账本 `.pi/matt-implement/self-check/ledger.md`，全流程 child run id 见账本事件日志。实测事实（按发现顺序）：
+
+1. **§10.14 销项①：轴 child cwd 继承 reviewer worktree = 真**。轴 child transcript 的 `cwd` 字段 = `pi-worktree-<reviewerRunId>-...`（会话 `96131547`/`run-0/subagent-artifacts/385fa3f8…_transcript.jsonl`）。reviewer 额外把 worktree 绝对路径写进轴 brief（自我 hedging，无害且冗余）。
+2. **§10.16 复发**：E2E 首轮 coder（t-01，`9ea3e64b`）把 `acceptanceReport` 嵌进 `value`（与探针同型）→ rejected（工作已完成，commit 落地）。**修复路径确认**：brief 显式写形状 + resume 重发（`repair-01`，`8a9315b9`）→ 一次过 verified，代码不动。
+3. **§10.16 第二变体——证据充实度**：t-02（`e3e0450f`）形状全对（兄弟键生效），但 `acceptanceReport.validationOutput = null` → `Acceptance rejected: validation-output evidence missing from child report`。docs-only 票尤其易踩（coder 以为没跑测试就不用填）。resume 补证据（`repair-02`，`f6bd86ba`）→ verified。→ coder.md 已补「Evidence completeness」纪律。
+4. **coder 会伪造全长 SHA**：t-02 报告 `headSha: 7eae4d2d5b1a1e73e8f4e13c4ee3fa78f34d4b73`——后 33 位是编造的，真值 `7eae4d26d7a3…`（仅 7 位前缀一致；`git branch <name> <sha>` 直接报 `not a valid branch point`）。t-03 报告的则是真值。→ §10.11 升级：**锚定一律先 `git rev-parse` 那条 pi-subagents 分支**，报值只当线索。SKILL.md 锚定步骤的「missing or unreachable」分支正好兜住。
+5. **嵌套 fanout 不稳定（D16 逃生舱价值实证）**：rev-01/01-r2/rev-03 正常出 2 个轴 child；rev-02（`ce013f03`）的顶层 `runs.all` 被平台**压扁成单个 fork child**，其内部 `runs.all` 两次失败（structured-input/no-result 错误）后 fork child 改为 inline 执行两轴——reviewer 自行独立复核承重事实后接受轴输出（其 structured output 的 `processNote` 有完整自述）。降级路径（乙）与逃生舱必须保持可用。
+6. **acceptance 状态三态观测**：`verified`（两次 handshake 修复后）、`rejected`（两次形状/证据拒）、`review-required`（fix-01-r2 的 resume 上出现——存储契约重放、gate 被拒，符合 SKILL.md 预期；**t-03 fresh 派发也是 review-required**）。状态是信息性的，判定只看 git 真值 + 亲测 gate。
+7. **越界剥离循环全程按设计运转**：coder 把票 03 交付物做进票 01 → rev-01 Spec 轴抓到 → orchestrator 选 re-scope（剥离）而非 pre-close（保住并行第二轮）→ 修复轮剥离 → 票 03 由自己的 coder 重做并独立 review/merge。票图语义无损。
+8. **§10.14 销项②未完成**：根级未传 `usageBudget`，嵌套 usage 向上汇入无对比面——下轮带 `usageBudget` 的跑再验。
+
+**总账**：3 票 / 2 波派发 / 2 次 review 循环 / 2 次 handshake 修复 / 0 escalated；`main` 终态 `1a3621f`，`npm test` 22/22。
 
 ### 10.17 注册链路验证（2026-09-15 第二轮探针）
 

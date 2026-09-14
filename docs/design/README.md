@@ -1,6 +1,6 @@
 # 设计方案索引
 
-> 状态：**设计阶段完成，代码未开始**。Q1–Q8 全部落定；机制探针已实测完成（`verified-facts.md` §10）。最后更新 2026-09-15（第二轮）。
+> 状态：**首个 E2E dogfood 已完成**（2026-09-15：spec「self-check」3 票全闭环，final = ready，`main` 含自检套件与 README）。Q1–Q8 全部落定；机制探针 §10.1–10.17 + E2E 实测 §10.18。
 
 ## 这个项目要做什么
 
@@ -128,7 +128,8 @@ pi-matt-implement-flow/
 - ✅ `package.json` + 三个 agent + `pi install` 注册验证（含 agentOverrides 全名 key）
 - ✅ `SKILL.md`
 - ✅ 初始 commit
-- ❌ **首次端到端真实试跑**（在真实目标 repo 上跑通一轮；顺带销掉 §10.14 剩余两个待验证项：轴 child 的 cwd 是否为 reviewer 的 worktree、嵌套 usage 是否向上汇总）
+- ✅ **首次端到端真实试跑**（2026-09-15，dogfood 本项目自身，spec「self-check」3 票全闭环，final = ready；§10.14 销项①，②待带 usageBudget 的跑；实测发现全部落在 §10.18 与 D17）
 - ❌ 上游 bug 报告：pi-subagents 在 git < 2.41 上 patch 捕获静默降级为空（§10.9）
+- ❌ 上游 bug 报告：嵌套 fanout 不稳定（rev-02 被压扁成单 fork child，内部 runs.all 两次失败后 inline 执行，§10.18-5）
 
-**下一步**：挑一个有真实票的目标 repo（或在本项目用 `to-spec` → `to-tickets` 造一套），跑 `/skill:pi-matt-implement-flow <feature> [N]`。
+**下一步**：处理上游报告（可选）；或下一个真实 feature 再跑一轮（带 `usageBudget` 销掉 §10.14 ②）。

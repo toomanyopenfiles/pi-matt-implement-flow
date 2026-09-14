@@ -189,6 +189,8 @@ Ticket file: <path>. Spec: <path>. Notes (read if present): .pi/matt-implement/<
 Base commit: <sha>. Test command: `npm test`.
 
 You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report headSha, commits, test result, and seams.
+
+Final report contract: your structured_output call must have TWO sibling top-level keys — value = { headSha, branch, commits, testResult, seams } and acceptanceReport = the contract object (never nested inside value), with validationOutput carrying the real command output you ran (never null).
 ```
 
 ### Reviewer brief
@@ -206,7 +208,7 @@ Run your two-axis process and return the structured verdict.
 
 ```
 Review round <k> found issues: read .pi/matt-implement/<slug>/findings/<NN>-r<k>.md.
-Fix them in your worktree, rerun the full suite, commit everything, and report as before — full structured output including the acceptanceReport object.
+Fix them in your worktree, rerun the full suite, commit everything, and report as before — full structured output with value and acceptanceReport as SIBLING top-level keys (never nested), validationOutput filled with the real rerun output.
 ```
 
 ### Integration fixer (no isolation)

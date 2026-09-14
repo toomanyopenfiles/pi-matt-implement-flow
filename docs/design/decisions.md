@@ -231,6 +231,18 @@ runs.run(newKey, { resume: <coderRunId>, task: "读 <findings路径> 修复" })
 
 **与 map 的对照**：`/code-review` 原文就是「运行技能的 agent 派两个并行轴 sub-agent、分别汇总、不合并不重排」。丙里 reviewer 扮演这个角色，两轴分离原样保留。
 
+### D17 · E2E 试跑补丁：brief 自带结构化输出纪律（2026-09-15，试跑实证）
+
+**背景**：§10.16 的形状坑在 E2E 首轮复发（§10.18-2），且出现第二变体——证据充实度拒（§10.18-3）。persona 里的双键纪律 + 平台注入的 Acceptance Contract 在**真实长 brief** 下仍会被模型挤掉。
+
+**决策**（三处落点）：
+
+1. **SKILL.md 的 Coder brief / Fix follow-up 模板**各加一行显式形状指令（value/acceptanceReport 兄弟键 + validationOutput 填真实命令输出）——实测加行后两次 handshake 修复都一次过。
+2. **coder.md** 补「Evidence completeness」段：`validationOutput` 永不为 null，docs-only 票填 gate 命令与结果。
+3. **锚定纪律升级**（§10.18-4）：coder 报告的全长 SHA 可能是伪造的——锚定一律 `git rev-parse` 那条 pi-subagents 分支取真值，报值只当线索。
+
+**代价**：brief 多两行。收益：首轮即省两次 rejected→resume 循环。
+
 ---
 
 ## 待选项与决议（Q1–Q8 已全部落定，下列分析保留作决策依据）
