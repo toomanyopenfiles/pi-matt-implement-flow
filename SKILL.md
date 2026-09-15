@@ -40,7 +40,16 @@ Check all of these before dispatching; on a failure, stop and tell the user what
 
 ## Ledger
 
-Keep one file: `.pi/matt-implement/<feature-slug>/ledger.md`. Read it at the start of every round; rewrite it after every dispatch, verdict, merge, and escalation. It is your memory across compaction — everything on it must be reconstructable from git and the tracker, so prefer SHAs over prose.
+Keep one file: `.pi/matt-implement/<feature-slug>/ledger.md`. Read it at the start of every round; update it after every dispatch, verdict, merge, and escalation. It is your memory across compaction — everything on it must be reconstructable from git and the tracker, so prefer SHAs over prose.
+
+**Two kinds of state, two disciplines:**
+
+- **The table is derived state.** Regenerate it from truth at every update: `status`, `branch`, `headSha`, `mergedIn`, and cleanup annotations come from `git log <base>..HEAD --oneline`, `git worktree list`, and each ticket file's `Status:` line. Never patch a row in place. The `coderRunId`/`fixes`/`escalated` columns exist only in this ledger — carry them forward from the previous table, never invent or drop them.
+- **The event log is append-only.** New lines go at the bottom in chronological order; never overwrite or reorder an existing line. Corrections are new entries that say what they fix.
+
+**Reconcile gate — before every dispatch and every merge** (not only after compaction): run `git log --oneline <base>..HEAD`, `git worktree list`, and read every ticket file's `Status:` line; if the ledger table disagrees with any of them, fix the ledger from truth before continuing.
+
+If an edit to the ledger fails, re-read the file and re-apply as single-purpose edits — never re-apply from memory.
 
 ```markdown
 # <feature-slug> — implement ledger
@@ -231,4 +240,4 @@ You are on the feature branch in the main checkout; this is an integration probl
 
 ## Compaction
 
-If context was compacted mid-run: re-read this file, then `.pi/matt-implement/<slug>/ledger.md`, then run `git worktree list` and `git branch` and reconcile the ledger against git before dispatching anything.
+If context was compacted mid-run: re-read this file, then `.pi/matt-implement/<slug>/ledger.md`, then run the reconcile gate (see Ledger) and continue.

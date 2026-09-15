@@ -243,6 +243,18 @@ runs.run(newKey, { resume: <coderRunId>, task: "读 <findings路径> 修复" })
 
 **代价**：brief 多两行。收益：首轮即省两次 rejected→resume 循环。
 
+### D18 · 账本记账语义：表格重生成 + 日志 append-only + 常规对账门（2026-09-15 审计后）
+
+E2E 首轮的用户抽查抓到账本三处失真（row 02 滞留 claimed；fix-01-r2 完成记录乱序；票 02 合并事件行被覆盖）。根因链：两段式 edit 原子失败 → 部分重发 → 手术式记账累积漂移；账本混装「派生态」与「历史」两种性质且未写明写法纪律。
+
+**决策**：
+
+1. SKILL.md Ledger 段定义 update 语义：**表格 = 派生态**，每次更新从 git 真值 + 票件 `Status:` 重生成；**run-id/fixes/escalated 列除外**——它们只存在于账本，沿抄禁造。**事件日志 = append-only**，修正以新条目记入，不改不删不重排。
+2. 对账三件套（`git log --oneline <base>..HEAD` / `git worktree list` / 票件 Status grep）从「仅 compaction 后」提为**每次派发与合并前的固定门**。
+3. edit 失败恢复规程：重读文件 → 拆单段分别重发，禁止凭记忆补写。
+
+**为何不上 ledger.json**：机器可读账本能根治 edit 匹配失败，但引入脚本依赖且失去人读性；对单编排器场景收益不抵成本（留作多 session 并发时的备选项）。
+
 ---
 
 ## 待选项与决议（Q1–Q8 已全部落定，下列分析保留作决策依据）
