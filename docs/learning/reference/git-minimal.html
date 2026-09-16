@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>速查 · git 最小词典 — pi-matt-implement-flow</title>
+<link rel="stylesheet" href="../assets/teach.css">
+</head>
+<body>
+<main class="lesson" style="max-width:44rem">
+
+  <header class="masthead">
+    <p class="kicker">速查参考 · 随打印</p>
+    <h1>git 最小词典（为本插件的工作流定制）</h1>
+    <p class="meta">只收录编排流程里真正出现的命令与概念 · 不追求完整，追求够用</p>
+  </header>
+
+  <h2><span class="secno">A</span>五个概念，一个心智模型</h2>
+
+  <p><strong>把 git 想成一间档案室</strong>：</p>
+  <ul>
+    <li><strong>commit（提交）</strong>＝一份<strong>不可修改的快照</strong>，加一个 40 位十六进制的<strong>指纹编号（SHA）</strong>。通常只报前 7 位就够定位。commit 一旦产生就永远在那，不会因为分支移动而消失。</li>
+    <li><strong>branch（分支）</strong>＝一张<strong>写着某个 SHA 的标签纸</strong>。分支不是容器，就是一个可以挪动的名字。<code>git branch -f</code> 的本质是：把标签纸撕下来贴到新的 SHA 上。</li>
+    <li><strong>HEAD</strong>＝「你现在站在哪」的指针。</li>
+    <li><strong>merge-base</strong>＝两个分支的<strong>共同祖先</strong> commit。三点 diff 从它出发（见 0001 答疑）。</li>
+    <li><strong>干净 / 脏</strong>＝<code>git status --porcelain</code> 有没有输出行。空输出＝干净。⚠️ 未跟踪的文件（??）也算脏。</li>
+  </ul>
+
+  <h2><span class="secno">B</span>本工作流用到的全部命令</h2>
+
+  <table>
+    <tr><th>命令</th><th>人话解释</th><th>谁 · 何时</th></tr>
+    <tr><td><code>git status --porcelain</code></td><td>机器可读的「改动清单」，一行一个文件；<strong>空输出＝工作区干净</strong>。派发前的门卫</td><td>编排者 · 每轮派发前</td></tr>
+    <tr><td><code>git rev-parse &lt;分支名&gt;</code></td><td>把分支名<strong>翻译成 40 位真 SHA</strong>——「问 git 要真相」的标准动作，不信任何人的报告</td><td>编排者 · 锚定与修复轮</td></tr>
+    <tr><td><code>git branch ticket-01 &lt;SHA&gt;</code></td><td>在指定 SHA 上<strong>创建</strong>分支（已有同名会报错）</td><td>编排者 · 锚定</td></tr>
+    <tr><td><code>git branch -f ticket-01 &lt;新SHA&gt;</code></td><td><strong>强制移动</strong>已有分支到新 SHA（标签纸重贴）。修复轮的「票分支前移」</td><td>编排者 · 修复完成后</td></tr>
+    <tr><td><code>git branch -D ticket-01</code></td><td><strong>强制删除</strong>分支（小写 -d 要求已合并才肯删，大写不问）</td><td>编排者 · 票合并关闭后清理</td></tr>
+    <tr><td><code>git merge --no-ff ticket-01</code></td><td>把票分支合并进当前分支，<strong>强制产生一个合并提交</strong>（原因见 0001 答疑）</td><td>编排者 · 每票串行合并</td></tr>
+    <tr><td><code>git diff base...ticket-01</code></td><td>从<strong>共同祖先</strong>开始比较，只显示票 01 独有的改动（三个点，不是两个）</td><td>编排者 · 写 review bundle</td></tr>
+    <tr><td><code>git log --oneline</code></td><td>每行一条提交历史：SHA 前 7 位 + 提交说明。bundle 里的第二件东西</td><td>编排者 · 写 review bundle</td></tr>
+    <tr><td><code>git worktree list</code></td><td>列出主检出和所有 worktree 的路径与所在分支。<strong>对账用</strong>（压缩后恢复现场第一步）</td><td>编排者 · 恢复/清理前</td></tr>
+    <tr><td><code>git worktree remove --force &lt;路径&gt;</code></td><td>删除一个 worktree 目录（force 跳过安全检查——所以删除前<strong>必须</strong>先自检干净）</td><td>编排者 · 清理阶段</td></tr>
+    <tr><td><code>cd &lt;路径&gt; &amp;&amp; npm test</code></td><td>进入 coder 的 worktree 目录跑全量测试——修复轮的「代跑门」</td><td>编排者 · 修复轮</td></tr>
+  </table>
+
+  <h2><span class="secno">C</span>porcelain 输出速判</h2>
+  <table>
+    <tr><th>每行开头</th><th>含义</th><th>算脏吗</th></tr>
+    <tr><td><code>?? 路径</code></td><td>未跟踪的新文件（git 还不认识它）</td><td>⚠️ <strong>算</strong>——派发会整波失败</td></tr>
+    <tr><td><code>M 路径</code> / <code> M 路径</code></td><td>已暂存 / 未暂存的修改</td><td>⚠️ 算</td></tr>
+    <tr><td>（空）</td><td>什么都没有</td><td>✅ 干净，可派发</td></tr>
+  </table>
+  <p>唯一例外：pi 自己只忽略 <code>.pi/subagents/</code>；所以本包把账本、bundle、findings 全放进 <code>.gitignore</code> 覆盖的路径（<code>.pi/matt-implement/</code>、<code>.scratch/</code>），被忽略的文件根本不出现在输出里，天然免疫。</p>
+
+  <h2><span class="secno">D</span>两个高频误读</h2>
+  <ul>
+    <li><strong>「git status 显示干净」≠「所有提交都已合并」</strong>——干净只说明没有未保存的改动；提交可能在任何分支上。所以本流程用 <code>rev-parse</code> 查分支位置，而不是用 status 判断进度。</li>
+    <li><strong>「分支删了 = 提交丢了」</strong>——不一定。commit 是档案室里的实体文件，删标签纸不影响快照本身；只要还有别的标签（或 SHA 还在日志里）就找得回。但「没有标签又没记 SHA」的 commit 最终会被垃圾回收——这就是台账里<strong>优先记 SHA</strong>的原因。</li>
+  </ul>
+
+  <footer>
+    <nav>
+      <a href="orchestrator-cheatsheet.html">→ 编排循环一页纸</a>
+      <a href="../lessons/0002-worktree-and-resume.html">← 正在学的课程 0002</a>
+    </nav>
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>课程 0001 · 编排循环骨架 — pi-matt-implement-flow</title>
+<link rel="stylesheet" href="../assets/teach.css">
+</head>
+<body>
+<main class="lesson">
+
+  <header class="masthead">
+    <p class="kicker">pi-matt-implement-flow · 课程 0001</p>
+    <h1>一张图记住整个工作流：流水线与轮次循环</h1>
+    <p class="meta">使命：<a href="../MISSION.md">维护并演进这个插件</a> · 预计 10–15 分钟 · 建议先复述再点练习</p>
+  </header>
+
+  <p class="lede">你是这个插件的维护者。要改它，先要能<strong>从记忆里完整画出来</strong>它的运行骨架。
+  这节课只教一件事：编排循环的高层形态——哪里是单行道，哪里是循环体，循环什么时候退出。
+  细节机制（worktree 保留、resume、验收契约）留给后续课程，本课只建立骨架。</p>
+
+  <h2><span class="secno">§1</span>全景：一条流水线，嵌着一个循环</h2>
+
+  <figure>
+    <svg viewBox="0 0 800 430" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC',sans-serif">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#23211c"/>
+        </marker>
+        <marker id="arrA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#994a1d"/>
+        </marker>
+      </defs>
+
+      <!-- 顶部：单次执行 -->
+      <rect x="20" y="30" width="150" height="54" rx="6" fill="#fff" stroke="#23211c" stroke-width="1.4"/>
+      <text x="95" y="52" text-anchor="middle" font-size="12.5" font-weight="600">前置检查</text>
+      <text x="95" y="70" text-anchor="middle" font-size="10.5" fill="#6f6a5f">工作区干净 · 票图无环</text>
+
+      <rect x="210" y="30" width="190" height="54" rx="6" fill="#fff" stroke="#23211c" stroke-width="1.4"/>
+      <text x="305" y="52" text-anchor="middle" font-size="12.5" font-weight="600">Round 0（只跑一次）</text>
+      <text x="305" y="70" text-anchor="middle" font-size="10.5" fill="#6f6a5f">读 spec+票 → 分支·基线·draft PR</text>
+
+      <line x1="170" y1="57" x2="208" y2="57" stroke="#23211c" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <!-- 下来进入循环 -->
+      <line x1="305" y1="84" x2="305" y2="128" stroke="#23211c" stroke-width="1.4" marker-end="url(#arr)"/>
+
+      <!-- 循环体容器 -->
+      <rect x="20" y="130" width="760" height="160" rx="10" fill="#f5e6d7" opacity="0.55" stroke="#994a1d" stroke-dasharray="5 4"/>
+      <text x="36" y="152" font-size="11" font-weight="700" fill="#994a1d">每轮循环（票未尽就再来）</text>
+
+      <g font-size="11.5" font-weight="600">
+        <rect x="34"  y="166" width="108" height="64" rx="6" fill="#fff" stroke="#23211c"/>
+        <text x="88" y="190" text-anchor="middle">① 干净检查</text>
+        <text x="88" y="208" text-anchor="middle" font-size="10" fill="#6f6a5f" font-weight="400">porcelain 必须为空</text>
+
+        <rect x="158" y="166" width="120" height="64" rx="6" fill="#fff" stroke="#23211c"/>
+        <text x="194" y="190" text-anchor="middle">② 认领·派发</text>
+        <text x="194" y="208" text-anchor="middle" font-size="10" fill="#6f6a5f" font-weight="400">一次 runs.all ≤ N 个 coder</text>
+
+        <rect x="270" y="166" width="120" height="64" rx="6" fill="#fff" stroke="#23211c"/>
+        <text x="330" y="190" text-anchor="middle">③ 锚定 + bundle</text>
+        <text x="330" y="208" text-anchor="middle" font-size="10" fill="#6f6a5f" font-weight="400">ticket-N ← HEAD SHA</text>
+
+        <rect x="406" y="166" width="120" height="64" rx="6" fill="#fff" stroke="#23211c"/>
+        <text x="466" y="190" text-anchor="middle">④ 两轴 review</text>
+        <text x="466" y="208" text-anchor="middle" font-size="10" fill="#6f6a5f" font-weight="400">Standards + Spec，只读</text>
+
+        <rect x="542" y="166" width="108" height="64" rx="6" fill="#fff" stroke="#23211c"/>
+        <text x="592" y="190" text-anchor="middle">⑤ 修复 ≤ 2 轮</text>
+        <text x="592" y="208" text-anchor="middle" font-size="10" fill="#6f6a5f" font-weight="400">resume 同一 coder</text>
+
+        <rect x="678" y="166" width="88" height="64" rx="6" fill="#fff" stroke="#23211c"/>
+        <text x="722" y="190" text-anchor="middle">⑥ 合并·关票</text>
+        <text x="722" y="208" text-anchor="middle" font-size="10" fill="#6f6a5f" font-weight="400">--no-ff + 集成门</text>
+      </g>
+
+      <g stroke="#23211c" stroke-width="1.3">
+        <line x1="142" y1="198" x2="156" y2="198" marker-end="url(#arr)"/>
+        <line x1="262" y1="198" x2="268" y2="198" marker-end="url(#arr)"/>
+        <line x1="390" y1="198" x2="404" y2="198" marker-end="url(#arr)"/>
+        <line x1="526" y1="198" x2="540" y2="198" marker-end="url(#arr)"/>
+        <line x1="662" y1="198" x2="676" y2="198" marker-end="url(#arr)"/>
+      </g>
+
+      <!-- 循环回边：⑥ → ① -->
+      <path d="M 722 232 L 722 268 L 88 268 L 88 234" fill="none" stroke="#994a1d" stroke-width="1.6" marker-end="url(#arrA)"/>
+      <text x="400" y="262" text-anchor="middle" font-size="11" fill="#994a1d" font-weight="600">⑥ 之后重算前沿 → 补满并发 → 回到 ①（直到每张票关闭或升级）</text>
+
+      <!-- 出口：最终门 -->
+      <line x1="722" y1="232" x2="722" y2="306" stroke="#23211c" stroke-width="0"/>
+      <path d="M 766 198 L 788 198 L 788 330 L 700 330" fill="none" stroke="#23211c" stroke-width="1.4" marker-end="url(#arr)"/>
+      <text x="780" y="266" text-anchor="middle" font-size="10" fill="#6f6a5f" transform="rotate(90 780 266)">票尽后退出</text>
+
+      <rect x="500" y="306" width="196" height="48" rx="6" fill="#fff" stroke="#23211c" stroke-width="1.4"/>
+      <text x="598" y="326" text-anchor="middle" font-size="12" font-weight="600">最终门 final-reviewer</text>
+      <text x="598" y="344" text-anchor="middle" font-size="10" fill="#6f6a5f">ready | ready_with_fixes | not_ready</text>
+
+      <rect x="270" y="306" width="196" height="48" rx="6" fill="#fff" stroke="#23211c" stroke-width="1.4"/>
+      <text x="368" y="326" text-anchor="middle" font-size="12" font-weight="600">收尾</text>
+      <text x="368" y="344" text-anchor="middle" font-size="10" fill="#6f6a5f">push · PR 转 ready · 清理全部 worktree</text>
+      <line x1="498" y1="330" x2="472" y2="330" stroke="#23211c" stroke-width="1.4" marker-end="url(#arr)"/>
+    </svg>
+    <figcaption>编排循环全景。虚线框是循环体——每轮以「干净检查」开头，以「重算前沿」结尾。</figcaption>
+  </figure>
+
+  <p>三条通道读法：</p>
+  <ul>
+    <li><strong>单次执行</strong>：前置检查 + Round 0（读 spec 与全部票入台账 → 建 <code>feat/&lt;slug&gt;</code> 分支 → 跑一次全量测试记基线 → 有远端就开 draft PR）。</li>
+    <li><strong>循环体</strong>：每轮从①到⑥走一遍，⑥ 之后<strong>重算前沿</strong>，还有票就回到①继续派发。这就是为什么它不需要人工逐票推进（<a href="../../design/decisions.md">D13</a>：async 完成唤醒同一 session 起新 turn）。</li>
+    <li><strong>出口</strong>：所有票关闭或升级后，才进最终门——对<strong>整条分支</strong>做两轴 review，这是唯一能看到跨票问题的关口。</li>
+  </ul>
+
+  <h2><span class="secno">§2</span>四个角色，一张表</h2>
+
+  <table>
+    <tr><th>角色</th><th>持有工具</th><th>在哪干活</th><th>核心纪律</th></tr>
+    <tr>
+      <td><strong>编排者</strong>（本 skill，即你自己）</td>
+      <td>全部：bash、git、gh、edit</td>
+      <td>主检出（feature 分支）</td>
+      <td><strong>不写功能代码</strong>；只派发、验收、合并、记账</td>
+    </tr>
+    <tr>
+      <td><code>pi-matt-implement-flow.coder</code></td>
+      <td>read / grep / find / ls / bash / edit / write / contact_supervisor</td>
+      <td>自己的 pi 管理 worktree + 分支</td>
+      <td>单票垂直切片，TDD 红→绿；<strong>必须全部提交</strong>并回报 HEAD SHA；≤200 词</td>
+    </tr>
+    <tr>
+      <td><code>…reviewer</code>（每票）</td>
+      <td>read / grep / find / ls / <strong>subagent</strong> / contact_supervisor（<strong>无 bash、无写</strong>）</td>
+      <td>只读 worktree，检出于 <code>ticket-N</code></td>
+      <td>永不信任 coder 报告；自己 fanout 两个轴 child（Standards / Spec），聚合不合并不重排</td>
+    </tr>
+    <tr>
+      <td><code>…final-reviewer</code>（整支）</td>
+      <td>同 reviewer（含 subagent）</td>
+      <td>只读 worktree，检出于 feature 分支头</td>
+      <td>专找<strong>单票 review 看不到的</strong>：跨文件漂移、组件矛盾、spec 有要求但无票实现</td>
+    </tr>
+  </table>
+
+  <div class="callout warn">
+    <span class="callout-title">维护者最易踩的一处</span>
+    SKILL.md <a href="../../../SKILL.md">原文</a>反复强调：派发必须用<strong>全名</strong>。裸名 <code>coder</code> 会解析到用户级 <code>worker</code> 别名（你的环境里它存在！），裸名 <code>reviewer</code> 会解析到内置 agent——两者都不是这个包的 persona。这不是风格问题，是注册命名空间隔离（<a href="../../design/decisions.md">D10</a>）。
+  </div>
+
+  <h2><span class="secno">§3</span>状态存在哪里？只有三处，没有对话记忆</h2>
+
+  <ol>
+    <li><strong>git 真值</strong>（分支名、SHA、diff）——一切判定的最终依据。run status 和子代理的散文报告只是线索：<a href="../../design/verified-facts.md">§10.11</a> 实测出现过 run 判 failed 但 commit 已落地，甚至 coder <strong>伪造全长 SHA</strong>（§10.18-4）。锚定一律先 <code>git rev-parse</code> 取真值。</li>
+    <li><strong>台账 <code>.pi/matt-implement/&lt;slug&gt;/ledger.md</code></strong>（被 .gitignore 覆盖，天然不脏树）：每轮开头读、每次状态变化后重写。它的存在理由是<strong>跨上下文压缩的记忆</strong>——压缩后重读 skill + 台账 + <code>git worktree list</code> 先对账，再派发。</li>
+    <li><strong>票追踪器</strong>（本仓库采用 <a href="../../agents/issue-tracker.md">local markdown</a>：<code>.scratch/&lt;slug&gt;/issues/</code>）：认领 / 关票的权威。因为也被忽略，状态写入不会弄脏派发检查。</li>
+  </ol>
+
+  <h2><span class="secno">§4</span>检索练习 · 把顺序从记忆里取出来</h2>
+
+  <div class="card" id="sorter"></div>
+
+  <h2><span class="secno">§5</span>快问快答</h2>
+
+  <div class="card" id="quiz"></div>
+
+  <h2><span class="secno">§6</span>下一步</h2>
+
+  <div class="callout">
+    <span class="callout-title">首要读物（本课唯一推荐）</span>
+    <a href="../../design/pi-capability-map.md">docs/design/pi-capability-map.md</a> §0 与 §6——机制映射表 + 最终轮次骨架。读 §0 校准你的循环图，读 §6 看每一步落到 pi 的哪个机制上。
+  </div>
+
+  <p>下一课预告：<a href="0002-worktree-and-resume.html"><strong>0002 · worktree 与 resume</strong></a>——为什么修复能送回同一个 coder、pi 为什么故意保留 worktree、以及 <code>gate</code> 为什么在修复轮被拒绝而由父代理代跑。这是 <a href="../../design/decisions.md">D15</a> 被「探针推翻第一轮推断」的那段最精彩的历史。</p>
+
+  <footer>
+    <p>有任何一个环节讲不清楚、或你想先深挖某一处，<strong>直接问我</strong>——我是你的老师，随时可以展开或换角度重讲。</p>
+    <nav>
+      <a href="0002-worktree-and-resume.html">→ 下一课：0002 worktree 与 resume</a>
+      <a href="../reference/orchestrator-cheatsheet.html">→ 速查页：编排循环一页纸</a>
+      <a href="../MISSION.md">→ 使命文档</a>
+      <a href="../RESOURCES.md">→ 资源清单</a>
+    </nav>
+  </footer>
+
+</main>
+
+<script src="../assets/sequence-sort.js"></script>
+<script src="../assets/quiz.js"></script>
+<script>
+  MIFSorter.mount(document.getElementById('sorter'), {
+    title: '按执行顺序依次点击（点对立即锁定，点错会闪红）',
+    items: [
+      '前置检查：git status 必须干净',
+      'Round 0：读 spec+票，建分支，记基线',
+      '认领前沿票，一次 runs.all 派 N 个 coder',
+      '用 git 真值锚定 ticket-N，写三点 diff bundle',
+      '派只读 reviewer 做两轴审查',
+      '未过 → resume 同一 coder 修复（≤2 轮）',
+      '合并 --no-ff，跑集成测试，关票，清理',
+      '重算前沿，补满并发，票尽后进最终门'
+    ]
+  });
+
+  MIFQuiz.mount(document.getElementById('quiz'), [
+    {
+      prompt: 'coder 交付一张票时，编排者最看重它的哪个回报？',
+      options: ['提交并回报头指针哈希', '合并票分支并关闭工单', '重算前沿并派发下一波'],
+      answer: 0,
+      explain: 'coder 只负责在自己 worktree 里提交并回报 headSha / commits / 测试结果 / seams（agents/coder.md 的 Report 段）。合并、关票、前沿重算都是编排者的职责——「编者不写代码，coder 不碰流程」。'
+    },
+    {
+      prompt: '票分支 ticket-N 由谁执行合并？以什么方式？',
+      options: ['主代理串行合并票分支', '编码代理自己合并提交', '评审代理裁决后合并掉'],
+      answer: 0,
+      explain: '合并永远由编排者在主检出里串行执行：git merge --no-ff ticket-N（SKILL.md 的 Merge and close）。coder 不知道合并的存在，reviewer 没有写工具。串行是硬规则——两个 merge 绝不并行。'
+    },
+    {
+      prompt: '一张票的修复轮最多几次，超过会怎样？',
+      options: ['两轮', '三轮', '四轮'],
+      answer: 0,
+      explain: '两轮修复后升级（escalate）：台账记状态、票保持 claimed、继续推进前沿，最后统一向用户汇报。设计动机：卡住的票不许阻塞前沿（SKILL.md Hard rules）。'
+    },
+    {
+      prompt: '台账（ledger）里优先记录哪类内容？',
+      options: ['提交哈希与分支真值', '叙述文字与运行状态', '待办清单与计划散文'],
+      answer: 0,
+      explain: '台账必须能从 git 和追踪器重建——所以优先记 SHA（可验证），不记叙述（不可验证）。run status 同样不可全信：§10.11 实测过 state: failed 但 commit 已落地。'
+    }
+  ]);
+</script>
+</body>
+</html>

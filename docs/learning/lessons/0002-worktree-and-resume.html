@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>课程 0002 · 一张票的完整旅程 — pi-matt-implement-flow</title>
+<link rel="stylesheet" href="../assets/teach.css">
+</head>
+<body>
+<main class="lesson">
+
+  <header class="masthead">
+    <p class="kicker">pi-matt-implement-flow · 课程 0002（v2 重排版）</p>
+    <h1>一张票的完整旅程：派发 → 审查 → 修复 → 合并</h1>
+    <p class="meta">使命：<a href="../MISSION.md">维护并演进这个插件</a> · 预计 15 分钟 · 前置：<a href="0001-orchestrator-loop-map.html">0001 循环骨架</a></p>
+  </header>
+
+  <div class="callout">
+    <span class="callout-title">开课前 1 分钟</span>
+    本课只讲一条主线：<strong>一张票从认领到关闭，每一步是谁在干什么、拿什么进、出什么</strong>。所有 git 命令在 <a href="../reference/git-minimal.html">git 最小词典</a>里都有人话解释（git 不熟就先花 5 分钟扫它的 A、B 两节，回来读正文不卡）。机制原理和设计史压缩在 §4 与折叠盒里，主线不经过它们。
+  </div>
+
+  <h2><span class="secno">§1</span>八步旅程（总表）</h2>
+
+  <p>三个执行者：编排者（你自己，在主检出干所有 git 活）、<code>pi-matt-implement-flow.coder</code>（实现者，只待在自己的 worktree）、<code>pi-matt-implement-flow.reviewer</code>（只读审查者）。一张票的旅程：</p>
+
+  <table>
+    <tr><th>步</th><th>执行者</th><th>干什么（目标）</th><th>输入 → 输出</th><th>git 命令</th></tr>
+    <tr>
+      <td>①</td><td><strong>编排者</strong></td>
+      <td>认领前沿票，写 brief（全是指针：票路径、spec 路径、测试命令），派 coder</td>
+      <td>票文件 + spec → <strong>coderRunId</strong>（记台账）</td>
+      <td>（无——这是 pi 派发）</td>
+    </tr>
+    <tr>
+      <td>②</td><td><strong>coder</strong></td>
+      <td>在自己专属的 worktree 里按票实现，测试先行（红→绿），<strong>把一切提交</strong></td>
+      <td>brief → commit 落在自己的 pi 分支 + 结构化报告（headSha、commits、测试结果、seams）</td>
+      <td><code>add -A</code>、<code>commit</code></td>
+    </tr>
+    <tr>
+      <td>③</td><td><strong>编排者</strong></td>
+      <td><strong>锚定</strong>：不信报告里的 SHA，问 git 要真值，把产出固定成主仓库里的真票分支；顺手打包审查输入</td>
+      <td>coder 报告（只是线索）→ 真票分支 <code>ticket-01</code> + review bundle（三点 diff + 提交列表，一个文件）</td>
+      <td><code>rev-parse</code>、<code>branch</code>、<code>diff ...</code>、<code>log</code></td>
+    </tr>
+    <tr>
+      <td>④</td><td><strong>reviewer</strong></td>
+      <td>两轴审查（仓库标准轴 + spec 对照轴），只读，<strong>不信任 coder 的报告</strong></td>
+      <td>bundle 路径 + 票 + spec + 测试门证据 → <strong>verdict</strong>（<code>approved</code> / <code>changes_requested</code>）+ findings</td>
+      <td>（无——它没有 bash）</td>
+    </tr>
+    <tr>
+      <td colspan="5" style="background:#f5e6d7"><strong>⑤ 分叉点</strong>：<code>approved</code> → 直接跳 ⑧；<code>changes_requested</code> → 进修复回路 ⑥⑦（最多 2 轮，超了记 escalated，继续别的票）</td>
+    </tr>
+    <tr>
+      <td>⑥</td><td><strong>编排者 → 同一个 coder</strong></td>
+      <td>编排者把 findings 写成文件，用<strong>新 key</strong> resume 唤醒原 coder（worktree、上下文原样保留）→ coder 读 findings <strong>原地修</strong>，新 commit 落在<strong>同一分支</strong></td>
+      <td>findings 文件 → 新的 commit（仍在 pi 分支上）</td>
+      <td>（coder 侧：<code>commit</code>）</td>
+    </tr>
+    <tr>
+      <td>⑦</td><td><strong>编排者</strong></td>
+      <td><strong>代跑测试门</strong>（平台修复轮不收 gate 参数）→ 把票分支移到新 SHA → 重建 bundle</td>
+      <td>git 真值 → 移动后的票分支 + 新 bundle（<code>-r2</code>）</td>
+      <td><code>rev-parse</code>、<code>branch -f</code>、<code>cd … &amp;&amp; npm test</code></td>
+    </tr>
+    <tr>
+      <td>⑧</td><td><strong>编排者</strong></td>
+      <td>真合并（强制产生合并提交）→ 跑全量集成测试 → 关票（附 merge SHA）→ 清理 worktree 与票分支 → 重算前沿</td>
+      <td>过审的票分支 → merge commit + 关闭的票 + 干净的现场</td>
+      <td><code>merge --no-ff</code>、<code>branch -D</code>、<code>worktree remove</code></td>
+    </tr>
+  </table>
+
+  <div class="callout warn">
+    <span class="callout-title">贯穿全程的判定纪律</span>
+    ③⑦ 两步都先 <code>git rev-parse</code> 取真 SHA 再动手——因为实测里 run 状态会说谎（<code>failed</code> 但 commit 已落地）、coder 会编造 SHA。报告和状态只是线索，<strong>git 真值才是证据</strong>。
+  </div>
+
+  <h2><span class="secno">§2</span>同一张图（角色着色流程）</h2>
+
+  <figure>
+    <svg viewBox="0 0 780 760" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC',sans-serif">
+      <defs>
+        <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#23211c"/>
+        </marker>
+        <marker id="a3r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#994a1d"/>
+        </marker>
+        <marker id="a3g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#2e7d43"/>
+        </marker>
+      </defs>
+
+      <!-- 图例 -->
+      <rect x="60" y="10" width="10" height="10" fill="#994a1d"/><text x="76" y="19" font-size="10" fill="#23211c">编排者（主检出）</text>
+      <rect x="205" y="10" width="10" height="10" fill="#3d5a80"/><text x="221" y="19" font-size="10" fill="#23211c">coder（自己的 worktree）</text>
+      <rect x="420" y="10" width="10" height="10" fill="#2e7d43"/><text x="436" y="19" font-size="10" fill="#23211c">reviewer（只读 worktree）</text>
+
+      <!-- ① -->
+      <rect x="90" y="46" width="420" height="56" rx="8" fill="#f5e6d7" stroke="#994a1d"/>
+      <rect x="100" y="54" width="56" height="18" rx="9" fill="#994a1d"/>
+      <text x="128" y="67" text-anchor="middle" font-size="9.5" fill="#fff">编排者</text>
+      <text x="166" y="67" font-size="11.5" font-weight="600" fill="#23211c">① 认领票 · 派发 coder</text>
+      <text x="100" y="91" font-size="9.5" fill="#6f6a5f">输入：票+spec 路径 ⇒ 输出：coderRunId（记台账）</text>
+
+      <!-- ② -->
+      <rect x="90" y="124" width="420" height="56" rx="8" fill="#e9eff7" stroke="#3d5a80"/>
+      <rect x="100" y="132" width="56" height="18" rx="9" fill="#3d5a80"/>
+      <text x="128" y="145" text-anchor="middle" font-size="9.5" fill="#fff">coder</text>
+      <text x="166" y="145" font-size="11.5" font-weight="600" fill="#23211c">② worktree 里 TDD 实现 · 全部提交</text>
+      <text x="100" y="169" font-size="9.5" fill="#6f6a5f">输入：brief（全是指针）⇒ 输出：commit + headSha/commits/测试/seams</text>
+
+      <!-- ③ -->
+      <rect x="90" y="202" width="420" height="56" rx="8" fill="#f5e6d7" stroke="#994a1d"/>
+      <rect x="100" y="210" width="56" height="18" rx="9" fill="#994a1d"/>
+      <text x="128" y="223" text-anchor="middle" font-size="9.5" fill="#fff">编排者</text>
+      <text x="166" y="223" font-size="11.5" font-weight="600" fill="#23211c">③ 锚定 ticket-01 · 写 diff bundle</text>
+      <text x="100" y="247" font-size="9.5" fill="#6f6a5f">输入：报告（只是线索）⇒ 输出：真票分支 + 三点 bundle</text>
+
+      <!-- ④ -->
+      <rect x="90" y="280" width="420" height="56" rx="8" fill="#e6f2e8" stroke="#2e7d43"/>
+      <rect x="100" y="288" width="62" height="18" rx="9" fill="#2e7d43"/>
+      <text x="131" y="301" text-anchor="middle" font-size="9.5" fill="#fff">reviewer</text>
+      <text x="172" y="301" font-size="11.5" font-weight="600" fill="#23211c">④ 两轴审查（Standards + Spec）</text>
+      <text x="100" y="325" font-size="9.5" fill="#6f6a5f">输入：bundle+票+spec+门证据 ⇒ 输出：verdict + findings</text>
+
+      <!-- ⑤ 判断 -->
+      <polygon points="300,352 510,388 300,424 90,388" fill="#fff" stroke="#23211c" stroke-width="1.3"/>
+      <text x="300" y="392" text-anchor="middle" font-size="11.5" font-weight="600" fill="#23211c">⑤ 裁决？</text>
+      <text x="318" y="441" font-size="9.5" fill="#b23a2a">changes_requested ↓</text>
+      <text x="582" y="380" font-size="10" fill="#2e7d43">approved（过审直通 → ⑧）</text>
+
+      <!-- ⑥ -->
+      <rect x="90" y="452" width="420" height="56" rx="8" fill="#f5e6d7" stroke="#994a1d"/>
+      <rect x="100" y="460" width="56" height="18" rx="9" fill="#994a1d"/>
+      <text x="128" y="473" text-anchor="middle" font-size="9.5" fill="#fff">编排者</text>
+      <text x="166" y="473" font-size="11.5" font-weight="600" fill="#23211c">⑥ 写 findings · resume 同 coder（新键）</text>
+      <text x="100" y="497" font-size="9.5" fill="#6f6a5f">输入：findings 文件 ⇒ coder 原地修，新 commit 落同一分支</text>
+
+      <!-- ⑦ -->
+      <rect x="90" y="530" width="420" height="56" rx="8" fill="#f5e6d7" stroke="#994a1d"/>
+      <rect x="100" y="538" width="56" height="18" rx="9" fill="#994a1d"/>
+      <text x="128" y="551" text-anchor="middle" font-size="9.5" fill="#fff">编排者</text>
+      <text x="166" y="551" font-size="11.5" font-weight="600" fill="#23211c">⑦ 代跑测试 · branch -f 移票分支 · 重建 bundle</text>
+      <text x="100" y="575" font-size="9.5" fill="#6f6a5f">输入：git 真值 ⇒ 输出：新票分支 + bundle(r2) → 回 ④ 重审</text>
+
+      <!-- ⑧ -->
+      <rect x="90" y="608" width="420" height="56" rx="8" fill="#f5e6d7" stroke="#994a1d"/>
+      <rect x="100" y="616" width="56" height="18" rx="9" fill="#994a1d"/>
+      <text x="128" y="629" text-anchor="middle" font-size="9.5" fill="#fff">编排者</text>
+      <text x="166" y="629" font-size="11.5" font-weight="600" fill="#23211c">⑧ merge --no-ff · 集成门 · 关票 · 清理</text>
+      <text x="100" y="653" font-size="9.5" fill="#6f6a5f">输入：过审的票分支 ⇒ 输出：merge SHA + 关闭的票 + 干净现场</text>
+
+      <!-- 链箭 -->
+      <g stroke="#23211c" stroke-width="1.3">
+        <line x1="300" y1="102" x2="300" y2="118" marker-end="url(#a3)"/>
+        <line x1="300" y1="180" x2="300" y2="196" marker-end="url(#a3)"/>
+        <line x1="300" y1="258" x2="300" y2="274" marker-end="url(#a3)"/>
+        <line x1="300" y1="336" x2="300" y2="348" marker-end="url(#a3)"/>
+        <line x1="300" y1="424" x2="300" y2="446" marker-end="url(#a3)"/>
+        <line x1="300" y1="508" x2="300" y2="524" marker-end="url(#a3)"/>
+        <line x1="300" y1="586" x2="300" y2="602" marker-end="url(#a3)"/>
+        <line x1="300" y1="664" x2="300" y2="696" marker-end="url(#a3)"/>
+      </g>
+
+      <!-- 修复回路回边：⑦ → ④ -->
+      <path d="M 510 558 L 645 558 L 645 308 L 516 308" fill="none" stroke="#994a1d" stroke-width="1.6" marker-end="url(#a3r)"/>
+      <text x="657" y="440" transform="rotate(90 657 440)" text-anchor="middle" font-size="10" fill="#994a1d">重建 bundle ⇒ 新一轮 review（④）</text>
+
+      <!-- 过审直通：⑤ → ⑧ -->
+      <path d="M 510 388 L 690 388 L 690 636 L 516 636" fill="none" stroke="#2e7d43" stroke-width="1.6" marker-end="url(#a3g)"/>
+
+      <!-- 尾注 -->
+      <rect x="290" y="706" width="320" height="34" rx="8" fill="#fff" stroke="#23211c" stroke-dasharray="5 4"/>
+      <text x="450" y="727" text-anchor="middle" font-size="10.5" fill="#23211c">重算前沿 · 票未尽 ⇒ 回到 0001 的轮次循环</text>
+    </svg>
+    <figcaption>一张票的旅程。⑦ 完成后箭头回到 ④——「修完必须重新过审」；右侧绿色直通车是 approved 时跳过修复直接合并。</figcaption>
+  </figure>
+
+  <h2><span class="secno">§3</span>git 命令与流程的对应（四类活）</h2>
+
+  <p>把 §1 表格最后一列单独拎出来，git 在整个流程里只干四类活：</p>
+  <ol>
+    <li><strong>问真相</strong>：<code>rev-parse</code>——任何时候想知道「分支实际指向哪个 commit」就用它（把名字翻译成 40 位真 SHA）。</li>
+    <li><strong>立标签</strong>：<code>branch</code>（创建）与 <code>branch -f</code>（强制移动）——票分支的生与挪。记住：分支只是一张写着 SHA 的标签纸。</li>
+    <li><strong>做合并</strong>：<code>merge --no-ff</code>——票进主线的唯一通道。</li>
+    <li><strong>看与清</strong>：<code>diff ...</code> + <code>log</code>（打包给 reviewer）、<code>worktree remove</code> + <code>branch -D</code>（收尾）。</li>
+  </ol>
+  <p>每条命令的完整人话解释、porcelain 输出怎么读，都在 <a href="../reference/git-minimal.html">git 最小词典</a>——练习卡壳先查它，不用回正文翻。</p>
+
+  <h2><span class="secno">§4</span>为什么修复要送回同一个 coder？（30 秒版）</h2>
+
+  <ol>
+    <li><strong>上下文是钱</strong>：原 coder 已经读过票、spec、相关代码。换新 coder 要从零重建理解，成本翻倍。</li>
+    <li><strong>不带新偏见</strong>：新 coder 等于换一个人重做，容易推倒已审过的决策；原 coder 只需针对 findings 精准修。</li>
+    <li><strong>物理上可行</strong>：pi 在 child 可 resume 时<strong>故意保留</strong>它的 worktree 和分支——resume 回到原地继续。coder 的 worktree 不是临时工棚，是它的固定工位（②里"专属"的真正含义）。</li>
+  </ol>
+
+  <details style="margin:1.2rem 0">
+    <summary style="cursor:pointer;font-weight:600;color:#994a1d">▸ 可选阅读：这段设计当时差点被砍掉（探针推翻第一轮推断的故事）</summary>
+    <div style="font-size:.95rem;color:#4d4a42;margin-top:.6rem">
+      <p>设计文档 <a href="../../design/decisions.md">D15</a> 记录：第一轮曾据平台文档推理「worktree 收工必删 → resume 找不到 cwd → 送回同一 coder 不可行」，准备放弃这个机制。探针实测（<a href="../../design/verified-facts.md">verified-facts §10.5</a>）推翻了它：handoff 清单明确写着 <code>"preserved": true</code>，理由是 <code>"retained child resume requires managed worktree cwd"</code>。另外两条修复轮纪律（gate 被拒由父代理代跑 §10.8；验收契约重放 §10.10）也全部来自这轮探针。完整证据链在那两份文档里。</p>
+    </div>
+  </details>
+
+  <h2><span class="secno">§5</span>检索练习 · 一张票的旅程（八步）</h2>
+  <div class="card" id="sorter"></div>
+
+  <h2><span class="secno">§6</span>快问快答</h2>
+  <div class="card" id="quiz"></div>
+
+  <h2><span class="secno">§7</span>下一步</h2>
+
+  <div class="callout">
+    <span class="callout-title">首要读物（本课唯一推荐）</span>
+    <a href="../reference/git-minimal.html">git 最小词典</a>——排序练习时对哪个命令犯嘀咕，就回 B 表查它；每条都能对上 §1 总表的一步。
+  </div>
+
+  <footer>
+    <p>哪里还卡直接问，也可以让我把某一步放大单讲。</p>
+    <nav>
+      <a href="0001-orchestrator-loop-map.html">← 上一课：0001 循环骨架</a>
+      <a href="../reference/git-minimal.html">→ git 最小词典</a>
+      <a href="../reference/orchestrator-cheatsheet.html">→ 速查页一页纸</a>
+    </nav>
+  </footer>
+
+</main>
+
+<script src="../assets/sequence-sort.js"></script>
+<script src="../assets/quiz.js"></script>
+<script>
+  MIFSorter.mount(document.getElementById('sorter'), {
+    title: '按执行顺序依次点击（与 §1 总表一一对应；点对立即锁定，点错闪红）',
+    items: [
+      '编排者认领票，写 brief 派 coder',
+      'coder 在 worktree 实现，红→绿，全部提交',
+      '编排者锚定 ticket-01，写三点 diff bundle',
+      'reviewer 只读两轴审查，回 verdict',
+      '未过 → findings 写文件，resume 同一 coder',
+      'coder 原地修复，新 commit 落同一分支',
+      '父代理代跑测试，branch -f 移票分支',
+      '过审 → merge --no-ff，关票，清理'
+    ]
+  });
+
+  MIFQuiz.mount(document.getElementById('quiz'), [
+    {
+      prompt: 'coder 交付后，编排者为什么先 rev-parse 而不是直接用报告里的 headSha？',
+      options: ['报告可能撒谎 git 才真', '报告常常被截断丢失', '报告只是缓存的旧值'],
+      answer: 0,
+      explain: '实测过两个反面案例：coder 伪造全长 SHA（§10.18-4，后 33 位是编的）、run 状态 failed 但 commit 已落地（§10.11）。rev-parse 把分支名翻译成 git 认可的真 SHA，是唯一可信的锚定来源。'
+    },
+    {
+      prompt: '修复轮（resume）里，测试门由谁执行？',
+      options: ['父代理亲自在其工作树', '平台自动重跑门禁命令', '子代理提交时自带证据'],
+      answer: 0,
+      explain: 'gate 与 retained resume 互斥——平台拒绝这个参数组合。所以编排者 cd 进 coder 的 worktree 自己跑 testCommand，结果当作门（§10.8 实测可行）。'
+    },
+    {
+      prompt: 'reviewer 的 worktree 为什么必须用 ticket-01 分支而不是 coder 报告的 SHA？',
+      options: ['平台只认具名的分支引用', '分支比哈希占空间更小', '分支可以随时移动更新'],
+      answer: 0,
+      explain: 'baseRef 只接受具名 ref（如 refs/heads/ticket-01），明确拒绝 40 位 SHA（verified-facts §3.3）。真票分支是「锚定」这一步存在的根本原因。'
+    },
+    {
+      prompt: '票合并后，coder 的 worktree 为什么才允许删？',
+      options: ['修复续接直到关票为止', '补丁捕获需要它存在着', '台账要引用它的路径'],
+      answer: 0,
+      explain: 'coder 的 worktree 是 resume 的物理前提（固定工位）。票没关，修复就可能再来一轮；关票后续接价值耗尽，才执行 worktree remove --force + branch -D（删前先自检 status 为空）。'
+    }
+  ]);
+</script>
+</body>
+</html>
