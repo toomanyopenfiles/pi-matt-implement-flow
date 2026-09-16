@@ -90,7 +90,16 @@ const results = await runs.all([
     agent: "pi-matt-implement-flow.coder",
     task: `<coder brief — see Briefs>`,
     worktree: true,
-    gate: "npm test",
+    acceptance: {
+      level: "verified",
+      criteria: [
+        "Implement the requested change without widening scope",
+        "Return evidence sufficient for an independent acceptance review"
+      ],
+      evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "residual-risks", "no-staged-files"],
+      report: "on",
+      verify: [{ id: "gate", command: "npm test" }]
+    },
     outputSchema: {
       type: "object",
       properties: {
@@ -109,6 +118,8 @@ return results.map(r => ({ key: r.key, ok: r.ok, runId: r.runId ?? null, structu
 ```
 
 Record every `runId` and the coder worktree path (from the handoff manifest under `artifacts`) in the ledger — the fix loop and the fallback both need them. If the tree was dirty at dispatch, the whole call fails with a worktree-admission error: fix the tree, do not retry blindly.
+
+Why an explicit `acceptance` object instead of the `gate` shorthand (they are mutually exclusive): it pins the evidence contract at dispatch time instead of letting the platform infer it from task wording, and `report: "on"` moves the report-format checks into the final `structured_output` call — a missing or malformed `acceptanceReport` fails the tool call and the coder retries in-session, instead of the whole run being rejected after the child is gone. `report: "on"` also makes the platform inject the exact report field list into the coder's prompt, so field names are no longer guessed. Remaining limit: evidence *completeness* (e.g. a present-but-empty `validationOutput`) is still checked only at run settlement — that is what the `## Acceptance Contract` block in the brief covers. `outputSchema` is required for `report: "on"` (the dispatch above already has it). The fix loop needs no acceptance of its own: a retained resume replays the stored contract, so the follow-up brief only has to ask for the full report again.
 
 ### Verify each finished ticket
 
@@ -199,7 +210,15 @@ Base commit: <sha>. Test command: `npm test`.
 
 You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report headSha, commits, test result, and seams.
 
-Final report contract: your structured_output call must have TWO sibling top-level keys — value = { headSha, branch, commits, testResult, seams } and acceptanceReport = the contract object (never nested inside value), with validationOutput carrying the real command output you ran (never null).
+## Acceptance Contract
+Your final structured_output call must have TWO SIBLING top-level keys (never nested):
+- value: { headSha, branch, commits, testResult, seams }
+- acceptanceReport: { criteriaSatisfied, changedFiles, testsAddedOrUpdated, commandsRun, validationOutput, residualRisks, noStagedFiles }
+Rules:
+- validationOutput carries the VERBATIM key lines of the gate command you ran (e.g. "274 passed in 40.35s") — never null, never empty, never a paraphrase; an empty validationOutput fails the run.
+- testsAddedOrUpdated lists every test file you created or modified; use [] only when none.
+- criteriaSatisfied[].id must match the criteria above, answered with concrete proof.
+- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence rejects the run.
 ```
 
 ### Reviewer brief
@@ -217,7 +236,7 @@ Run your two-axis process and return the structured verdict.
 
 ```
 Review round <k> found issues: read .pi/matt-implement/<slug>/findings/<NN>-r<k>.md.
-Fix them in your worktree, rerun the full suite, commit everything, and report as before — full structured output with value and acceptanceReport as SIBLING top-level keys (never nested), validationOutput filled with the real rerun output.
+Fix them in your worktree, rerun the full suite, commit everything, and report exactly as before — the full structured output with value and acceptanceReport as SIBLING top-level keys (never nested), every `## Acceptance Contract` field filled: validationOutput with the real rerun output (verbatim pass/fail lines, never null), testsAddedOrUpdated listing any test files touched ([] only if none).
 ```
 
 ### Integration fixer (no isolation)
