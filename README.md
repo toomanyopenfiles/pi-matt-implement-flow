@@ -15,7 +15,8 @@ pi install <本包路径>   # 例如 pi install /path/to/this/package
 安装后无需其他步骤。可运行自检确认注册面完好：
 
 ```sh
-npm test   # 校验声明路径存在、SKILL.md frontmatter 合法、三个 agent 全名正确
+npm test   # 校验声明路径存在、SKILL.md frontmatter 合法、三个 agent 全名正确、
+           # ledger 脚本存在且 --help 退 0；另含 fixture 临时仓上的 ledger CLI 黑盒测试
 ```
 
 > 已知环境限制：git < 2.41 的机器上，pi-subagents 的 patch 捕获会静默降级为空（`npm test` 会在诊断输出中提醒）。
@@ -30,6 +31,9 @@ skill 已禁用模型自动触发，只能作为斜杠命令手动调用：
 
 - `N`：并发 coder 数，默认 3。
 - 调用前确认：干净 worktree、git 仓库至少一个 commit、票图每张票都有 `Blocked by` 行、测试命令明确。
+- 编排记忆采用机械台账协议（LLM 永不手写台账，见 `CONTEXT.md` 与 ADR-0001）：包内 `scripts/ledger.js`
+  是运行状态的唯一写面（`add` 记账 / `build` 再生 / `check` 对账），事件流与台账写在
+  `.pi/matt-implement/<slug>/`（已 gitignore）；散文记忆在编排笔记 `notes.md`。
 
 ## 三个 agent
 

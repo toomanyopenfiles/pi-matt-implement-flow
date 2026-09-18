@@ -6,6 +6,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
 const {
   AGENT_NAMES,
   PKG_ROOT,
@@ -20,6 +22,8 @@ const {
   checkAgentFrontmatter,
   checkAgentRegistration,
   checkTestScript,
+  LEDGER_SCRIPT,
+  checkLedgerScript,
 } = require('./registration-checks.js');
 
 function readAgentFrontmatter() {
@@ -46,6 +50,17 @@ test('every pi.skills entry points at an existing file', () => {
 
 test('every pi.subagents.agents entry points at an existing directory', () => {
   assert.deepEqual(checkAgentDirRegistration(manifest, { isDir: (p) => isDirAt(PKG_ROOT, p) }), []);
+});
+
+test('ledger script exists and --help exits 0 (mechanical-ledger protocol ships with the package)', () => {
+  assert.deepEqual(checkLedgerScript({ isFile: (p) => isFileAt(PKG_ROOT, p) }), []);
+  const r = spawnSync(process.execPath, [path.join(PKG_ROOT, LEDGER_SCRIPT), '--help'], {
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, `ledger.js --help must exit 0, got ${r.status}:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stdout, /add/);
+  assert.match(r.stdout, /build/);
+  assert.match(r.stdout, /check/);
 });
 
 test('SKILL.md has a parseable frontmatter block', () => {
@@ -110,6 +125,12 @@ test('breakage simulation: a renamed agent directory is flagged', () => {
   const broken = { pi: { subagents: { agents: ['./agents-renamed'] } } };
   assert.deepEqual(checkAgentDirRegistration(broken, { isDir: () => false }), [
     'pi.subagents.agents entry points at a missing directory: ./agents-renamed',
+  ]);
+});
+
+test('breakage simulation: a missing ledger script is flagged', () => {
+  assert.deepEqual(checkLedgerScript({ isFile: () => false }), [
+    `ledger script missing: ${LEDGER_SCRIPT} — the mechanical-ledger protocol's only write surface`,
   ]);
 });
 

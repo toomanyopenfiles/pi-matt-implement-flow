@@ -170,6 +170,14 @@ function checkTestScript(manifest) {
   return problems;
 }
 
+// 不变量 6：ledger 脚本存在——机械台账协议的唯一写面必须随包交付（ADR-0001）。
+const LEDGER_SCRIPT = 'scripts/ledger.js';
+function checkLedgerScript({ isFile = isFileAt } = {}) {
+  return isFile(LEDGER_SCRIPT)
+    ? []
+    : [`ledger script missing: ${LEDGER_SCRIPT} — the mechanical-ledger protocol's only write surface`];
+}
+
 module.exports = {
   PKG_ROOT,
   AGENT_NAMES,
@@ -184,4 +192,6 @@ module.exports = {
   checkAgentFrontmatter,
   checkAgentRegistration,
   checkTestScript,
+  LEDGER_SCRIPT,
+  checkLedgerScript,
 };

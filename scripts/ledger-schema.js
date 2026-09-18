@@ -1,0 +1,159 @@
+'use strict';
+
+// 事件分类学与 CLI 载荷 schema（纯函数，无 IO）。
+// 十类事件枚举定死（spec：事件分类学）；每类事件有固定的必选/可选参数集；
+// 自由文本统一 --note。本模块不知道文件系统与 git——真相层查询由 ledger.js 注入。
+
+// 信封格式版本：事件分类学演进时 +1，旧运行账本按此迁移。
+const EVENT_VERSION = 1;
+
+// kebab-case CLI 旗标 → payload 字段（camelCase）
+const FLAG_TO_KEY = {
+  ticket: 'ticket',
+  key: 'key',
+  'run-id': 'runId',
+  worktree: 'worktree',
+  round: 'round',
+  'head-sha': 'headSha',
+  gate: 'gate',
+  verdict: 'verdict',
+  findings: 'findings',
+  'rev-run-id': 'revRunId',
+  'fix-no': 'fixNo',
+  'resume-run-id': 'resumeRunId',
+  'merge-sha': 'mergeSha',
+  branch: 'branch',
+  'branch-base': 'branchBase',
+  'baseline-sha': 'baselineSha',
+  spec: 'spec',
+  'test-command': 'testCommand',
+  tracker: 'tracker',
+  state: 'state',
+  url: 'url',
+  note: 'note',
+};
+const KEY_TO_FLAG = Object.fromEntries(Object.entries(FLAG_TO_KEY).map(([f, k]) => [k, f]));
+
+// 枚举字段：值必须落在集合内（校验档：拒绝）
+const ENUMS = {
+  verdict: ['approved', 'changes_requested'],
+  state: ['opened-draft', 'ready'],
+  tracker: ['local', 'github', 'gitlab'],
+};
+
+// 事件分类学（10 类，枚举定死）。reviewer 派发不单独记事件——由 verdict 的 revRunId 承载。
+const EVENT_TYPES = {
+  init: {
+    required: ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand', 'tracker'],
+    optional: [],
+  },
+  dispatch: { required: ['ticket', 'key', 'runId'], optional: ['worktree', 'note'] },
+  settled: { required: ['ticket', 'round', 'headSha'], optional: ['worktree', 'gate', 'note'] },
+  verdict: {
+    required: ['ticket', 'round', 'verdict'],
+    optional: ['findings', 'revRunId', 'note'],
+  },
+  fix: { required: ['ticket', 'fixNo', 'key', 'resumeRunId'], optional: ['note'] },
+  merge: { required: ['ticket', 'headSha', 'mergeSha'], optional: ['note'] },
+  escalate: { required: ['ticket'], optional: ['note'] },
+  anomaly: { required: ['note'], optional: [] },
+  pr: { required: ['state'], optional: ['url', 'note'] },
+  close: { required: [], optional: ['note'] },
+};
+
+// 票号归一：'1' → '01'（与票文件名、merge 令牌 ticket-NN 对齐）
+function normalizeTicket(v) {
+  if (!/^\d{1,3}$/.test(String(v))) return null;
+  return String(Number(v)).padStart(2, '0');
+}
+
+// flags 式载荷解析（非裸 JSON——LLM 不会因 shell 引号写坏事件）。
+// 返回 { payload, errors }：errors 非空即拒绝（校验档：拒绝）。
+function parseFlags(tokens, typeName) {
+  const spec = EVENT_TYPES[typeName];
+  if (!spec) return { payload: {}, errors: [`未知事件类型：${typeName}`] };
+  const allowed = new Set([...spec.required, ...spec.optional]);
+  const payload = {};
+  const errors = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (!tok.startsWith('--')) {
+      errors.push(`意外位置参数「${tok}」——参数一律用 --flag value 形式（flags 式，非裸 JSON）`);
+      continue;
+    }
+    let flag = tok.slice(2);
+    let value = null;
+    const eq = flag.indexOf('=');
+    if (eq !== -1) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else if (i + 1 < tokens.length && !tokens[i + 1].startsWith('--')) {
+      value = tokens[++i];
+    } else {
+      errors.push(`旗标 --${flag} 缺少值`);
+      continue;
+    }
+    const key = FLAG_TO_KEY[flag];
+    if (!key) {
+      errors.push(
+        `未知旗标 --${flag}（事件 ${typeName} 的参数集见 --help）；本脚本无任何绕过校验的旗标`
+      );
+      continue;
+    }
+    if (!allowed.has(key)) {
+      errors.push(`旗标 --${flag} 不属于事件 ${typeName} 的参数集`);
+      continue;
+    }
+    if (key in payload) {
+      errors.push(`旗标 --${flag} 重复给出`);
+      continue;
+    }
+    if (!String(value).trim()) {
+      errors.push(`旗标 --${flag} 的值为空`);
+      continue;
+    }
+    payload[key] = value;
+  }
+  for (const key of spec.required) {
+    if (!(key in payload)) errors.push(`缺少必选参数 --${KEY_TO_FLAG[key]}`);
+  }
+  if ('ticket' in payload) {
+    const n = normalizeTicket(payload.ticket);
+    if (!n) errors.push(`ticket 必须是票号数字（如 01），得到：${payload.ticket}`);
+    else payload.ticket = n;
+  }
+  for (const key of ['round', 'fixNo']) {
+    if (key in payload && !/^\d+$/.test(String(payload[key]))) {
+      errors.push(`${key} 必须是正整数，得到：${payload[key]}`);
+    }
+  }
+  for (const key of ['headSha', 'mergeSha', 'baselineSha']) {
+    if (key in payload && !/^[0-9a-f]{7,40}$/i.test(String(payload[key]))) {
+      errors.push(`${key} 必须是 git SHA（7-40 位十六进制），得到：${payload[key]}`);
+    }
+  }
+  for (const [key, values] of Object.entries(ENUMS)) {
+    if (key in payload && !values.includes(payload[key])) {
+      errors.push(`${key} 必须是 ${values.join(' | ')}，得到：${payload[key]}`);
+    }
+  }
+  return { payload, errors };
+}
+
+// 信封盖章：时间戳 / 单调序号 / 格式版本 / 写入时刻 git HEAD——全部由脚本生成，LLM 不提供时间。
+function makeEnvelope({ type, payload, seq, now, head, warnings }) {
+  const event = { v: EVENT_VERSION, seq, ts: now.toISOString(), head, type, payload };
+  if (warnings && warnings.length) event.warn = warnings;
+  return event;
+}
+
+module.exports = {
+  EVENT_VERSION,
+  EVENT_TYPES,
+  ENUMS,
+  FLAG_TO_KEY,
+  KEY_TO_FLAG,
+  normalizeTicket,
+  parseFlags,
+  makeEnvelope,
+};
