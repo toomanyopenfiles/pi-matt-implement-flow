@@ -770,3 +770,22 @@ test('check：事件流被手改（序号跳变）→ 差异；损坏 JSON → �
     assert.match(r.stdout, /不是合法 JSON/);
   }
 });
+
+// ====================================================================
+// 评审发现回归：事件流里的票若没有票文件，台账不得静默吞掉（全量再生保证）
+// ====================================================================
+
+test('事件流里的票没有票文件：表格有行、对账报缺失、封账被阻塞', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '07', key: 't-07', 'run-id': 'cccccccc' });
+  let r = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /\| 07 \| \(票文件缺失\) \|/, 'event-only 票必须有表格行');
+  r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /票 07 在事件流中出现，但票文件缺失/);
+  const close = addAll(f, 'close', {});
+  assert.equal(close.status, 1, 'event-only 票无 merge/escalate，必须阻塞封账');
+  assert.match(close.stdout, /票 07/);
+});

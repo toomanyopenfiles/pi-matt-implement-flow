@@ -38,22 +38,32 @@ const emptyIdx = () => ({
   escalates: [],
 });
 
-// 票号 → 该票各类事件的索引（seq 序）
+// 票号 → 该票各类事件的索引（seq 序）。桶名由事件类型映射——分类学加事件时只改这一张表。
+const TICKET_BUCKETS = {
+  dispatch: 'dispatches',
+  settled: 'settles',
+  verdict: 'verdicts',
+  fix: 'fixes',
+  merge: 'merges',
+  escalate: 'escalates',
+};
+
 function indexByTicket(events) {
   const idx = new Map();
   for (const e of events) {
     const num = e.payload && e.payload.ticket;
     if (!num) continue;
     const t = idx.get(num) ?? emptyIdx();
-    if (e.type === 'dispatch') t.dispatches.push(e);
-    else if (e.type === 'settled') t.settles.push(e);
-    else if (e.type === 'verdict') t.verdicts.push(e);
-    else if (e.type === 'fix') t.fixes.push(e);
-    else if (e.type === 'merge') t.merges.push(e);
-    else if (e.type === 'escalate') t.escalates.push(e);
+    const bucket = TICKET_BUCKETS[e.type];
+    if (bucket) t[bucket].push(e);
     idx.set(num, t);
   }
   return idx;
+}
+
+// 出现过事件的去重票数（renderRecon 与 check 的共用口径）
+function countTickets(events) {
+  return new Set(events.filter((e) => e.payload?.ticket).map((e) => e.payload.ticket)).size;
 }
 
 const isTaskFile = (file) => !file || !file.type || file.type === 'task';
@@ -81,7 +91,7 @@ function closeBlockers({ events, truth }) {
     blockers.push({ num, reason: file ? `Status=${file.status ?? '?'}` : '票文件缺失' });
   };
   for (const t of truth.tickets) consider(t.num, t);
-  for (const num of Object.keys(idx)) {
+  for (const num of idx.keys()) {
     consider(num, truth.tickets.find((x) => x.num === num) ?? null);
   }
   return blockers;
@@ -267,7 +277,7 @@ function reconcile({ events, truth }) {
 
   // 2) 票文件缺失（仅在 tracker 枚举成功时才可判定）
   if (trackerOk) {
-    for (const num of Object.keys(idx)) {
+    for (const num of idx.keys()) {
       if (!files.has(num)) diffs.push(`票 ${num} 在事件流中出现，但票文件缺失`);
     }
   }
@@ -298,7 +308,7 @@ function reconcile({ events, truth }) {
 
   // 5) 分支存在性（封账后清理属正常，跳过）
   if (!sealed) {
-    const nums = new Set([...files.keys(), ...Object.keys(idx)]);
+    const nums = new Set([...files.keys(), ...idx.keys()]);
     for (const num of nums) {
       const t = idx.get(num);
       if (!t) continue;
@@ -340,7 +350,7 @@ function prState({ events, truth }) {
 function deriveRows({ events, truth, degraded }) {
   const idx = indexByTicket(events);
   const nums = new Map(truth.tickets.map((t) => [t.num, t]));
-  for (const num of Object.keys(idx)) if (!nums.has(num)) nums.set(num, null);
+  for (const num of idx.keys()) if (!nums.has(num)) nums.set(num, null);
   const rows = [];
   for (const num of [...nums.keys()].sort()) {
     const file = nums.get(num);
@@ -498,11 +508,8 @@ function renderTimeline({ events, degraded }) {
 
 function renderRecon({ events, recon }) {
   const lines = ['## 对账结论', ''];
-  const ticketCount = new Set([
-    ...events.filter((e) => e.payload?.ticket).map((e) => e.payload.ticket),
-  ]).size;
   if (!recon.diffs.length) {
-    lines.push(`✓ 账实一致（票 ${ticketCount} 张，事件 ${events.length} 条）`);
+    lines.push(`✓ 账实一致（票 ${countTickets(events)} 张，事件 ${events.length} 条）`);
   } else {
     lines.push(`✗ 发现 ${recon.diffs.length} 处账实差异：`);
     recon.diffs.forEach((d, i) => lines.push(`${i + 1}. ${d}`));
@@ -524,6 +531,7 @@ function renderLedger({ slug, events, truth, recon, degraded }) {
 module.exports = {
   TICKET_BRANCH,
   closeBlockers,
+  countTickets,
   gateAdd,
   indexByTicket,
   reconcile,

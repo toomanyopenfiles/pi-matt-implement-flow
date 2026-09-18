@@ -340,7 +340,7 @@ function cmdBuild({ runtimeDir }) {
 function cmdCheck({ runtimeDir }) {
   const collected = collectOrReject({ runtimeDir, command: 'check' });
   if (!collected) return 1;
-  const { events, recon, degraded } = collected;
+  const { events, recon } = collected;
   if (recon.diffs.length) {
     out(
       `✗ ${recon.diffs.length} 处账实差异（退出码 1）：`,
@@ -349,10 +349,9 @@ function cmdCheck({ runtimeDir }) {
     );
     return 1;
   }
-  const ticketCount = new Set(events.filter((e) => e.payload?.ticket).map((e) => e.payload.ticket)).size;
+  const ticketCount = core.countTickets(events);
   out(`✓ 账实一致（票 ${ticketCount} 张，事件 ${events.length} 条）`);
   for (const w of recon.warnings) out(`⚠ ${w}`);
-  if (degraded) return 0;
   return 0;
 }
 
