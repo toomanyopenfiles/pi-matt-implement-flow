@@ -22,6 +22,7 @@ const {
   checkAgentFrontmatter,
   checkAgentRegistration,
   checkTestScript,
+  checkCoderBriefWorktreeReality,
   LEDGER_SCRIPT,
   checkLedgerScript,
 } = require('./registration-checks.js');
@@ -109,6 +110,11 @@ test('every agent declares its name in package-full-name form (name + package fi
   assert.deepEqual(problems, []);
 });
 
+test('coder brief carries the worktree-reality contract (block in, notes pointer out, soft fence verbatim)', () => {
+  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  assert.deepEqual(checkCoderBriefWorktreeReality(skillText), []);
+});
+
 // --- 模拟破坏：假想 fixture，绝不改动真实文件。每条恰好对应一条真实不变量。 ---
 
 test('breakage simulation: a pi.skills entry renamed to a missing file is flagged', () => {
@@ -179,6 +185,40 @@ test('breakage simulation: an agent declaring a wrong package is flagged', () =>
       'agent "coder" declares package "other-pkg", which does not match package name "pi-matt-implement-flow"',
     ]
   );
+});
+
+test('breakage simulation: a coder brief losing the Worktree reality block is flagged', () => {
+  assert.deepEqual(
+    checkCoderBriefWorktreeReality('Ticket 07: …\nBase commit: abc.\n').filter((p) =>
+      p.includes('Worktree reality')
+    ),
+    ['SKILL.md is missing the "## Worktree reality" block in the coder brief']
+  );
+});
+
+test('breakage simulation: the retired orchestration-notes pointer returning to the coder brief is flagged', () => {
+  const withPointer = '## Worktree reality\nNotes (read if present): .pi/matt-implement/<slug>/notes.md.\n';
+  assert.deepEqual(
+    checkCoderBriefWorktreeReality(withPointer).filter((p) => p.includes('orchestration notes')),
+    [
+      'SKILL.md still points coders at the orchestration notes ("Notes (read if present)") — the pointer is retired: coders never read the orchestration notes',
+    ]
+  );
+});
+
+test('breakage simulation: the soft-fence sentence being reworded or dropped is flagged', () => {
+  const reworded =
+    '## Worktree reality\nOther tickets under .scratch/ are context, not scope — report them and continue.\n';
+  assert.deepEqual(
+    checkCoderBriefWorktreeReality(reworded).filter((p) => p.includes('soft-fence')),
+    [
+      'SKILL.md is missing the user-adjudicated soft-fence sentence ("…are context, not scope — never implement them") — do not reword or drop it',
+    ]
+  );
+  // 换行折行不改变语义：同一句合到一行必须通过（空白归一化）。
+  const unwrapped =
+    '## Worktree reality\nOther tickets under .scratch/ and anything else in the main repo are context, not scope — never implement them.\n';
+  assert.deepEqual(checkCoderBriefWorktreeReality(unwrapped), []);
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

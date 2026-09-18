@@ -170,7 +170,35 @@ function checkTestScript(manifest) {
   return problems;
 }
 
-// 不变量 6：ledger 脚本存在——机械台账协议的唯一写面必须随包交付（ADR-0001）。
+// 不变量 6：coder 简报契约的 worktree 现实块（P1-1）。
+// 提示词契约没有机械执法点，唯一可自动测的外部行为面是 SKILL.md 的内容不变量：
+// Worktree reality 块存在、编排笔记指针退役、软围栏句按用户裁定原句存在。
+const WORKTREE_REALITY_HEADING = '## Worktree reality';
+const RETIRED_NOTES_POINTER = 'Notes (read if present)';
+const SOFT_FENCE_SENTENCE =
+  'Other tickets under .scratch/ and anything else in the main repo are context, not scope — never implement them.';
+
+function checkCoderBriefWorktreeReality(skillText) {
+  const problems = [];
+  // 软围栏句按空白归一化匹配：锁定措辞原句，容忍模板内的换行折行。
+  const normalized = skillText.replace(/\s+/g, ' ');
+  if (!skillText.includes(WORKTREE_REALITY_HEADING)) {
+    problems.push('SKILL.md is missing the "## Worktree reality" block in the coder brief');
+  }
+  if (skillText.includes(RETIRED_NOTES_POINTER)) {
+    problems.push(
+      'SKILL.md still points coders at the orchestration notes ("Notes (read if present)") — the pointer is retired: coders never read the orchestration notes'
+    );
+  }
+  if (!normalized.includes(SOFT_FENCE_SENTENCE)) {
+    problems.push(
+      'SKILL.md is missing the user-adjudicated soft-fence sentence ("…are context, not scope — never implement them") — do not reword or drop it'
+    );
+  }
+  return problems;
+}
+
+// 不变量 7：ledger 脚本存在——机械台账协议的唯一写面必须随包交付（ADR-0001）。
 const LEDGER_SCRIPT = 'scripts/ledger.js';
 function checkLedgerScript({ isFile = isFileAt } = {}) {
   return isFile(LEDGER_SCRIPT)
@@ -192,6 +220,7 @@ module.exports = {
   checkAgentFrontmatter,
   checkAgentRegistration,
   checkTestScript,
+  checkCoderBriefWorktreeReality,
   LEDGER_SCRIPT,
   checkLedgerScript,
 };

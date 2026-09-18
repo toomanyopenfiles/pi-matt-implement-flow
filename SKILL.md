@@ -196,13 +196,22 @@ Report: tickets closed with their merge SHAs, the PR link or branch, and every e
 
 Fill the angle brackets; send nothing else.
 
+**Path rule for all briefs**: any path that does not physically exist inside the recipient's worktree (everything gitignored — `.scratch/`, `.pi/`, `data/`, …) is given as an absolute main-repo path and marked read-only. The rule covers all four brief templates below; there are no special cases for isolation shape.
+
 ### Coder brief
 
 ```
 Ticket 07: add a farewell module. (ticket number and title first — your commit messages must reference it)
 
-Ticket file: <path>. Spec: <path>. Notes (read if present): .pi/matt-implement/<slug>/notes.md.
+Ticket file: <absolute main-repo path>. Spec: <absolute main-repo path>.
 Base commit: <sha>. Test command: `npm test`.
+
+## Worktree reality
+Your worktree contains ONLY committed files — everything gitignored (data/, .scratch/,
+.pi/, …) does not exist inside it. The ticket, spec, findings, and data paths in this
+brief are absolute main-repo paths (read-only). Everything you edit and commit stays
+inside your own worktree. Other tickets under .scratch/ and anything else in the main
+repo are context, not scope — never implement them.
 
 You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report headSha, commits, test result, and seams.
 
@@ -220,10 +229,10 @@ Rules:
 ### Reviewer brief
 
 ```
-Ticket 07 (ticket file: <path>). Spec: <path>.
-Review bundle: .pi/matt-implement/<slug>/reviews/07-r1.diff (three-dot diff + commit list against base <sha>).
+Ticket 07 (ticket file: <absolute main-repo path>). Spec: <absolute main-repo path>.
+Review bundle: <absolute main-repo path>/.pi/matt-implement/<slug>/reviews/07-r1.diff (three-dot diff + commit list against base <sha>).
 Implementer's report: headSha <sha>; seams: <...>; test: `npm test` — 2 pass 0 fail (platform-gate evidence).
-Your worktree is checked out at refs/heads/ticket-07 — the post-change tree. Read the changed files there.
+Your worktree is checked out at refs/heads/ticket-07 — the post-change tree. Read the changed files there; review-bundle and findings paths are main-repo paths (read-only).
 
 Run your two-axis process and return the structured verdict.
 ```
@@ -231,14 +240,14 @@ Run your two-axis process and return the structured verdict.
 ### Fix follow-up (to the same coder, via resume)
 
 ```
-Review round <k> found issues: read .pi/matt-implement/<slug>/findings/<NN>-r<k>.md.
+Review round <k> found issues: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/<NN>-r<k>.md.
 Fix them in your worktree, rerun the full suite, commit everything, and report exactly as before — the full structured output with value and acceptanceReport as SIBLING top-level keys (never nested), every `## Acceptance Contract` field filled: validationOutput with the real rerun output (verbatim pass/fail lines, never null), testsAddedOrUpdated listing any test files touched ([] only if none).
 ```
 
 ### Integration fixer (no isolation)
 
 ```
-The full suite is red after merging ticket <NN>: read .pi/matt-implement/<slug>/findings/integration-<NN>.md.
+The full suite is red after merging ticket <NN>: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/integration-<NN>.md.
 You are on the feature branch in the main checkout; this is an integration problem ticket-level reviews could not see. Fix it, run the full suite, commit on the feature branch.
 ```
 
