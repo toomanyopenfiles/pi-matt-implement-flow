@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>课程 0003 · 两轴 review 与嵌套 fanout — pi-matt-implement-flow</title>
+<link rel="stylesheet" href="../assets/teach.css">
+</head>
+<body>
+<main class="lesson">
+
+  <header class="masthead">
+    <p class="kicker">pi-matt-implement-flow · 课程 0003</p>
+    <h1>两轴 review 与嵌套 fanout：reviewer 怎么审一张票</h1>
+    <p class="meta">使命：<a href="../MISSION.md">维护并演进这个插件</a> · 预计 15 分钟 · 前置：<a href="0002-worktree-and-resume.html">0002 一张票的旅程</a></p>
+  </header>
+
+  <div class="callout">
+    <span class="callout-title">开课前 1 分钟</span>
+    本课聚焦 0002 总表的<strong>第 ④ 步</strong>，把它拆到可维护的粒度：reviewer 收到什么、自己干两件什么事、派出去的两个「轴 child」各自查什么、判决怎么聚合出来。<strong>本课没有新 git 命令</strong>——reviewer 全程没有 bash，这正是它「只读」属性的一部分。角色配色沿用：赭石=编排者、蓝=coder 家族、绿=reviewer 家族。
+  </div>
+
+  <h2><span class="secno">§1</span>reviewer 的一票审查（六步总表）</h2>
+
+  <table>
+    <tr><th>步</th><th>执行者</th><th>干什么（目标）</th><th>输入 → 输出</th></tr>
+    <tr>
+      <td>①</td><td><strong>reviewer</strong></td>
+      <td><strong>先核对实况</strong>：读 bundle、票、spec、自己 worktree 里的变更文件，把 coder 报告的每一条 claim 和现实对一遍——<strong>不信任报告</strong></td>
+      <td>bundle 路径 + 票 + spec + 门证据 + coder 报告 → 读到位的事实底座</td>
+    </tr>
+    <tr>
+      <td>②</td><td><strong>reviewer</strong></td>
+      <td>找标准源：仓库里的 CODING_STANDARDS.md / CONTRIBUTING.md 等（找不到就明说）</td>
+      <td>worktree → Standards 轴要引用的标准源清单</td>
+    </tr>
+    <tr>
+      <td>③</td><td><strong>reviewer</strong></td>
+      <td><strong>一次</strong>顶层 workflow 调用（<code>async: true</code>）派出两个轴 child，都是 <code>context: "fork"</code>——继承自己的阅读成果</td>
+      <td>两条自足的轴 brief（每条都带全部路径与指令）→ 两个并行轴 child</td>
+    </tr>
+    <tr>
+      <td>④</td><td><strong>Standards 轴</strong>（fork child）</td>
+      <td>查文档化标准的违反（每条引用被违反的标准条目：文件+规则）+ 逐条过味道基线（具名并引用）；区分硬违规与判断题</td>
+      <td>轴 brief → 轴报告（≤400 词）</td>
+    </tr>
+    <tr>
+      <td>⑤</td><td><strong>Spec 轴</strong>（fork child）</td>
+      <td>查：spec 要求但缺失/只做一半的；diff 里<strong>没被要求却做了的</strong>（scope creep）；看着实现了但做错的。每条发现<strong>引用 spec 原句</strong></td>
+      <td>轴 brief → 轴报告（≤400 词）</td>
+    </tr>
+    <tr>
+      <td>⑥</td><td><strong>reviewer</strong></td>
+      <td><strong>聚合</strong>：两轴报告以 <code>## Standards</code> / <code>## Spec</code> 并列呈现，<strong>不合并不重排</strong>；给每轴条数 + 每轴最重问题；出结构化判决</td>
+      <td>两轴报告 → <strong>verdict</strong>（<code>approved</code>/<code>changes_requested</code>）+ findings（severity/file/line/issue）</td>
+    </tr>
+  </table>
+
+  <div class="callout warn">
+    <span class="callout-title">严重度纪律（两个 reviewer 都遵守）</span>
+    P0 挡合并；P1 发布前该修；P2 仅记录。<strong>按证据过滤，不按严重度过滤</strong>：只报能从 diff、worktree 或契约矛盾里证实、且由本票改动引起（或使其可达）的问题。某轴零发现时，精确写 <code>No issues found.</code>——一个字都不多。
+  </div>
+
+  <h2><span class="secno">§2</span>同一件事，画出来（fanout 结构图）</h2>
+
+  <figure>
+    <svg viewBox="0 0 780 640" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC',sans-serif">
+      <defs>
+        <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#23211c"/>
+        </marker>
+        <marker id="a4g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#2e7d43"/>
+        </marker>
+      </defs>
+
+      <rect x="60" y="10" width="10" height="10" fill="#994a1d"/><text x="76" y="19" font-size="10">编排者</text>
+      <rect x="160" y="10" width="10" height="10" fill="#2e7d43"/><text x="176" y="19" font-size="10">reviewer</text>
+      <rect x="280" y="10" width="10" height="10" fill="#3d5a80"/><text x="296" y="19" font-size="10">轴 child（fork）</text>
+
+      <!-- ① 编排者 -->
+      <rect x="90" y="40" width="420" height="52" rx="8" fill="#f5e6d7" stroke="#994a1d"/>
+      <rect x="100" y="47" width="56" height="18" rx="9" fill="#994a1d"/>
+      <text x="128" y="60" text-anchor="middle" font-size="9.5" fill="#fff">编排者</text>
+      <text x="156" y="61" font-size="11.5" font-weight="600">① 派 reviewer（baseRef = ticket-01）</text>
+      <text x="100" y="84" font-size="9.5" fill="#6f6a5f">输入：bundle+票+spec+门证据 ⇒ 输出：verdict 回编排者</text>
+      <line x1="300" y1="92" x2="300" y2="112" stroke="#23211c" stroke-width="1.3" marker-end="url(#a4)"/>
+
+      <!-- ② reviewer -->
+      <rect x="90" y="118" width="420" height="52" rx="8" fill="#e6f2e8" stroke="#2e7d43"/>
+      <rect x="100" y="125" width="62" height="18" rx="9" fill="#2e7d43"/>
+      <text x="131" y="138" text-anchor="middle" font-size="9.5" fill="#fff">reviewer</text>
+      <text x="172" y="138" font-size="11.5" font-weight="600">② 先核对实况：bundle · 票 · spec · 变更文件</text>
+      <text x="100" y="162" font-size="9.5" fill="#6f6a5f">coder 报告的每条 claim 都要和 worktree 里的现实对上</text>
+
+      <!-- fork 到两个轴 -->
+      <path d="M 240 174 L 240 204 L 205 204 L 205 222" fill="none" stroke="#23211c" stroke-width="1.3" marker-end="url(#a4)"/>
+      <path d="M 360 174 L 360 204 L 575 204 L 575 222" fill="none" stroke="#23211c" stroke-width="1.3" marker-end="url(#a4)"/>
+      <text x="390" y="198" text-anchor="middle" font-size="9.5" fill="#6f6a5f">一次顶层 workflow（async:true）· 两个 child 都是 context: "fork"</text>
+
+      <!-- ③ Standards 轴 -->
+      <rect x="40" y="228" width="330" height="64" rx="8" fill="#e9eff7" stroke="#3d5a80"/>
+      <rect x="50" y="236" width="70" height="18" rx="9" fill="#3d5a80"/>
+      <text x="85" y="249" text-anchor="middle" font-size="9.5" fill="#fff">Standards 轴</text>
+      <text x="130" y="249" font-size="11" font-weight="600">③ 文档化标准 + 味道基线</text>
+      <text x="50" y="271" font-size="9.5" fill="#6f6a5f">输入：bundle+标准源 ⇒ 每条违规引用标准条目</text>
+      <text x="50" y="286" font-size="9.5" fill="#6f6a5f">区分硬违规与判断题；工具强制的不报</text>
+
+      <!-- ④ Spec 轴 -->
+      <rect x="410" y="228" width="330" height="64" rx="8" fill="#e9eff7" stroke="#3d5a80"/>
+      <rect x="420" y="236" width="56" height="18" rx="9" fill="#3d5a80"/>
+      <text x="448" y="249" text-anchor="middle" font-size="9.5" fill="#fff">Spec 轴</text>
+      <text x="486" y="249" font-size="11" font-weight="600">④ 缺失 · 越界 · 做错</text>
+      <text x="420" y="273" font-size="9.5" fill="#6f6a5f">输入：bundle+票+spec ⇒ 每条发现引用 spec 原句</text>
+      <text x="420" y="288" font-size="9.5" fill="#6f6a5f">scope creep 单独一栏（diff 里没被要求的行为）</text>
+
+      <!-- 回流到聚合 -->
+      <path d="M 205 292 L 205 318 L 300 318 L 300 332" fill="none" stroke="#2e7d43" stroke-width="1.3" marker-end="url(#a4g)"/>
+      <path d="M 575 292 L 575 318 L 300 318" fill="none" stroke="#2e7d43" stroke-width="1.3"/>
+      <text x="620" y="315" font-size="9.5" fill="#2e7d43">两份轴报告原样回流</text>
+
+      <!-- ⑤ 聚合 -->
+      <rect x="90" y="338" width="420" height="56" rx="8" fill="#e6f2e8" stroke="#2e7d43"/>
+      <rect x="100" y="346" width="62" height="18" rx="9" fill="#2e7d43"/>
+      <text x="131" y="359" text-anchor="middle" font-size="9.5" fill="#fff">reviewer</text>
+      <text x="172" y="359" font-size="11.5" font-weight="600">⑤ 聚合：两轴并列 · 不合并不重排</text>
+      <text x="100" y="383" font-size="9.5" fill="#6f6a5f">## Standards / ## Spec 分节 + 每轴条数 + 每轴最重问题</text>
+
+      <!-- ⑥ 判决 -->
+      <rect x="90" y="416" width="420" height="56" rx="8" fill="#e6f2e8" stroke="#2e7d43"/>
+      <rect x="100" y="424" width="62" height="18" rx="9" fill="#2e7d43"/>
+      <text x="131" y="429" text-anchor="middle" font-size="9.5" fill="#fff">reviewer</text>
+      <text x="172" y="429" font-size="11.5" font-weight="600">⑥ 结构化判决：verdict + findings</text>
+      <text x="100" y="461" font-size="9.5" fill="#6f6a5f">approved / changes_requested + severity·file·line·issue</text>
+
+      <line x1="300" y1="394" x2="300" y2="410" stroke="#23211c" stroke-width="1.3" marker-end="url(#a4)"/>
+
+      <!-- 尾注 -->
+      <rect x="90" y="496" width="420" height="34" rx="8" fill="#fff" stroke="#23211c" stroke-dasharray="5 4"/>
+      <text x="300" y="517" text-anchor="middle" font-size="10.5">verdict 回到 0002 的 ⑤ 分叉点：approved 合并 / changes_requested 修复（≤2 轮）</text>
+      <line x1="300" y1="472" x2="300" y2="492" stroke="#23211c" stroke-width="1.3" marker-end="url(#a4)"/>
+
+      <!-- 侧栏注释 -->
+      <rect x="540" y="118" width="215" height="96" rx="8" fill="#fff" stroke="#23211c" stroke-dasharray="5 4"/>
+      <text x="552" y="138" font-size="9.5" fill="#b23a2a" font-weight="600">fork 的方向是单向的：</text>
+      <text x="552" y="156" font-size="9.5" fill="#4d4a42">只从启动者流向直接 child</text>
+      <text x="552" y="174" font-size="9.5" fill="#4d4a42">reviewer 与 coder 是兄弟 session，</text>
+      <text x="552" y="192" font-size="9.5" fill="#4d4a42">互相不可达——「继承 coder 的</text>
+      <text x="552" y="210" font-size="9.5" fill="#4d4a42">上下文来评审」机制上不存在（§10.14）</text>
+    </svg>
+    <figcaption>一票的两轴 fanout。② 的实况核对在 fork 之前——轴 child 继承的是评审者<strong>已核实过的阅读</strong>，不是 coder 的叙事。</figcaption>
+  </figure>
+
+  <h2><span class="secno">§3</span>为什么两轴要分开、聚合为什么「不重排」</h2>
+
+  <ol>
+    <li><strong>两轴的坐标系不同</strong>：Standards 轴问「这符不符合<strong>仓库的规矩</strong>」；Spec 轴问「这做的是不是<strong>被要求的事</strong>」。混在一份清单里，一个「变量名不合 glossary」和一个「验收标准没实现」会变成同一列里的两个格子——权重失真。</li>
+    <li><strong>不合并不重排</strong>：排序本身就是判断。reviewer 的职责是<strong>呈现证据</strong>，把「怎么权衡」留给编排者（编排者手里还有 git 真值和集成门）。裁决词只有两个：<code>approved</code> / <code>changes_requested</code>——绝不出现 <code>blocked</code>（lane 语义保留字）。</li>
+    <li><strong>轴 child 仍然自足</strong>：fork 继承的是评审者的阅读上下文，但每条轴 brief 依旧带全部路径与指令——这是 multi-lane 纪律「every child packet must stand alone」。fork 是便利，不是依赖。</li>
+    <li><strong>轴 child 是终点</strong>：它们只读、不能再派孙代。嵌套深度默认两层（main → reviewer → 轴 child），由平台的递归守卫强制；reviewer 的 frontmatter 里 <code>subagent</code> 工具和 <code>allowNestedSubagents: true</code> 是显式授权，不是默认。</li>
+  </ol>
+
+  <h2><span class="secno">§4</span>final-reviewer：同一套两轴，多一双「跨票眼」</h2>
+
+  <table>
+    <tr><th></th><th>reviewer（每票）</th><th>final-reviewer（整条分支）</th></tr>
+    <tr><td>审查范围</td><td>一张票的三点 diff</td><td><code>feature-base...HEAD</code> 全分支 diff</td></tr>
+    <tr><td>两轴流程</td><td>相同（①–⑥）</td><td>相同</td></tr>
+    <tr><td>特有职责</td><td>—</td><td><strong>跨票狩猎</strong>：跨文件漂移、组件互相矛盾、spec 有要求但<strong>没有票实现它</strong>、文档与交付代码脱节</td></tr>
+    <tr><td>额外工作</td><td>—</td><td>裁定先前每票 review 里被延后的 minor 发现：现在修还是继续延，逐条给理由</td></tr>
+    <tr><td>判决词表</td><td><code>approved / changes_requested</code></td><td><code>ready / ready_with_fixes / not_ready</code></td></tr>
+  </table>
+
+  <p>为什么「跨票狩猎」只有 final-reviewer 能干：每票 reviewer 的 worktree 里只有<strong>自己那张票的树</strong>；整条分支拼完之后，「组件 A 的接口假设和组件 B 的实现漂了」这类问题才第一次变得可见。这就是 0001 里「最终门」存在的全部理由。</p>
+
+  <h2><span class="secno">§5</span>检索练习 · 一票审查的六步</h2>
+  <div class="card" id="sorter"></div>
+
+  <h2><span class="secno">§6</span>快问快答</h2>
+  <div class="card" id="quiz"></div>
+
+  <h2><span class="secno">§7</span>下一步</h2>
+
+  <div class="callout">
+    <span class="callout-title">首要读物（本课唯一推荐）</span>
+    <a href="../../../agents/reviewer.md">agents/reviewer.md</a> 原文——本课六步就是它的 persona 逐段展开。读完再瞄一眼 <a href="../../../agents/final-reviewer.md">final-reviewer.md</a> 的「Two jobs」段，看两个 reviewer 怎么分工。
+  </div>
+
+  <footer>
+    <p>哪里不清楚直接问；也可以要求把某一步（比如「味道基线」）放大单讲。</p>
+    <nav>
+      <a href="0002-worktree-and-resume.html">← 上一课：0002 一张票的旅程</a>
+      <a href="../reference/orchestrator-cheatsheet.html">→ 速查页一页纸</a>
+      <a href="../reference/git-minimal.html">→ git 最小词典</a>
+    </nav>
+  </footer>
+
+</main>
+
+<script src="../assets/sequence-sort.js"></script>
+<script src="../assets/quiz.js"></script>
+<script>
+  MIFSorter.mount(document.getElementById('sorter'), {
+    title: '按执行顺序依次点击（与 §1 总表一一对应；点对立即锁定，点错闪红）',
+    items: [
+      'reviewer 核对实况：bundle+票+spec+变更文件',
+      'reviewer 找标准源（CODING_STANDARDS 等）',
+      '一次顶层调用派两个 fork 轴 child',
+      'Standards 轴查文档违规与味道基线',
+      'Spec 轴查缺失、越界、做错（引原句）',
+      '聚合：两轴并列，不合并不重排，回 verdict'
+    ]
+  });
+
+  MIFQuiz.mount(document.getElementById('quiz'), [
+    {
+      prompt: '两个轴 child 用的是谁的上下文？',
+      options: ['继承评审者读到的现场', '继承编码者干活的现场', '全新空白现场从零开始'],
+      answer: 0,
+      explain: 'fork 只从启动者流向直接 child——reviewer 和 coder 是兄弟 session，互相不可达，「fork coder 的上下文」机制上不存在（§10.14）；就算可行也不该：继承 coder 的叙事等于把锚定效应交给评审者，摧毁独立性。评审者的实况核对先于一切，轴 child 继承的是核实后的阅读。'
+    },
+    {
+      prompt: '两个轴 child 的发现，最终怎么变成一份输出？',
+      options: ['并列呈现不合并不重排', '按严重度全局重新排序', '只挑最重的三条来上报'],
+      answer: 0,
+      explain: '聚合规则（reviewer.md / code-review skill）：两轴报告以 ## Standards / ## Spec 并列呈现，不合并不重排；每轴给条数和最重问题。排序本身就是判断——那是编排者拿着 git 真值做的事，不是 reviewer 的。'
+    },
+    {
+      prompt: '某条轴什么问题都没查出来，轴报告该怎么写？',
+      options: ['精确写明无发现原句', '总结几句整体还不错', '空着不写等下一轴补'],
+      answer: 0,
+      explain: '精确措辞纪律：某轴零发现时必须一字不差写 "No issues found."——这是给聚合与上游解析的稳定锚点，泛泛的「整体不错」无法被结构化消费。'
+    },
+    {
+      prompt: '跨文件漂移、组件矛盾这类问题，为什么每票 reviewer 看不见？',
+      options: ['它的树里只有本票文件', '它没有 bash 无法看全局', '它的 thinking 级别不够高'],
+      answer: 0,
+      explain: '每票 reviewer 的只读 worktree 检出于 ticket-01——里面只有该票的文件状态。组件间的矛盾要等整条分支拼完才第一次可见，这正是 final-reviewer 存在的理由（0001 的「出口：最终门」）。'
+    }
+  ]);
+</script>
+</body>
+</html>

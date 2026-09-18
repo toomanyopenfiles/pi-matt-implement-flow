@@ -107,7 +107,7 @@
 
   <p>三条通道读法：</p>
   <ul>
-    <li><strong>单次执行</strong>：前置检查 + Round 0（读 spec 与全部票入台账 → 建 <code>feat/&lt;slug&gt;</code> 分支 → 跑一次全量测试记基线 → 有远端就开 draft PR）。</li>
+    <li><strong>单次执行</strong>：前置检查 + Round 0（读 spec 与全部票、记第一笔账 <code>init</code> → <strong>环境勘测</strong>：枚举 coder worktree 里不会有的一切运行期路径，写进编排笔记的「环境事实」节 → 建 <code>feat/&lt;slug&gt;</code> 分支 → 跑一次全量测试记基线 → 有远端就开 draft PR）。</li>
     <li><strong>循环体</strong>：每轮从①到⑥走一遍，⑥ 之后<strong>重算前沿</strong>，还有票就回到①继续派发。这就是为什么它不需要人工逐票推进（<a href="../../design/decisions.md">D13</a>：async 完成唤醒同一 session 起新 turn）。</li>
     <li><strong>出口</strong>：所有票关闭或升级后，才进最终门——对<strong>整条分支</strong>做两轴 review，这是唯一能看到跨票问题的关口。</li>
   </ul>
@@ -151,7 +151,7 @@
 
   <ol>
     <li><strong>git 真值</strong>（分支名、SHA、diff）——一切判定的最终依据。run status 和子代理的散文报告只是线索：<a href="../../design/verified-facts.md">§10.11</a> 实测出现过 run 判 failed 但 commit 已落地，甚至 coder <strong>伪造全长 SHA</strong>（§10.18-4）。锚定一律先 <code>git rev-parse</code> 取真值。</li>
-    <li><strong>台账 <code>.pi/matt-implement/&lt;slug&gt;/ledger.md</code></strong>（被 .gitignore 覆盖，天然不脏树）：每轮开头读、每次状态变化后重写。它的存在理由是<strong>跨上下文压缩的记忆</strong>——压缩后重读 skill + 台账 + <code>git worktree list</code> 先对账，再派发。</li>
+    <li><strong>编排器的记忆（三层，各有一个主人）</strong>：<strong>事件流</strong>（<code>events.jsonl</code>，LLM 唯一的状态写面——只能通过记账命令 <code>node scripts/ledger.js add …</code> 写，脚本盖权威时间戳与单调序号）；<strong>台账</strong>（<code>ledger.md</code>，脚本独占写权的派生视图——LLM <strong>永不手写一格</strong>，漂了用 <code>build</code> 整册再生）；<strong>编排笔记</strong>（<code>notes.md</code>，散文记忆：过程叙事、教训、用户拍板）。三条命令纪律：状态转换时记账（<code>add</code>）、每次派发与合并前对账（<code>check</code>）、压缩后再生（<code>build</code>）。出处：<a href="../../design/decisions.md">D18</a> 与 <a href="../../adr/0001-script-owned-ledger.md">ADR-0001</a>（背景：两次实战的表格失真与日志覆写事故）。</li>
     <li><strong>票追踪器</strong>（本仓库采用 <a href="../../agents/issue-tracker.md">local markdown</a>：<code>.scratch/&lt;slug&gt;/issues/</code>）：认领 / 关票的权威。因为也被忽略，状态写入不会弄脏派发检查。</li>
   </ol>
 
@@ -191,7 +191,7 @@
     title: '按执行顺序依次点击（点对立即锁定，点错会闪红）',
     items: [
       '前置检查：git status 必须干净',
-      'Round 0：读 spec+票，建分支，记基线',
+      'Round 0：init 记账、环境勘测、建分支基线',
       '认领前沿票，一次 runs.all 派 N 个 coder',
       '用 git 真值锚定 ticket-N，写三点 diff bundle',
       '派只读 reviewer 做两轴审查',
@@ -224,7 +224,7 @@
       prompt: '台账（ledger）里优先记录哪类内容？',
       options: ['提交哈希与分支真值', '叙述文字与运行状态', '待办清单与计划散文'],
       answer: 0,
-      explain: '台账必须能从 git 和追踪器重建——所以优先记 SHA（可验证），不记叙述（不可验证）。run status 同样不可全信：§10.11 实测过 state: failed 但 commit 已落地。'
+      explain: '事实必须可从 git 和追踪器机械重建——所以记 SHA（可验证），不记叙述（不可验证，叙述进编排笔记）。现在这由脚本保证：台账是脚本从事件流+真相层再生的派生层，漂了就 build，永不手写（ADR-0001）。run status 同样不可全信：§10.11 实测过 state: failed 但 commit 已落地。'
     }
   ]);
 </script>

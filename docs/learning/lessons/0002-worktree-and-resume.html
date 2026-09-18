@@ -78,6 +78,11 @@
     ③⑦ 两步都先 <code>git rev-parse</code> 取真 SHA 再动手——因为实测里 run 状态会说谎（<code>failed</code> 但 commit 已落地）、coder 会编造 SHA。报告和状态只是线索，<strong>git 真值才是证据</strong>。
   </div>
 
+  <div class="callout">
+    <span class="callout-title">2026-09-19 更新 · 验收契约前置</span>
+    派发（①）现在就带<strong>显式验收契约</strong>：dispatch 参数用完整 <code>acceptance</code> 对象——证据清单在派发时钉死，<code>report: "on"</code> 把报告格式校验挪进 coder 最后一次工具调用（不合规当场重试，而不是整个 run 跑完被拒），brief 里配 <code>## Acceptance Contract</code> 块。⑥ 的「resume 重放存储契约」因此更稳：修复轮 brief 只需要求重新交完整报告。细节在验收契约专课展开。
+  </div>
+
   <h2><span class="secno">§2</span>同一张图（角色着色流程）</h2>
 
   <figure>
@@ -222,6 +227,7 @@
   <footer>
     <p>哪里还卡直接问，也可以让我把某一步放大单讲。</p>
     <nav>
+      <a href="0003-two-axis-review-fanout.html">→ 下一课：0003 两轴 review</a>
       <a href="0001-orchestrator-loop-map.html">← 上一课：0001 循环骨架</a>
       <a href="../reference/git-minimal.html">→ git 最小词典</a>
       <a href="../reference/orchestrator-cheatsheet.html">→ 速查页一页纸</a>
