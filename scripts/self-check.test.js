@@ -231,6 +231,10 @@ test('breakage simulation: the environment-survey step going missing is flagged'
   assert.deepEqual(checkRound0EnvSurvey('### Round 0\n1. Record init.\n'), [
     'SKILL.md Round 0 is missing the environment-survey step (read .gitignore, write the 环境事实 section of the orchestration notes; missing anchors: Environment survey, 环境事实)',
   ]);
+  // 锚点在 Round 0 小节之外不算数：小节缺失时整条检查红。
+  assert.deepEqual(checkRound0EnvSurvey('### Round 1\nEnvironment survey 环境事实\n'), [
+    'SKILL.md is missing the "### Round 0" section',
+  ]);
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

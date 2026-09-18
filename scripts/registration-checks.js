@@ -170,7 +170,7 @@ function checkTestScript(manifest) {
   return problems;
 }
 
-// 不变量 6：coder 简报契约的 worktree 现实块（P1-1）。
+// —— 不变量 6：coder 简报契约的 worktree 现实块（P1-1）。
 // 提示词契约没有机械执法点，唯一可自动测的外部行为面是 SKILL.md 的内容不变量：
 // Worktree reality 块存在、编排笔记指针退役、软围栏句按用户裁定原句存在。
 const WORKTREE_REALITY_HEADING = '## Worktree reality';
@@ -178,10 +178,14 @@ const RETIRED_NOTES_POINTER = 'Notes (read if present)';
 const SOFT_FENCE_SENTENCE =
   'Other tickets under .scratch/ and anything else in the main repo are context, not scope — never implement them.';
 
+// 内容不变量的共用预处与：按空白归一化后匹配，锁定措辞原句、容忍模板内折行。
+function normalizeWhitespace(text) {
+  return text.replace(/\s+/g, ' ');
+}
+
 function checkCoderBriefWorktreeReality(skillText) {
   const problems = [];
-  // 软围栏句按空白归一化匹配：锁定措辞原句，容忍模板内的换行折行。
-  const normalized = skillText.replace(/\s+/g, ' ');
+  const normalized = normalizeWhitespace(skillText);
   if (!skillText.includes(WORKTREE_REALITY_HEADING)) {
     problems.push('SKILL.md is missing the "## Worktree reality" block in the coder brief');
   }
@@ -198,10 +202,16 @@ function checkCoderBriefWorktreeReality(skillText) {
   return problems;
 }
 
-// 不变量 8：Round 0 的环境勘测步骤（P1-1 票 02）——勘测结论属散文，归宿是编排
-// 笔记「环境事实」节，永不进事件流。锚点字符串是步骤名与节的定名。
+// —— 不变量 7：Round 0 的环境勘测步骤（P1-1 票 02）——勘测结论属散文，归宿是编排
+// 笔记「环境事实」节，永不进事件流。锚点限定在 Round 0 小节内：步骤漂出 Round 0
+// 或小节被删时检查照样红；锚点字符串是步骤名与节的定名。
 function checkRound0EnvSurvey(skillText) {
-  const normalized = skillText.replace(/\s+/g, ' ');
+  const start = skillText.indexOf('### Round 0');
+  if (start === -1) {
+    return ['SKILL.md is missing the "### Round 0" section'];
+  }
+  const end = skillText.indexOf('\n### ', start + 1);
+  const normalized = normalizeWhitespace(end === -1 ? skillText.slice(start) : skillText.slice(start, end));
   const missing = ['Environment survey', '环境事实'].filter((s) => !normalized.includes(s));
   return missing.length === 0
     ? []
@@ -210,7 +220,7 @@ function checkRound0EnvSurvey(skillText) {
       ];
 }
 
-// 不变量 7：ledger 脚本存在——机械台账协议的唯一写面必须随包交付（ADR-0001）。
+// —— 不变量 8：ledger 脚本存在——机械台账协议的唯一写面必须随包交付（ADR-0001）。
 const LEDGER_SCRIPT = 'scripts/ledger.js';
 function checkLedgerScript({ isFile = isFileAt } = {}) {
   return isFile(LEDGER_SCRIPT)
