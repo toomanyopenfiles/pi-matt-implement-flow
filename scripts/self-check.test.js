@@ -23,6 +23,7 @@ const {
   checkAgentRegistration,
   checkTestScript,
   checkCoderBriefWorktreeReality,
+  checkRound0EnvSurvey,
   LEDGER_SCRIPT,
   checkLedgerScript,
 } = require('./registration-checks.js');
@@ -113,6 +114,11 @@ test('every agent declares its name in package-full-name form (name + package fi
 test('coder brief carries the worktree-reality contract (block in, notes pointer out, soft fence verbatim)', () => {
   const skillText = readText(PKG_ROOT, 'SKILL.md');
   assert.deepEqual(checkCoderBriefWorktreeReality(skillText), []);
+});
+
+test('Round 0 carries the environment-survey step (survey is prose, destination is the 环境事实 notes section)', () => {
+  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  assert.deepEqual(checkRound0EnvSurvey(skillText), []);
 });
 
 // --- 模拟破坏：假想 fixture，绝不改动真实文件。每条恰好对应一条真实不变量。 ---
@@ -219,6 +225,12 @@ test('breakage simulation: the soft-fence sentence being reworded or dropped is 
   const unwrapped =
     '## Worktree reality\nOther tickets under .scratch/ and anything else in the main repo are context, not scope — never implement them.\n';
   assert.deepEqual(checkCoderBriefWorktreeReality(unwrapped), []);
+});
+
+test('breakage simulation: the environment-survey step going missing is flagged', () => {
+  assert.deepEqual(checkRound0EnvSurvey('### Round 0\n1. Record init.\n'), [
+    'SKILL.md Round 0 is missing the environment-survey step (read .gitignore, write the 环境事实 section of the orchestration notes; missing anchors: Environment survey, 环境事实)',
+  ]);
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

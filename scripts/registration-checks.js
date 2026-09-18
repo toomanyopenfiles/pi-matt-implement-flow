@@ -198,6 +198,18 @@ function checkCoderBriefWorktreeReality(skillText) {
   return problems;
 }
 
+// 不变量 8：Round 0 的环境勘测步骤（P1-1 票 02）——勘测结论属散文，归宿是编排
+// 笔记「环境事实」节，永不进事件流。锚点字符串是步骤名与节的定名。
+function checkRound0EnvSurvey(skillText) {
+  const normalized = skillText.replace(/\s+/g, ' ');
+  const missing = ['Environment survey', '环境事实'].filter((s) => !normalized.includes(s));
+  return missing.length === 0
+    ? []
+    : [
+        `SKILL.md Round 0 is missing the environment-survey step (read .gitignore, write the 环境事实 section of the orchestration notes; missing anchors: ${missing.join(', ')})`,
+      ];
+}
+
 // 不变量 7：ledger 脚本存在——机械台账协议的唯一写面必须随包交付（ADR-0001）。
 const LEDGER_SCRIPT = 'scripts/ledger.js';
 function checkLedgerScript({ isFile = isFileAt } = {}) {
@@ -221,6 +233,7 @@ module.exports = {
   checkAgentRegistration,
   checkTestScript,
   checkCoderBriefWorktreeReality,
+  checkRound0EnvSurvey,
   LEDGER_SCRIPT,
   checkLedgerScript,
 };

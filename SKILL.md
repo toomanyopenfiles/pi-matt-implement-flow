@@ -66,9 +66,12 @@ Restate the plan to the user in at most ten lines (branch, ticket count, first f
 ### Round 0 — graph, branch, baseline
 
 1. Read the spec and every ticket, then record `init`（记账）— `--branch --branch-base --baseline-sha --spec --test-command --tracker` — as the ledger's first event. Everything downstream is derived from it; the baseline the init pins is what later failures are attributable against.
-2. On the default branch, create `feat/<feature-slug>` from HEAD; on any other branch, stay on it and record it.
-3. Run the full test suite once; record the baseline (green or the failing list) in the orchestration notes.
-4. With a GitHub remote, push the branch and open a **draft PR** whose body closes the spec issue and every ticket; record `pr --state opened-draft`.
+2. **Environment survey**: read `.gitignore` and enumerate every runtime path a coder worktree will not contain (`.scratch/`, `.pi/`, `data/`, …). Write the survey into a **环境事实 (environment facts)** section of the orchestration notes with exactly three elements: the gitignored path list, where real data actually lives, and the validation discipline (validate against real data through the scratch directory). Every coder brief's Worktree-reality parenthetical and its data paths are picked per ticket from this section — filtering is your job; coordination prose (routing decisions, user rulings, process narrative) never enters a brief, and coders never read the notes file whole. The survey is prose: it lands only in the orchestration notes, never in the event stream (no new event type).
+3. On the default branch, create `feat/<feature-slug>` from HEAD; on any other branch, stay on it and record it.
+4. Run the full test suite once; record the baseline (green or the failing list) in the orchestration notes.
+5. With a GitHub remote, push the branch and open a **draft PR** whose body closes the spec issue and every ticket; record `pr --state opened-draft`.
+
+Optionally, when a survey finding is a durable repo-level lesson (e.g. a CLI syntax trap), suggest graduating it into the committed `AGENTS.md` — coder worktrees carry committed files automatically, at zero brief cost.
 
 ### Each round — dispatch the frontier
 
