@@ -3,7 +3,7 @@ name: coder
 description: Implements one ticket from a brief inside a pi-managed worktree. Works test-first at pre-agreed seams (tdd skill), commits everything, and reports by context pointer with the HEAD SHA the orchestrator needs to rebuild the ticket branch.
 package: pi-matt-implement-flow
 tools: read, grep, find, ls, bash, edit, write, contact_supervisor
-thinking: high
+thinking: max
 timeoutMs: 3600000
 systemPromptMode: replace
 inheritProjectContext: true
