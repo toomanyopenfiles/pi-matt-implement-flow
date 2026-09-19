@@ -30,3 +30,10 @@ Initial public release.
   or compacted sessions resume deterministically.
 - GitHub integration: draft PR opened on start, marked ready on completion.
 - `npm test` self-check suite guarding package registration invariants.
+
+### Changed
+
+- READMEs polished: both now link to [mattpocock/skills](https://github.com/mattpocock/skills) up front;
+  the Chinese version rewritten for natural phrasing with consistent English terminology
+  (spec / ticket / coder / worktree / review).
+- Package and repo descriptions now state the relationship to Matt Pocock's `/implement`.

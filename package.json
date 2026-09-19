@@ -1,7 +1,7 @@
 {
   "name": "pi-matt-implement-flow",
   "version": "0.1.0",
-  "description": "Orchestrated parallel implementation for pi: coders work a spec's ticket graph in isolated worktrees, every ticket passes a two-axis review with fixes looped back, merges face a full test gate, and the branch finishes with a whole-branch review.",
+  "description": "Orchestrated, parallel successor to Matt Pocock's /implement skill, for the pi coding agent: turns a spec + ticket graph into a reviewed, tested branch — parallel coders in isolated worktrees, per-ticket two-axis review, integration-test gate, final whole-branch review.",
   "keywords": ["pi-package"],
   "scripts": {
     "test": "node --test scripts/*.test.js"

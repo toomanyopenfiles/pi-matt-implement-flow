@@ -2,7 +2,7 @@
 
 Turn a spec + ticket graph into a reviewed, tested branch with one command. Coders implement tickets in parallel — each in its own worktree — every ticket passes a two-axis review with fixes looped back to its coder, and the finished branch faces a full integration test plus a final whole-branch review.
 
-It is the automated, orchestrated successor to Matt Pocock's `/implement` for multi-ticket graphs.
+It is the automated, orchestrated successor to Matt Pocock's [`/implement`](https://github.com/mattpocock/skills) for multi-ticket graphs.
 
 English | [简体中文](./README.zh-CN.md)
 
@@ -12,13 +12,13 @@ If you use Matt Pocock's engineering skills, the upstream flow stays the same: `
 
 |                  | `/implement`                                                                                     | pi-matt-implement-flow                                                                                                                                                                                              |
 | ---------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Progression      | one ticket at a time in a single session; you watch for which tickets unlock                     | the frontier is computed for you; one command runs the graph to completion                                                                                                                                          |
+| Progression      | one ticket at a time in a single session; you track which tickets have unlocked                     | the frontier is computed for you; one command runs the graph to completion                                                                                                                                          |
 | Concurrency      | one ticket at a time                                                                             | up to N coders in parallel, each in its own isolated worktree                                                                                                                                                       |
 | Review           | one `/code-review` at the end                                                                    | every ticket gets a two-axis review (standards + spec); findings go **back to the same coder** — the fixer already holds the ticket's full context; when the fix budget runs out, the ticket escalates to you instead of blocking the run |
-| Integration risk | you find out whether everything works together only at the end                                   | the full test suite runs after every merge, so integration problems surface on their ticket                                                                                                                         |
+| Integration risk | you find out whether everything works together only at the end                                   | the full test suite runs after every merge, so integration problems surface on their own ticket                                                                                                                         |
 | Session breaks   | recovered from context memory; drifts                                                            | run state is journaled to disk; an interrupted or compacted session resumes from a known state                                                                                                                      |
 
-Matt's repo also has an in-progress [`implement-spec`](https://github.com/mattpocock/skills/blob/main/skills/in-progress/implement-spec/SKILL.md) with the same idea (worktree parallelism + frontier progression). The difference: it is a prose recipe the model improvises — no per-ticket review-and-fix loop, no journaled run state, no configurable behavior. Those three are exactly what let you let go of a long ticket graph.
+Matt's repo also has an in-progress [`implement-spec`](https://github.com/mattpocock/skills/blob/main/skills/in-progress/implement-spec/SKILL.md) with the same idea (worktree parallelism + frontier progression). The difference: it is a prose recipe the model improvises — no per-ticket review-and-fix loop, no journaled run state, no configurable behavior. Those three are exactly what make it safe to hand off a long ticket graph.
 
 ### What it costs
 
@@ -62,7 +62,7 @@ npm test
    /pi-matt-implement-flow [N]
    ```
 
-   `N` is the number of parallel coders (default 3). When it finishes you have a feature branch — or a ready-for-review PR, if the repo has a GitHub remote — where every ticket was implemented, reviewed, and integration-tested, without per-ticket babysitting.
+   `N` is the number of parallel coders (default 3). When it finishes, you have a feature branch — or a ready-for-review PR, if the repo has a GitHub remote — where every ticket was implemented, reviewed, and integration-tested, without per-ticket babysitting.
 
 ## How it works
 
