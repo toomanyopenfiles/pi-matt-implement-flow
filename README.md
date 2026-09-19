@@ -1,98 +1,114 @@
 # pi-matt-implement-flow
 
-pi 的 implement 阶段编排器：读 spec + 票图 → 算前沿 → 并行派 coder（各自 worktree）→ 逐个 review → 修复接回同一 coder → 合并 + 集成测试门 → 重算前沿 → 最终双轴 review。
+Turn a spec + ticket graph into a reviewed, tested branch with one command. Coders implement tickets in parallel — each in its own worktree — every ticket passes a two-axis review with fixes looped back to its coder, and the finished branch faces a full integration test plus a final whole-branch review.
 
-纯声明式 pi 包：无依赖、无安装构建步骤，注册正确性由 `npm test` 自检套件守护。
+It is the automated, orchestrated successor to Matt Pocock's `/implement` for multi-ticket graphs.
 
-## 安装
+English | [简体中文](./README.zh-CN.md)
 
-包以本地路径安装进 pi：
+## Why not just /implement?
+
+If you use Matt Pocock's engineering skills, the upstream flow stays the same: `/grill-with-docs` → `/to-spec` → `/to-tickets`. This package takes over only the last step — implementation. `/implement` is a lightweight tool for one lump of work; when the work is a **multi-ticket graph**, its limits show:
+
+|                  | `/implement`                                                                                     | pi-matt-implement-flow                                                                                                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Progression      | one ticket at a time in a single session; you watch for which tickets unlock                     | the frontier is computed for you; one command runs the graph to completion                                                                                                                                          |
+| Concurrency      | one ticket at a time                                                                             | up to N coders in parallel, each in its own isolated worktree                                                                                                                                                       |
+| Review           | one `/code-review` at the end                                                                    | every ticket gets a two-axis review (standards + spec); findings go **back to the same coder** — the fixer already holds the ticket's full context; when the fix budget runs out, the ticket escalates to you instead of blocking the run |
+| Integration risk | you find out whether everything works together only at the end                                   | the full test suite runs after every merge, so integration problems surface on their ticket                                                                                                                         |
+| Session breaks   | recovered from context memory; drifts                                                            | run state is journaled to disk; an interrupted or compacted session resumes from a known state                                                                                                                      |
+
+Matt's repo also has an in-progress [`implement-spec`](https://github.com/mattpocock/skills/blob/main/skills/in-progress/implement-spec/SKILL.md) with the same idea (worktree parallelism + frontier progression). The difference: it is a prose recipe the model improvises — no per-ticket review-and-fix loop, no journaled run state, no configurable behavior. Those three are exactly what let you let go of a long ticket graph.
+
+### What it costs
+
+Parallelism and per-ticket review are not free: N coders each running tests, two review axes per ticket, plus fix rounds — token usage is noticeably higher than a single serial session. You can turn per-ticket review off (`reviewer: false`; the integration test gate and the final whole-branch review still run) or lower `maxConcurrent` to spend less.
+
+## Requirements
+
+- [pi](https://github.com/earendil-works/pi) coding agent with the [pi-subagents](https://github.com/nicobailon/pi-subagents) package (parallel dispatch, managed worktrees, resume)
+- Matt Pocock's [engineering skills](https://github.com/mattpocock/skills/tree/main/skills/engineering) — the upstream flow (`/grill-with-docs` → `/to-spec` → `/to-tickets`) and the ones the agents work with: `tdd`, `codebase-design`, `code-review`, `resolving-merge-conflicts`
+
+## Install
+
+Install the package from a local path:
 
 ```sh
-pi install <本包路径>   # 例如 pi install /path/to/this/package
+pi install /path/to/pi-matt-implement-flow
 ```
 
-安装后无需其他步骤。可运行自检确认注册面完好：
+Optionally, run the self-check suite:
 
 ```sh
-npm test   # 校验声明路径存在、SKILL.md frontmatter 合法、三个 agent 全名正确、
-           # ledger 脚本存在且 --help 退 0；另含 fixture 临时仓上的 ledger CLI 黑盒测试
+npm test
 ```
 
-> 已知环境限制：git < 2.41 的机器上，pi-subagents 的 patch 捕获会静默降级为空（`npm test` 会在诊断输出中提醒）。
+## Quick start
 
-## 调用
+1. **One-time setup** — install pi, pi-subagents, and Matt Pocock's engineering skills, then run `/setup-matt-pocock-skills` once in your repo.
+2. **Prepare the work**:
 
-skill 已禁用模型自动触发，只能作为斜杠命令手动调用：
+   ```
+   /grill-with-docs
+   /to-spec
+   /to-tickets
+   ```
 
-```
-/pi-matt-implement-flow [N]
-```
+   Before starting, check: a clean worktree, at least one commit, and a full-suite test command that runs.
 
-- `N`：并发 coder 数；也可在 `mattImplementFlow.maxConcurrent` 配置（见下），参数优先，默认 3。
-- 调用前确认：干净 worktree、git 仓库至少一个 commit、票图每张票都有 `Blocked by` 行、测试命令明确。
-- 编排记忆采用机械台账协议（LLM 永不手写台账，见 `CONTEXT.md` 与 ADR-0001）：包内 `scripts/ledger.js`
-  是运行状态的唯一写面（`add` 记账 / `build` 再生 / `check` 对账），事件流与台账写在
-  `.pi/matt-implement/<slug>/`（已 gitignore）；散文记忆在编排笔记 `notes.md`。
+3. **Run**:
 
-## 三个 agent
+   ```
+   /pi-matt-implement-flow [N]
+   ```
 
-| 全名 | 职责 |
-|---|---|
-| `pi-matt-implement-flow.coder` | 在自己的 worktree 里按票实现一个垂直切片（red → green），跑测试门，提交并回报 headSha / commits / 测试结果 / seams |
-| `pi-matt-implement-flow.reviewer` | 逐票两轴 review（设计 + 验收），产出 review bundle 与 blocker 列表 |
-| `pi-matt-implement-flow.final-reviewer` | 全部票合并后对整条分支做最终双轴 review |
+   `N` is the number of parallel coders (default 3). When it finishes you have a feature branch — or a ready-for-review PR, if the repo has a GitHub remote — where every ticket was implemented, reviewed, and integration-tested, without per-ticket babysitting.
 
-派发时一律使用上表全名——裸名 `coder` 会解析到用户的 `worker` 别名，裸名 `reviewer` 会解析到 pi 内置 agent。
+## How it works
 
-## 配置
+You hand the orchestrator a spec and its ticket graph. It creates a feature branch, dispatches coders to the ready tickets (each in its own worktree), reviews every ticket, sends fixes back to the coder that did the work, merges with a full test run, recomputes what is ready next, and finishes with a whole-branch final review.
 
-### 模型与思考级别（/matt-flow-config）
-
-包自带一个无 LLM 的配置向导（pi 扩展），在 pi 输入框直接运行：
-
-```
-/matt-flow-config          # 交互菜单：选角色 → 选生效级别 → 选 model / thinking
-/matt-flow-config show     # 展示三角色当前生效解析（frontmatter 基线 → 覆盖 → 最终值）
+```mermaid
+flowchart LR
+    S[Spec + tickets] --> O["/pi-matt-implement-flow"]
+    O --> P[Parallel coders<br>one ticket per worktree]
+    P --> R[Every ticket reviewed,<br>fixes looped back]
+    R --> M[Merge + full test suite]
+    M --> F[Whole-branch final review]
+    F --> PR[Ready PR]
 ```
 
-- 写入目标是 pi 的 `subagents.agentOverrides`（user 级 `~/.pi/agent/settings.json` 或
-  project 级 `<repo>/.pi/settings.json`，project 逐字段赢 user）；键为 agent 运行时全名
-  （如 `pi-matt-implement-flow.coder`）。
-- **写入后无需重启 pi**：pi-subagents 每次 subagent 调用都重读 settings，下一次派发即
-  生效；正在运行的 child 不受影响。
-- 不想手动改配置文件也可直接编辑同一位置（向导只是帮你在对话里完成写入）。
+Tickets that exhaust their fix budget escalate to you at the end instead of blocking the rest of the run.
 
-### 流程配置（mattImplementFlow）
+Run state lives in `.pi/matt-implement/` — auto-gitignored, safe to delete.
 
-流程形态开关存在 settings.json 顶层自定义节 `mattImplementFlow`（本包私有，不碰任何平台键；project 逐字段赢 user）。生效语义是 **init 快照**：每次 run 启动时生效值被冻结进台账的 init 事件，此后 ledger 脚本按快照执法——中途改配置不影响进行中的 run。
+## Configuration
+
+### `/matt-flow-config`
+
+An interactive, no-LLM wizard built into the package:
+
+```
+/matt-flow-config        # pick a role → pick its model / thinking level, or edit flow options
+/matt-flow-config show   # show the effective model / thinking resolution for all three roles
+```
+
+It edits pi's `subagents.agentOverrides` (user `~/.pi/agent/settings.json` or project `<repo>/.pi/settings.json`; project wins over user, field by field). Changes take effect on the next subagent dispatch — no pi restart needed.
+
+### Flow options
 
 ```jsonc
 {
   "mattImplementFlow": {
-    "reviewer": true,      // per-ticket two-axis review + fix loop; false = merge straight after the platform test gate (final-reviewer still runs)
-    "maxFixRounds": 2,     // fix attempts per ticket before escalation; only meaningful when reviewer=true
-    "maxConcurrent": 3     // parallel coders; the skill argument /pi-matt-implement-flow <N> wins
+    "reviewer": true,      // per-ticket review + fix loop; false = merge straight after the test gate
+    "maxFixRounds": 2,     // fix attempts per ticket before escalation
+    "maxConcurrent": 3     // parallel coders; /pi-matt-implement-flow <N> wins
   }
 }
 ```
 
-- 配置入口：`/matt-flow-config` → "Configure flow options"（或直接编辑上述文件）。
-- `reviewer: false` 时：不派 reviewer、无 verdict/fix 事件（ledger 硬拒）、merge 无需 verdict；每票质量防线剩平台验收门 + 合并后集成测试门，整分支 final-reviewer 照常运行。
-- `maxFixRounds` 原为 ledger 硬编码 2；现在参数化但仍默认 2，旧账本（无快照旗标）自然兼容。
+Set via `/matt-flow-config` → "Configure flow options", or edit the `mattImplementFlow` section in your pi `settings.json` directly. Changes apply from the next run — a run in progress is never affected.
 
-### 超时契约
+## License
 
-| 层 | 值 | 说明 |
-|---|---|---|
-| agent run 级（每个 dispatch child，含 fix-resume） | `3600000`（1h，三个 agent frontmatter） | 平台默认是 30 分钟（`DEFAULT_ASYNC_TIMEOUT_MS`），对慢模型/大票不够（实测触发过）。想改默认只两条路：改本包 frontmatter，或写平台扩展配置 `~/.pi/agent/extensions/subagent/config.json` 顶层 `timeoutMs`（全局，影响所有 subagent；注意它**不是** settings 键） |
-| gate verify 命令（coder 交付时的测试门） | `600000`（10min，SKILL.md 派发模板） | 平台默认固定 120 秒且不可配置，全量套件慢于 2 分钟会被误杀 |
-| 单次工具调用 | 不限制 | 平台对 bash 等长跑工具本就无硬死线（run 级 1h 兜底）；按「不配无上限项」原则不设 |
-| fix-resume | 继承同一 frontmatter `timeoutMs` | resume 解析 agent 默认值的路径与首次派发相同 |
-
-超时到期是 terminal（run 不可恢复），但工作不丢：retained worktree 保留，编排器按 git
-真值接续（参见 SKILL.md 的锚定流程）。
-
-## 与 pi-matt-flow 的关系
-
-**完全独立。** 本包不读 pi-matt-flow 的状态文件、不复用它的代码；两者不共享任何状态或实现。[pi-matt-flow](../pi-matt-flow/) 只是背景读物（其 implement 阶段是串行人工流程，本包将其升级为并行自动编排），采用本包不需要它。
+[MIT](./LICENSE)
