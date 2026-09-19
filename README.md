@@ -31,16 +31,15 @@ Parallelism and per-ticket review are not free: N coders each running tests, two
 
 ## Install
 
-Install the package from a local path:
-
 ```sh
-pi install /path/to/pi-matt-implement-flow
+pi install npm:pi-matt-implement-flow
 ```
 
-Optionally, run the self-check suite:
+Optionally, verify the installation with the self-check suite (test files are not part of the published tarball, so run it from a clone of this repo):
 
 ```sh
-npm test
+git clone https://github.com/toomanyopenfiles/pi-matt-implement-flow.git
+cd pi-matt-implement-flow && npm test
 ```
 
 ## Quick start

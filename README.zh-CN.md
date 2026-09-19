@@ -31,16 +31,15 @@ Matt 的仓库里还有一个开发中的 [`implement-spec`](https://github.com/
 
 ## 安装
 
-从本地路径安装进 pi：
-
 ```sh
-pi install /path/to/pi-matt-implement-flow
+pi install npm:pi-matt-implement-flow
 ```
 
-可选：跑一遍自检，确认安装完好：
+可选：跑一遍自检，确认安装完好（测试文件不随包发布，需从仓库克隆运行）：
 
 ```sh
-npm test
+git clone https://github.com/toomanyopenfiles/pi-matt-implement-flow.git
+cd pi-matt-implement-flow && npm test
 ```
 
 ## 快速上手

@@ -2,16 +2,44 @@
   "name": "pi-matt-implement-flow",
   "version": "0.1.0",
   "description": "Orchestrated, parallel successor to Matt Pocock's /implement skill, for the pi coding agent: turns a spec + ticket graph into a reviewed, tested branch — parallel coders in isolated worktrees, per-ticket two-axis review, integration-test gate, final whole-branch review.",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "MIT",
+  "author": "Stephan <blueswind830630@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toomanyopenfiles/pi-matt-implement-flow.git"
+  },
+  "homepage": "https://github.com/toomanyopenfiles/pi-matt-implement-flow#readme",
+  "bugs": "https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues",
+  "files": [
+    "SKILL.md",
+    "agents/",
+    "extensions/",
+    "scripts/",
+    "!scripts/*.test.js",
+    "docs/agents/issue-tracker.md",
+    "CHANGELOG.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
   "scripts": {
     "test": "node --test scripts/*.test.js"
   },
-  "license": "MIT",
   "pi": {
-    "skills": ["./SKILL.md"],
-    "extensions": ["./extensions"],
+    "skills": [
+      "./SKILL.md"
+    ],
+    "extensions": [
+      "./extensions"
+    ],
     "subagents": {
-      "agents": ["./agents"]
+      "agents": [
+        "./agents"
+      ]
     }
   }
 }

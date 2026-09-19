@@ -21,3 +21,12 @@ The five canonical roles, label strings equal to their names
 
 Single-context layout: `CONTEXT.md` + `docs/adr/` at the repo root.
 See `docs/agents/domain.md`.
+
+## README languages
+
+`README.md` (English) and `README.zh-CN.md` (简体中文) must be kept in sync: a
+section change in one file means the matching section in the other changes too.
+New language versions are named `README.<lang-code>.md` (e.g. `README.ja.md`)
+and added to the language-switcher line at the top of both existing READMEs.
+Do not add them to `package.json` `files`: npm force-includes every `README*`
+variant automatically.
