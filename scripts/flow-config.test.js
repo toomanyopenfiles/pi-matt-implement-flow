@@ -26,6 +26,11 @@ const {
   resolveEffective,
   applyPatch,
   withAgentOverride,
+  withFlowConfig,
+  flowSectionFor,
+  resolveFlowConfigDetailed,
+  FLOW_SECTION,
+  FLOW_DEFAULTS,
   renderPatchPreview,
   extractFrontmatterFields,
   buildShowView,
@@ -228,7 +233,7 @@ test('renderPatchPreview lists removals and additions per field', () => {
 
 test('extractFrontmatterFields reads model/thinking/timeoutMs from real agent files', () => {
   const coder = extractFrontmatterFields(readText(PKG_ROOT, 'agents/coder.md'));
-  assert.equal(coder.thinking, 'high');
+  assert.equal(coder.thinking, 'max');
   assert.equal(coder.timeoutMs, String(AGENT_TIMEOUT_MS));
   assert.equal(coder.model, undefined);
 });
@@ -251,4 +256,62 @@ test('constants: the documented timeout contract values (D19)', () => {
   assert.equal(AGENT_TIMEOUT_MS, 3600000);
   assert.equal(GATE_VERIFY_TIMEOUT_MS, 600000);
   assert.deepEqual(THINKING_LEVELS, ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+});
+
+// --- 流程配置（settings 顶层自定义节；D20） ---
+
+test('flowSectionFor normalizes one layer: boolean reviewer, >=1 integer budgets, junk ignored', () => {
+  assert.deepEqual(
+    flowSectionFor({ [FLOW_SECTION]: { reviewer: false, maxFixRounds: 3, maxConcurrent: 4 } }),
+    { reviewer: false, maxFixRounds: 3, maxConcurrent: 4 },
+  );
+  assert.deepEqual(
+    flowSectionFor({ [FLOW_SECTION]: { reviewer: 'yes', maxFixRounds: 0, maxConcurrent: 2.5, bogus: 1 } }),
+    {},
+  );
+  assert.deepEqual(flowSectionFor({ [FLOW_SECTION]: 'on' }), {});
+  assert.deepEqual(flowSectionFor({}), {});
+});
+
+test('resolveFlowConfigDetailed: project wins per field, user-only survives, defaults fill the rest', () => {
+  const r = resolveFlowConfigDetailed(
+    { [FLOW_SECTION]: { reviewer: false, maxConcurrent: 4 } },
+    { [FLOW_SECTION]: { maxConcurrent: 5 } },
+  );
+  assert.deepEqual(r.values, { reviewer: false, maxFixRounds: 2, maxConcurrent: 5 });
+  assert.deepEqual(r.sources, { reviewer: 'user', maxFixRounds: 'default', maxConcurrent: 'project' });
+  assert.deepEqual(resolveFlowConfigDetailed().values, FLOW_DEFAULTS);
+  assert.deepEqual(resolveFlowConfigDetailed().sources, { reviewer: 'default', maxFixRounds: 'default', maxConcurrent: 'default' });
+});
+
+test('withFlowConfig creates/updates the section, CLEAR deletes, empty section collapses; input untouched', () => {
+  const before = { subagents: {} };
+  const next = withFlowConfig(before, { reviewer: false });
+  assert.deepEqual(next[FLOW_SECTION], { reviewer: false });
+  assert.deepEqual(before, { subagents: {} }, 'input must stay untouched');
+  assert.deepEqual(
+    withFlowConfig(next, { reviewer: CLEAR, maxFixRounds: 3 }),
+    { subagents: {}, [FLOW_SECTION]: { maxFixRounds: 3 } },
+  );
+  assert.deepEqual(withFlowConfig({ [FLOW_SECTION]: { reviewer: true } }, { reviewer: CLEAR }), {});
+});
+
+test('buildShowView renders the Flow section with sources and hints, then agents as one line each', () => {
+  const view = buildShowView({
+    frontmatterByRole: { coder: { thinking: 'high', timeoutMs: '3600000' } },
+    userSettings: {
+      [FLOW_SECTION]: { reviewer: false },
+      subagents: { agentOverrides: { [fullName('coder')]: { model: 'a/x' } } },
+    },
+    projectSettings: { [FLOW_SECTION]: { maxConcurrent: 4 } },
+    userPath: '/u/settings.json',
+    projectPath: '/p/.pi/settings.json',
+    parentModel: 'p/parent-model',
+  });
+  assert.match(view, /reviewer\s+off\s+\[user\]\s+per-ticket two-axis review/);
+  assert.match(view, /maxFixRounds\s+2\s+\[default\]\s+fix attempts per ticket/);
+  assert.match(view, /maxConcurrent\s+4\s+\[project\]\s+parallel coders/);
+  assert.match(view, /Agents \(effective model \/ thinking\)/);
+  assert.match(view, /model=a\/x \[settings override\]/);
+  assert.match(view, /scope: project → \/p\/\.pi\/settings\.json · user → \/u\/settings\.json/);
 });

@@ -29,7 +29,7 @@ skill 已禁用模型自动触发，只能作为斜杠命令手动调用：
 /pi-matt-implement-flow [N]
 ```
 
-- `N`：并发 coder 数，默认 3。
+- `N`：并发 coder 数；也可在 `mattImplementFlow.maxConcurrent` 配置（见下），参数优先，默认 3。
 - 调用前确认：干净 worktree、git 仓库至少一个 commit、票图每张票都有 `Blocked by` 行、测试命令明确。
 - 编排记忆采用机械台账协议（LLM 永不手写台账，见 `CONTEXT.md` 与 ADR-0001）：包内 `scripts/ledger.js`
   是运行状态的唯一写面（`add` 记账 / `build` 再生 / `check` 对账），事件流与台账写在
@@ -62,6 +62,24 @@ skill 已禁用模型自动触发，只能作为斜杠命令手动调用：
 - **写入后无需重启 pi**：pi-subagents 每次 subagent 调用都重读 settings，下一次派发即
   生效；正在运行的 child 不受影响。
 - 不想手动改配置文件也可直接编辑同一位置（向导只是帮你在对话里完成写入）。
+
+### 流程配置（mattImplementFlow）
+
+流程形态开关存在 settings.json 顶层自定义节 `mattImplementFlow`（本包私有，不碰任何平台键；project 逐字段赢 user）。生效语义是 **init 快照**：每次 run 启动时生效值被冻结进台账的 init 事件，此后 ledger 脚本按快照执法——中途改配置不影响进行中的 run。
+
+```jsonc
+{
+  "mattImplementFlow": {
+    "reviewer": true,      // per-ticket two-axis review + fix loop; false = merge straight after the platform test gate (final-reviewer still runs)
+    "maxFixRounds": 2,     // fix attempts per ticket before escalation; only meaningful when reviewer=true
+    "maxConcurrent": 3     // parallel coders; the skill argument /pi-matt-implement-flow <N> wins
+  }
+}
+```
+
+- 配置入口：`/matt-flow-config` → "Configure flow options"（或直接编辑上述文件）。
+- `reviewer: false` 时：不派 reviewer、无 verdict/fix 事件（ledger 硬拒）、merge 无需 verdict；每票质量防线剩平台验收门 + 合并后集成测试门，整分支 final-reviewer 照常运行。
+- `maxFixRounds` 原为 ledger 硬编码 2；现在参数化但仍默认 2，旧账本（无快照旗标）自然兼容。
 
 ### 超时契约
 

@@ -789,3 +789,80 @@ test('事件流里的票没有票文件：表格有行、对账报缺失、封�
   assert.equal(close.status, 1, 'event-only 票无 merge/escalate，必须阻塞封账');
   assert.match(close.stdout, /票 07/);
 });
+
+// ====================================================================
+// 流程形态快照（init 旗标；D20）：reviewer 开关 / 修复预算参数化
+// ====================================================================
+
+test('reviewer=off：verdict/fix 被拒、merge 无 verdict 放行、台账 header 标注形态', (t) => {
+  const f = makeFixture(t);
+  f.git('checkout -q -b feat/demo');
+  const r = addAll(f, 'init', {
+    branch: 'feat/demo',
+    'branch-base': 'main',
+    'baseline-sha': f.baseline(),
+    spec: '.scratch/demo/spec.md',
+    'test-command': 'npm test',
+    tracker: 'local',
+    reviewer: 'off',
+    'max-concurrent': '5',
+  });
+  assert.equal(r.status, 0, r.stdout);
+  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
+  const sha = step(f, 'work r1');
+  assert.equal(addAll(f, 'settled', { ticket: '01', round: '1', 'head-sha': sha }).status, 0);
+  const v = addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' });
+  assert.equal(v.status, 1, 'off 形态不得记 verdict');
+  assert.match(v.stdout, /reviewer=off/);
+  const fix = addAll(f, 'fix', { ticket: '01', 'fix-no': '1', key: 'fix-01-r2', 'resume-run-id': 'bbbbbbbb' });
+  assert.equal(fix.status, 1, 'off 形态不得记 fix');
+  assert.match(fix.stdout, /reviewer=off/);
+  const { head, merge } = mergeTicket(f, '01');
+  const m = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(m.status, 0, 'off 形态 merge 无需 verdict——平台测试门 + 集成门是仅存防线');
+  const md = readLedger(f);
+  assert.match(md, /flow: reviewer=off, maxFixRounds=2, maxConcurrent=5/);
+  assert.match(md, /reviewer=off maxConcurrent=5/, 'init 时间线行带快照旗标（缺省旗标不进 payload，header 显示补全后的形态）');
+});
+
+test('maxFixRounds=3：init 快照放宽预算，第 3 次 fix 可入账，第 4 次拒绝', (t) => {
+  const f = makeFixture(t);
+  f.git('checkout -q -b feat/demo');
+  const r = addAll(f, 'init', {
+    branch: 'feat/demo',
+    'branch-base': 'main',
+    'baseline-sha': f.baseline(),
+    spec: '.scratch/demo/spec.md',
+    'test-command': 'npm test',
+    tracker: 'local',
+    'max-fix-rounds': '3',
+  });
+  assert.equal(r.status, 0, r.stdout);
+  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
+  const sha = step(f, 'work r1');
+  addAll(f, 'settled', { ticket: '01', round: '1', 'head-sha': sha });
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'changes_requested' }).status, 0);
+  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '1', key: 'fix-01-r2', 'resume-run-id': 'bbbbbbbb' }).status, 0);
+  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '2', key: 'fix-01-r3', 'resume-run-id': 'cccccccc' }).status, 0);
+  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '3', key: 'fix-01-r4', 'resume-run-id': 'dddddddd' }).status, 0);
+  const fourth = addAll(f, 'fix', { ticket: '01', 'fix-no': '4', key: 'fix-01-r5', 'resume-run-id': 'eeeeeeee' });
+  assert.equal(fourth.status, 1, '快照预算耗尽必须拒绝');
+  assert.match(fourth.stdout, /上限 3/);
+});
+
+test('init 非法快照值被 schema 拒绝（枚举 / 正整数）', (t) => {
+  const f = makeFixture(t);
+  f.git('checkout -q -b feat/demo');
+  const base = {
+    branch: 'feat/demo',
+    'branch-base': 'main',
+    'baseline-sha': f.baseline(),
+    spec: '.scratch/demo/spec.md',
+    'test-command': 'npm test',
+    tracker: 'local',
+  };
+  assert.equal(addAll(f, 'init', { ...base, reviewer: 'maybe' }).status, 1);
+  assert.equal(addAll(f, 'init', { ...base, 'max-fix-rounds': '0' }).status, 1);
+  assert.equal(addAll(f, 'init', { ...base, 'max-concurrent': 'x' }).status, 1);
+  assert.ok(!fs.existsSync(f.eventsPath), '三条全部未入账——事件流文件都未创建');
+});

@@ -28,6 +28,9 @@ const FLAG_TO_KEY = {
   spec: 'spec',
   'test-command': 'testCommand',
   tracker: 'tracker',
+  reviewer: 'reviewer',
+  'max-fix-rounds': 'maxFixRounds',
+  'max-concurrent': 'maxConcurrent',
   state: 'state',
   url: 'url',
   note: 'note',
@@ -39,13 +42,16 @@ const ENUMS = {
   verdict: ['approved', 'changes_requested'],
   state: ['opened-draft', 'ready'],
   tracker: ['local', 'github', 'gitlab'],
+  reviewer: ['on', 'off'],
 };
 
 // 事件分类学（10 类，枚举定死）。reviewer 派发不单独记事件——由 verdict 的 revRunId 承载。
 const EVENT_TYPES = {
   init: {
     required: ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand', 'tracker'],
-    optional: [],
+    // 可选流程形态快照（D20）：reviewer=on|off、maxFixRounds、maxConcurrent。
+    // 省略 = 默认形态（on / 2 / 3）——旧账本自然兼容。
+    optional: ['reviewer', 'maxFixRounds', 'maxConcurrent'],
   },
   dispatch: { required: ['ticket', 'key', 'runId'], optional: ['worktree', 'note'] },
   settled: { required: ['ticket', 'round', 'headSha'], optional: ['worktree', 'gate', 'note'] },
@@ -122,9 +128,9 @@ function parseFlags(tokens, typeName) {
     if (!n) errors.push(`ticket 必须是票号数字（如 01），得到：${payload.ticket}`);
     else payload.ticket = n;
   }
-  for (const key of ['round', 'fixNo']) {
-    if (key in payload && !/^\d+$/.test(String(payload[key]))) {
-      errors.push(`${key} 必须是正整数，得到：${payload[key]}`);
+  for (const key of ['round', 'fixNo', 'maxFixRounds', 'maxConcurrent']) {
+    if (key in payload && !/^[1-9]\d*$/.test(String(payload[key]))) {
+      errors.push(`${key} 必须是正整数（>=1），得到：${payload[key]}`);
     }
   }
   for (const key of ['headSha', 'mergeSha', 'baselineSha']) {

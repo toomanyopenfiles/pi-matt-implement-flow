@@ -11,6 +11,15 @@ const PACKAGE_ID = 'pi-matt-implement-flow';
 const ROLES = ['coder', 'reviewer', 'final-reviewer'];
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
+// --- 流程配置（settings.json 顶层自定义节；D20） ---
+// 本包自己的流程开关，只在 pi-matt-implement-flow 内生效——绝不写 subagents.*
+// 等平台键，平台对未知顶层键直接忽略。生效语义（方案乙）：run 启动时由编排器把
+// 生效值作为 init 事件旗标冻结进台账，此后 ledger 校验按快照执行，中途改配置
+// 不影响进行中的 run。
+const FLOW_SECTION = 'mattImplementFlow';
+const FLOW_DEFAULTS = { reviewer: true, maxFixRounds: 2, maxConcurrent: 3 };
+const FLOW_KEYS = Object.keys(FLOW_DEFAULTS);
+
 // 三个 agent frontmatter 的 run 级墙钟默认（每个 dispatch child 一个死线，
 // fix-resume 继承同一 frontmatter）。平台不设时是 30 分钟。
 const AGENT_TIMEOUT_MS = 3600000;
@@ -119,6 +128,61 @@ function projectSettingsPath(cwd, options) {
   const root = findProjectRoot(cwd, options);
   if (!root) return null;
   return path.join(root, options?.configDirName ?? '.pi', 'settings.json');
+}
+
+// --- 流程配置读取 / 合并 / 写换（纯函数；非法值宽容回退默认，不阻塞 run 启动） ---
+
+// 单层 settings 的 flow 节规范化：只认已知键；reviewer 须布尔，数值键须 >=1 整数，
+// 其余一律忽略（手改写坏不应炸掉流程；向导是唯一常规写入口，写入值必然合法）。
+function flowSectionFor(settings) {
+  const raw = settings?.[FLOW_SECTION];
+  const out = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const key of FLOW_KEYS) {
+    const v = raw[key];
+    if (key === 'reviewer') {
+      if (typeof v === 'boolean') out.reviewer = v;
+    } else if (Number.isInteger(v) && v >= 1) {
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
+// 分层解析：project 逐字段赢 user，缺省键回退 FLOW_DEFAULTS。
+// 返回 { values, sources }：values 是完整生效配置，sources 每键标 'default'|'user'|'project'。
+function resolveFlowConfigDetailed(userSettings = {}, projectSettings = {}) {
+  const user = flowSectionFor(userSettings);
+  const project = flowSectionFor(projectSettings);
+  const values = {};
+  const sources = {};
+  for (const key of FLOW_KEYS) {
+    if (key in project) {
+      values[key] = project[key];
+      sources[key] = 'project';
+    } else if (key in user) {
+      values[key] = user[key];
+      sources[key] = 'user';
+    } else {
+      values[key] = FLOW_DEFAULTS[key];
+      sources[key] = 'default';
+    }
+  }
+  return { values, sources };
+}
+
+// 把 patch 应用到 settings 顶层的 flow 节；CLEAR 删键（回退默认）。返回新 settings，
+// 不改动入参；节为空则整节退场——与 withAgentOverride 同一写换纪律。
+function withFlowConfig(settings, patch) {
+  const next = { ...settings };
+  const section = { ...(next[FLOW_SECTION] ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === CLEAR) delete section[key];
+    else section[key] = value;
+  }
+  if (Object.keys(section).length > 0) next[FLOW_SECTION] = section;
+  else delete next[FLOW_SECTION];
+  return next;
 }
 
 // --- settings 读写（薄 IO；解析失败抛可读错误，绝不静默重建） ---
@@ -260,26 +324,43 @@ function extractFrontmatterFields(text) {
   return fields;
 }
 
-// show 视图：三角色的 frontmatter 基线 / user / project 覆盖 / 最终生效。
+// show 视图（两节式，全英文文案）：
+//   Flow 节 —— mattImplementFlow 生效值 + 来源（default/user/project）+ 一句作用说明；
+//   Agents 节 —— 三角色各一行：生效 model / thinking 及其来源层。
 // parentModel = 当前会话模型（继承时生效目标），供展示而非推断。纯函数。
-function buildShowView({ frontmatterByRole = {}, userSettings = {}, projectSettings = {}, userPath, projectPath, parentModel, agentTimeoutMs = AGENT_TIMEOUT_MS } = {}) {
+const FLOW_HINTS = {
+  reviewer:
+    'per-ticket two-axis review + fix loop; off = merge straight after the platform gate (final-reviewer still runs)',
+  maxFixRounds: 'fix attempts per ticket; only meaningful when reviewer=on',
+  maxConcurrent: 'parallel coders; /pi-matt-implement-flow <N> wins',
+};
+
+function buildShowView({ frontmatterByRole = {}, userSettings = {}, projectSettings = {}, userPath, projectPath, parentModel } = {}) {
+  const { values: flow, sources: flowSources } = resolveFlowConfigDetailed(userSettings, projectSettings);
   const lines = [];
-  lines.push('matt-flow-config — current resolution');
+  lines.push('matt-implement-flow — current resolution');
   if (parentModel) lines.push(`parent session model (inherit target): ${parentModel}`);
   lines.push('');
+  lines.push(`Flow (settings key "${FLOW_SECTION}"; project wins user per field)`);
+  const keyWidth = Math.max(...FLOW_KEYS.map((k) => k.length));
+  for (const key of FLOW_KEYS) {
+    const shown = typeof flow[key] === 'boolean' ? (flow[key] ? 'on' : 'off') : String(flow[key]);
+    lines.push(`  ${key.padEnd(keyWidth)}  ${shown.padEnd(4)} [${flowSources[key]}]  ${FLOW_HINTS[key]}`);
+  }
+  const scopeParts = [];
+  if (projectPath) scopeParts.push(`project → ${projectPath}`);
+  if (userPath) scopeParts.push(`user → ${userPath}`);
+  if (scopeParts.length) lines.push(`  scope: ${scopeParts.join(' · ')}`);
+  lines.push('');
+  lines.push('Agents (effective model / thinking)');
   for (const role of ROLES) {
     const fm = frontmatterByRole[role] ?? {};
-    const userOv = overrideFor(userSettings, role);
-    const projOv = overrideFor(projectSettings, role);
-    const effective = resolveEffective(fm, mergeOverrides(userOv, projOv));
-    lines.push(`${fullName(role)}`);
-    lines.push(`  frontmatter : thinking=${fm.thinking ?? '—'} timeoutMs=${fm.timeoutMs ?? '—'}`);
-    if (projectPath) lines.push(`  project     : ${projectPath} → ${describeOverride(projOv)}`);
-    lines.push(`  user        : ${userPath ?? '(user settings)'} → ${describeOverride(userOv)}`);
-    lines.push(`  effective   : model=${effective.model.value ?? '(inherit)'} [${effective.model.source}], thinking=${effective.thinking.value ?? '(parent default)'} [${effective.thinking.source}]`);
-    lines.push('');
+    const effective = resolveEffective(fm, mergeOverrides(overrideFor(userSettings, role), overrideFor(projectSettings, role)));
+    lines.push(
+      `  ${fullName(role).padEnd(39)} model=${effective.model.value ?? '(inherit)'} [${effective.model.source}], ` +
+        `thinking=${effective.thinking.value ?? '(default)'} [${effective.thinking.source}]`
+    );
   }
-  lines.push(`package run-deadline default: timeoutMs=${agentTimeoutMs} in each agent frontmatter; gate verify timeout: ${GATE_VERIFY_TIMEOUT_MS}`);
   return lines.join('\n');
 }
 
@@ -290,6 +371,12 @@ module.exports = {
   THINKING_LEVELS,
   AGENT_TIMEOUT_MS,
   GATE_VERIFY_TIMEOUT_MS,
+  FLOW_SECTION,
+  FLOW_DEFAULTS,
+  FLOW_KEYS,
+  flowSectionFor,
+  resolveFlowConfigDetailed,
+  withFlowConfig,
   fullName,
   resolveAgentDir,
   userSettingsPath,

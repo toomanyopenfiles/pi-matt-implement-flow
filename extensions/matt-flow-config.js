@@ -1,10 +1,15 @@
 // /matt-flow-config —— 无 LLM 配置向导（pi 扩展）。
-// 为本包三个 agent（coder / reviewer / final-reviewer）配置 model / thinking
-// 的 settings 覆盖（subagents.agentOverrides）。纯 ctx.ui 菜单流，不经过大模型。
+// 两个配置面：
+//   1. 三 agent（coder / reviewer / final-reviewer）的 model / thinking 覆盖
+//      （subagents.agentOverrides）；
+//   2. 流程开关（settings 顶层自定义节 mattImplementFlow：reviewer / maxFixRounds /
+//      maxConcurrent）——本包私有，不碰任何平台键；生效语义是 init 快照（D20）。
+// 纯 ctx.ui 菜单流，不经过大模型；文案全英文（用户要求）。
 //
 // 生效语义（源码核实，见 docs/design/decisions.md D19）：pi-subagents 每次
 // subagent 调用都重读 settings（discoverAgentsUncached）——写入后下一次派发
-// 即生效，无需重启 pi；正在运行的 child 不受影响。
+// 即生效，无需重启 pi；正在运行的 child 不受影响。流程配置则在下一次 run 的
+// init 事件冻结进台账，进行中的 run 不受中途改配置影响。
 //
 // 纯逻辑（合并/生效/IO）在 scripts/flow-config-core.js，由 npm test 守护。
 
@@ -18,7 +23,7 @@ import flowConfig from '../scripts/flow-config-core.js';
 
 const ENTRY_TYPE = 'matt-flow-config-view';
 
-const { CLEAR, ROLES, THINKING_LEVELS, fullName } = flowConfig;
+const { CLEAR, ROLES, THINKING_LEVELS, FLOW_SECTION, FLOW_DEFAULTS, FLOW_KEYS, fullName } = flowConfig;
 
 // --- IO（扩展侧薄封装；错误统一冒泡到命令 handler 的 notify） ---
 
@@ -103,6 +108,91 @@ async function runShow(pi, ctx, paths) {
     parentModel: parent ? `${parent.provider}/${parent.id}` : null,
   });
   pi.appendEntry(ENTRY_TYPE, { text: view });
+}
+
+// --- 流程开关向导（mattImplementFlow 节；文案全英文） ---
+
+function flowShown(value) {
+  return typeof value === 'boolean' ? (value ? 'on' : 'off') : String(value);
+}
+
+async function runConfigureFlow(ctx, paths) {
+  const scope = await pickScope(ctx, paths.project, paths.user);
+  if (!scope) return;
+  const scopePath = scope === 'project' ? paths.project : paths.user;
+  const otherPath = scope === 'project' ? paths.user : paths.project;
+  const settings = readSettings(scopePath);
+  const otherSettings = otherPath ? readSettings(otherPath) : {};
+  const { values: current, sources } = flowConfig.resolveFlowConfigDetailed(settings, otherSettings);
+
+  // 结构化菜单（复用 toMenu/fromMenu）：label 与 key 在同一对象内定义，匹配自反——
+  // 改文案只改 label，不再用文案前缀反解 key（评审发现③：文案一改即静默错键）。
+  const flowChoices = [
+    {
+      value: 'reviewer',
+      label: label(
+        `reviewer (currently ${flowShown(current.reviewer)} [${sources.reviewer}])`,
+        'per-ticket two-axis review + fix loop; off = merge straight after the platform test gate (final-reviewer still runs)',
+      ),
+    },
+    {
+      value: 'maxFixRounds',
+      label: label(
+        `maxFixRounds (currently ${current.maxFixRounds} [${sources.maxFixRounds}])`,
+        'fix attempts per ticket; only meaningful when reviewer=on',
+      ),
+    },
+    {
+      value: 'maxConcurrent',
+      label: label(
+        `maxConcurrent (currently ${current.maxConcurrent} [${sources.maxConcurrent}])`,
+        'parallel coders; the skill argument /pi-matt-implement-flow <N> wins',
+      ),
+    },
+  ];
+  const pickedField = await ctx.ui.select('Which flow setting?', toMenu(flowChoices));
+  if (!pickedField) return;
+  const key = fromMenu(flowChoices, pickedField);
+  if (!FLOW_KEYS.includes(key)) return; // 反解失败 → 无害退出，绝不静默选错键
+
+  let patchValue;
+  if (key === 'reviewer') {
+    const picked = await ctx.ui.select('Reviewer loop', [
+      'on — per-ticket two-axis review + fix loop (default)',
+      'off — merge straight after the platform test gate; the whole-branch final-reviewer still runs',
+    ]);
+    if (!picked) return;
+    patchValue = picked.startsWith('on');
+  } else {
+    const max = key === 'maxFixRounds' ? 5 : 6;
+    const def = FLOW_DEFAULTS[key];
+    const choices = [];
+    for (let n = 1; n <= max; n++) choices.push(n === def ? `${n} (default)` : String(n));
+    const title =
+      key === 'maxFixRounds'
+        ? 'Fix attempts per ticket (only meaningful when reviewer=on)'
+        : 'Parallel coders (/pi-matt-implement-flow <N> wins)';
+    const picked = await ctx.ui.select(title, choices);
+    if (!picked) return;
+    patchValue = parseInt(picked, 10);
+  }
+
+  const nextSettings = flowConfig.withFlowConfig(settings, { [key]: patchValue });
+  const shown = flowShown(patchValue);
+  const preview = [
+    `Write to: ${scopePath}`,
+    '',
+    `[${scope}] ${FLOW_SECTION}.${key}: ${shown}`,
+    '',
+    `effective ${key}: ${flowShown(current[key])} [${sources[key]}] → ${shown}`,
+  ];
+  const ok = await ctx.ui.confirm('Apply configuration?', preview.join('\n'));
+  if (!ok) return;
+  writeSettings(scopePath, nextSettings);
+  ctx.ui.notify(
+    `Saved ${FLOW_SECTION}.${key}=${shown} → ${scopePath}. Frozen into the ledger at the NEXT run's init event; a running flow keeps its current shape.`,
+    'info',
+  );
 }
 
 async function runConfigure(ctx, paths) {
@@ -244,7 +334,7 @@ export default function (pi) {
   });
 
   pi.registerCommand('matt-flow-config', {
-    description: 'Configure model/thinking overrides for pi-matt-implement-flow agents (no LLM)',
+    description: 'Configure model/thinking overrides and flow options for pi-matt-implement-flow agents (no LLM)',
     getArgumentCompletions: (prefix) => {
       const items = ['show'].filter((item) => item.startsWith(prefix ?? ''));
       return items.length > 0 ? items.map((item) => ({ value: item, label: item })) : null;
@@ -265,10 +355,12 @@ export default function (pi) {
         else {
           const action = await ctx.ui.select('matt-flow-config', [
             'Configure a role (model / thinking)',
+            'Configure flow options (reviewer / fix budget / concurrency)',
             'Show current effective configuration',
             "Clear a role's overrides",
           ]);
           if (action === 'Configure a role (model / thinking)') await runConfigure(ctx, paths);
+          else if (action === 'Configure flow options (reviewer / fix budget / concurrency)') await runConfigureFlow(ctx, paths);
           else if (action === 'Show current effective configuration') await runShow(pi, ctx, paths);
           else if (action === "Clear a role's overrides") await runClear(ctx, paths);
         }

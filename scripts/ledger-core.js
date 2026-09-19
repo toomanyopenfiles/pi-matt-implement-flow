@@ -68,6 +68,17 @@ function countTickets(events) {
 
 const isTaskFile = (file) => !file || !file.type || file.type === 'task';
 
+// 本 run 的流程形态（init 快照旗标；D20）。旧账本无旗标 = 默认形态（reviewer on /
+// 预算 2 / 并发 3），自然兼容。reviewer=off 时：不记 verdict/fix，merge 无需 verdict。
+function flowShape(events) {
+  const p = events.find((e) => e.type === 'init')?.payload ?? {};
+  return {
+    reviewer: p.reviewer === undefined ? true : p.reviewer === 'on',
+    maxFixRounds: p.maxFixRounds === undefined ? 2 : Number(p.maxFixRounds),
+    maxConcurrent: p.maxConcurrent === undefined ? 3 : Number(p.maxConcurrent),
+  };
+}
+
 // ------------------------------------------------------------------
 // 封账资格：非任务票排除（spec 母票 / resolved 研究票 / wontfix）
 // ------------------------------------------------------------------
@@ -129,6 +140,7 @@ function gateAdd({ events, type, payload, truth }) {
   if (reasons.length) return { ok: false, reasons, warnings };
 
   const idx = indexByTicket(events);
+  const flow = flowShape(events);
   const num = payload.ticket;
   const t = num ? (idx.get(num) ?? emptyIdx()) : null;
   const lastVerdict = t ? t.verdicts.at(-1) : null;
@@ -161,6 +173,12 @@ function gateAdd({ events, type, payload, truth }) {
       break;
     }
     case 'verdict': {
+      if (!flow.reviewer) {
+        reasons.push(
+          '本 run 的 init 快照 reviewer=off——无评审形态不得记 verdict（流程形态由 init 冻结，中途不改）'
+        );
+        break;
+      }
       if (t && t.verdicts.some((e) => Number(e.payload.round) === Number(payload.round))) {
         reasons.push(`票 ${num} 第 ${payload.round} 轮 verdict 已入账——同票同轮去重，历史不可双写`);
       }
@@ -178,12 +196,18 @@ function gateAdd({ events, type, payload, truth }) {
       break;
     }
     case 'fix': {
+      if (!flow.reviewer) {
+        reasons.push(
+          '本 run 的 init 快照 reviewer=off——无评审形态不存在修复循环，不得记 fix'
+        );
+        break;
+      }
       if (Number(payload.fixNo) !== fixCount + 1) {
         reasons.push(`fixNo=${payload.fixNo} 与已入账 fix 事件数不符（期望 ${fixCount + 1}）`);
       }
-      if (fixCount >= 2) {
+      if (fixCount >= flow.maxFixRounds) {
         reasons.push(
-          `修复预算已耗尽：票 ${num} 已入账 ${fixCount} 条 fix 事件（每票上限 2）——` +
+          `修复预算已耗尽：票 ${num} 已入账 ${fixCount} 条 fix 事件（本 run 上限 ${flow.maxFixRounds}，来自 init 快照 --max-fix-rounds）——` +
             `应升级上报：add escalate --ticket ${num}，并在票文件留 tracker 评论，不要继续派发修复`
         );
       }
@@ -198,7 +222,7 @@ function gateAdd({ events, type, payload, truth }) {
           `票 ${num} 已有 merge 事件（mergeSha ${short(t.merges.at(-1).payload.mergeSha)}）——不得重复记账`
         );
       }
-      if (!lastVerdict || lastVerdict.payload.verdict !== 'approved') {
+      if (flow.reviewer && (!lastVerdict || lastVerdict.payload.verdict !== 'approved')) {
         reasons.push(
           `merge 须该票最近 verdict=approved（当前：${lastVerdict ? lastVerdict.payload.verdict : '无 verdict'}）`
         );
@@ -430,6 +454,10 @@ function renderHeader({ events, truth }) {
   lines.push(`spec: ${p.spec}`);
   lines.push(`testCommand: \`${p.testCommand}\``);
   lines.push(`tracker: ${p.tracker}`);
+  const flow = flowShape(events);
+  lines.push(
+    `flow: reviewer=${flow.reviewer ? 'on' : 'off'}, maxFixRounds=${flow.maxFixRounds}, maxConcurrent=${flow.maxConcurrent}`
+  );
   lines.push(`pr: ${prState({ events, truth })}`);
   lines.push('');
   return lines.join('\n');
@@ -456,6 +484,9 @@ function renderEvent(e) {
         `testCommand=\`${p.testCommand}\``,
         `tracker=${p.tracker}`
       );
+      if (p.reviewer !== undefined) parts.push(`reviewer=${p.reviewer}`);
+      if (p.maxFixRounds !== undefined) parts.push(`maxFixRounds=${p.maxFixRounds}`);
+      if (p.maxConcurrent !== undefined) parts.push(`maxConcurrent=${p.maxConcurrent}`);
       break;
     case 'dispatch':
       parts.push(`ticket=${p.ticket}`, `key=${p.key}`, `runId=${p.runId}`);
@@ -532,6 +563,7 @@ module.exports = {
   TICKET_BRANCH,
   closeBlockers,
   countTickets,
+  flowShape,
   gateAdd,
   indexByTicket,
   reconcile,

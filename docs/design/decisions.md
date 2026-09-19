@@ -1,6 +1,6 @@
 # 决策记录
 
-> 最后更新 2026-09-19（D19 配置向导 + 超时契约）。已定 = 用户明确说过或已实测确认。
+> 最后更新 2026-09-20（D20 流程配置节 + init 快照）。已定 = 用户明确说过或已实测确认。
 >
 > **Q1–Q8 已全部落定**（D7–D15）。其中 D14、D15 是 `/tmp/mif-probe` 探针实测**修正**过的结论——探针推翻了第一轮的一个推断，详见 [`verified-facts.md`](./verified-facts.md) §10。
 
@@ -271,6 +271,21 @@ E2E 首轮的用户抽查抓到账本三处失真（row 02 滞留 claimed；fix-
 2. **SKILL.md 派发模板 gate verify 显式 `timeoutMs: 600000`**——平台 120s 常量只能 per-entry 覆盖；不动 pi-subagents 源码。
 3. **`/matt-flow-config` 配置向导用 pi 扩展实现**（`extensions/matt-flow-config.js`，非 skill）：`pi.registerCommand` + `ctx.ui.select/confirm/input`，零 LLM 参与；可配角色 model（`ctx.scopedModels` 菜单 + 手动输入）/ thinking、show 当前生效解析、clear 覆盖；写入前 diff + confirm。写路径镜像平台解析（user = PI_CODING_AGENT_DIR 或 `~/.pi/agent/settings.json`；project = 最近候选根，忠实实现 `projectRootResolution: nearest|git-root` 策略）。**不做**：全局超时向导（2026-09-19 两轴 review 实测：`timeoutMs` 不是 settings 键，真正落点是 `~/.pi/agent/extensions/subagent/config.json` 顶层；用户裁定砍掉该功能，需要全局收紧/放宽时直写该文件并改 frontmatter）；httpIdleTimeoutMs（用户裁定不留）、工具级超时（原则：不配无上限的项）、eject/update agent 定义（fork 语义会遮蔽包更新）。
 4. 守护：不变量 9（extensions 声明）与不变量 10（三 agent timeoutMs + gate anchor）进 `registration-checks.js`；纯逻辑在 `scripts/flow-config-core.js`，`scripts/flow-config.test.js` 全覆盖。
+
+---
+
+### D20 · 流程配置节 + init 快照（2026-09-20，用户需求）
+
+**背景**：用户要求 ① 逐票 reviewer 做成可选模块（默认开；关时全流程跳过评审/修复循环，final-reviewer 固定不设开关）；② 每票修复预算（原硬编码 2）与并发（原 SKILL.md 文本默认 3）接入配置；③ 全部进 `/matt-flow-config`，用 settings 顶层自定义节，不污染 pi-subagents 全局配置；④ 向导与 show 文案全英文。
+
+**关键决策**：
+
+1. **配置节 = settings.json 顶层 `mattImplementFlow`**（`reviewer` 布尔、`maxFixRounds`/`maxConcurrent` ≥1 整数；project 逐字段赢 user，复用 mergeOverrides 语义；非法值宽容回退默认）。平台对未知顶层键直接忽略——天然隔离，零污染。
+2. **生效语义 = init 快照（方案乙，用户选定）**：run 启动时编排器把生效值作为 init 旗标 `--reviewer on|off --max-fix-rounds N --max-concurrent N` 冻结进台账，此后 ledger 校验一律按快照执行；中途改配置不影响进行中的 run（流程形态必须一次 run 内一致——与 model/thinking 可「下次派发生效」的语义刻意不同）。
+3. **台账执法适配快照**（ledger-schema/ledger-core）：init 可选参数集 + 三旗标（reviewer 枚举 on|off；数值键 `[1-9]\d*` 正整数，round/fixNo 同步收紧）；`reviewer=off` 时 verdict/fix 事件硬拒、merge 的「最近 verdict=approved」校验跳过（唯一硬阻塞点解除）；fix 预算改读快照 `maxFixRounds`（缺省仍 2，旧账本无旗标自然兼容）；台账 header 增 `flow:` 形态行（compaction 恢复一眼可见）。
+4. **`/matt-flow-config` 扩展**：主菜单加 "Configure flow options"（reviewer / maxFixRounds / maxConcurrent，每项菜单带作用提示）；show 改两节式（Flow / Agents），每角色 5 行压 1 行，砍掉不可配的超时常量行。
+5. **可行性研究结论**（需求①）：reviewer 上下游依赖 = SKILL.md 编排指令（软）+ 台账三处校验（硬）。reconcile 五项检查、closeBlockers、settled 轮号恒等式均与 verdict 无关（逐条核实），唯一硬阻塞是 merge 校验，已由第 3 条解除。
+6. **砍掉项**：draftPr 开关（用户裁定价值有限）；gate verify 超时可配（维持 600s 常量，理由同 D19）；并发默认提额到 5（用户撤回，仍 3）。
 
 ---
 

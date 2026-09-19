@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 You are the **orchestrator**. You write no feature code: you dispatch, verify, merge, and keep the **frontier** moving until the spec is built on one branch.
 
-The tickets came from `/to-tickets`: a **task graph** of tracer-bullet slices, each declaring the tickets that **block** it. The frontier is every open ticket whose blockers are all closed and that is `ready-for-agent` (tickets from `/to-tickets` are already agent-ready — never send them through `/triage`). Work it with up to N `coder` subagents at once (N from the argument, default 3).
+The tickets came from `/to-tickets`: a **task graph** of tracer-bullet slices, each declaring the tickets that **block** it. The frontier is every open ticket whose blockers are all closed and that is `ready-for-agent` (tickets from `/to-tickets` are already agent-ready — never send them through `/triage`). Work it with up to N `coder` subagents at once. N comes from the skill argument (`/pi-matt-implement-flow [N]`); otherwise from `mattImplementFlow.maxConcurrent` in pi settings; otherwise 3.
 
 Talk to subagents through **context pointers** (paths, branch names, commit SHAs). Content they can read themselves stays out of the message.
 
@@ -38,6 +38,18 @@ Check all of these before dispatching; on a failure, stop and tell the user what
 - **Test command**: determine the project's full-suite command (`package.json` `scripts.test`, Makefile, …). If ambiguous, ask once and pass it to the `init` event.
 - **Graph**: every ticket has a `Blocked by` line (or native blocking links) and the initial frontier is non-empty. An empty frontier with open tickets means a cycle — stop and report.
 
+## Flow configuration
+
+This run's shape — whether each ticket gets a reviewer, the per-ticket fix budget, and the coder concurrency — is read from the package-private `mattImplementFlow` key in pi settings (`<repo>/.pi/settings.json` wins per field over `~/.pi/agent/settings.json`; never write any other settings key), then **frozen as `init` flags** in the ledger:
+
+| key | default | meaning |
+|---|---|---|
+| `reviewer` | `true` | per-ticket two-axis review + fix loop; `false` = merge straight after the platform test gate (the whole-branch final-reviewer still runs) |
+| `maxFixRounds` | `2` | fix attempts per ticket before escalation; only meaningful when `reviewer` is on |
+| `maxConcurrent` | `3` | parallel coders; the skill argument wins |
+
+Pass them to `init` as `--reviewer on|off --max-fix-rounds N --max-concurrent N`; omitted flags mean the defaults. The ledger script enforces the frozen shape from that point on: with `reviewer=off` it rejects `verdict`/`fix` events and lets `merge` proceed without a verdict, and the fix budget is whatever the snapshot recorded. Configure via `/matt-flow-config` → "Configure flow options"; changes apply from the next run's `init`, never mid-run.
+
 ## Ledger
 
 Your memory has three layers, each with exactly one owner. Terms (per `CONTEXT.md`): ledger 台账 / event stream 事件流 / orchestration notes 编排笔记 / record 记账 / seal 封账 / reconcile 对账. The old phrase "event log" is retired — never use it.
@@ -65,7 +77,7 @@ Restate the plan to the user in at most ten lines (branch, ticket count, first f
 
 ### Round 0 — graph, branch, baseline
 
-1. Read the spec and every ticket, then record `init`（记账）— `--branch --branch-base --baseline-sha --spec --test-command --tracker` — as the ledger's first event. Everything downstream is derived from it; the baseline the init pins is what later failures are attributable against.
+1. Read the spec and every ticket, resolve the flow configuration (above), then record `init`（记账）— `--branch --branch-base --baseline-sha --spec --test-command --tracker [--reviewer on|off --max-fix-rounds N --max-concurrent N]` — as the ledger's first event. The flow flags freeze this run's shape; everything downstream is derived from it; the baseline the init pins is what later failures are attributable against.
 2. **Environment survey**: read `.gitignore` and enumerate every runtime path a coder worktree will not contain (`.scratch/`, `.pi/`, `data/`, …). Write the survey into a **环境事实 (environment facts)** section of the orchestration notes with exactly three elements: the gitignored path list, where real data actually lives, and the validation discipline (validate against real data through the scratch directory). Every coder brief's Worktree-reality parenthetical and its data paths are picked per ticket from this section — filtering is your job; coordination prose (routing decisions, user rulings, process narrative) never enters a brief, and coders never read the notes file whole. The survey is prose: it lands only in the orchestration notes, never in the event stream (no new event type).
 3. On the default branch, create `feat/<feature-slug>` from HEAD; on any other branch, stay on it and record it.
 4. Run the full test suite once; record the baseline (green or the failing list) in the orchestration notes.
@@ -126,7 +138,7 @@ When a coder reports, first make its work mergeable, then review:
 1. **Anchor the ticket branch** (git truth, not the report): `git branch ticket-<NN> <headSha>`. If `headSha` is missing or unreachable, go into the coder's retained worktree, run `git status --porcelain` there, commit anything left (`ticket <NN>: orchestrator checkpoint`), and use that SHA.
 2. **Write the review bundle**: `git diff <baseCommit>...refs/heads/ticket-<NN>` (three-dot) plus `git log --oneline` into `.pi/matt-implement/<slug>/reviews/<NN>-r<k>.diff`.
 3. **Record `settled`**（记账：`--ticket --round --head-sha --worktree --gate` 一句门禁摘要）— the ticket's headSha and worktree are now anchored in the event stream.
-4. **Dispatch the reviewer** for that ticket:
+4. **Dispatch the reviewer** for that ticket — only when the run's init snapshot has `reviewer=on` (the default). With `reviewer=off`, skip this step and the fix loop entirely and go straight to the merge: the platform acceptance gate and the post-merge integration suite are the remaining per-ticket defenses, and the whole-branch final-reviewer still runs at the end:
 
 ```js
 const results = await runs.all([
@@ -158,7 +170,7 @@ On a verdict, record it: `verdict`（记账：`--ticket --round --verdict --find
 - **approved** → merge (below).
 - **changes_requested** → fix loop (below); if the script rejects the fix because two rounds are already dispatched, record **`escalate`** and a tracker comment instead, leave the ticket claimed, continue the frontier, and tell the user at the end.
 
-### Fix loop — send it back to the same coder
+### Fix loop — send it back to the same coder (reviewer=on runs only)
 
 Write the findings to `findings/<NN>-r<k>.md`. **Record the fix first**: `fix`（记账：`--ticket --fix-no --key --resume-run-id <coderRunId>`）— the budget is consumed at dispatch time, and the script mechanically rejects a third fix; that rejection is the escalation trigger. Then resume the coder in a **new** workflow call (new stable key; the revived child keeps its agent, model, worktree, and context):
 
@@ -182,7 +194,7 @@ Serially, in the main checkout on the feature branch — merges never run in par
 1. `git merge --no-ff -m "Merge ticket-<NN>: <title>" ticket-<NN>` — the message **must** contain the `ticket-<NN>` token (hard rule below; the ledger script cross-checks merges by it). On a conflict, follow the `resolving-merge-conflicts` skill.
 2. Run the full suite. Red means an integration problem no ticket-level review could see: save the failing output to `findings/integration-<NN>.md` and dispatch **one** coder **without isolation** (omit `worktree`) on the feature branch. Only one such fixer at a time.
 3. Record `merge`（记账：`--ticket --head-sha --merge-sha`）— the script verifies the merge commit exists, sits on the feature branch, and carries the token. Then close the ticket per the tracker doc, with the merge commit SHA in the closing comment.
-4. Recommit or ignore any tracker dirt (see Preconditions), then remove the reviewer worktree and `git branch -D ticket-<NN>`; after the ticket is closed the coder's retained worktree goes too (its resume value is spent).
+4. Recommit or ignore any tracker dirt (see Preconditions), then remove the reviewer worktree if one exists (`reviewer=off` runs have none) and `git branch -D ticket-<NN>`; after the ticket is closed the coder's retained worktree goes too (its resume value is spent).
 
 Recompute the frontier. While tickets remain: top the dispatch back up to N. Done when every ticket is closed or escalated.
 
@@ -263,7 +275,7 @@ You are on the feature branch in the main checkout; this is an integration probl
 - Verdict values: `approved` / `changes_requested` / `ready` / `ready_with_fixes` / `not_ready` — never the string `blocked`.
 - Merges are serial; one integration fixer at a time; one writer per worktree.
 - Do not manufacture parallelism: dependent work stays serial; only frontier tickets run concurrently.
-- Two fix rounds then escalate — a stuck ticket must not block the frontier. The ledger script enforces this at the write point; do not argue with the rejection, escalate.
+- Fix budget then escalate — a stuck ticket must not block the frontier. The budget is this run's `--max-fix-rounds` init snapshot (default 2, from `mattImplementFlow.maxFixRounds`); the ledger script enforces it at the write point; do not argue with the rejection, escalate.
 - Merge commit messages must contain the `ticket-NN` token — the ledger script cross-checks merges by it.
 - Never hand-write or edit the ledger or the event stream: no shell appends, no edit tool, no "one-off fix to a cell". The ledger script is the only writer; when you disagree with it, record `anomaly --note "..."` and stop to report.
 - On workflow-infrastructure failure (launch, extension, prompt runtime), stop and report the exact failure, run/status, and repo/worktree state. Never fall back to doing the work yourself, and never switch execution modes silently.
