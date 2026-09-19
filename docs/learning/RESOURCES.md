@@ -13,7 +13,7 @@
 - [docs/design/README.md](../../docs/design/README.md)
   项目定位、与 pi-matt-flow / pi-mainflow / implement-orchestrated 的关系、D11 定稿的包结构。Use for: 「为什么这个项目长这样」的第一站。
 - [docs/design/decisions.md](../../docs/design/decisions.md)
-  D1–D17 决策记录（已定 + 被探针修正的过程）。Use for: 每个设计选择的「为什么」；特别是 D8/D14/D15/D16/D17。
+  D1–D19 决策记录（已定 + 被探针修正的过程）。Use for: 每个设计选择的「为什么」；特别是 D8/D14/D15/D16/D17/D19。
 - [docs/design/pi-capability-map.md](../../docs/design/pi-capability-map.md)
   B→pi 的机制映射表 + 最终轮次骨架（§6）。Use for: 理解每个机制对应 pi 的哪个原生能力。
 - [docs/design/verified-facts.md](../../docs/design/verified-facts.md)

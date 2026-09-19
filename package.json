@@ -9,6 +9,7 @@
   "license": "MIT",
   "pi": {
     "skills": ["./SKILL.md"],
+    "extensions": ["./extensions"],
     "subagents": {
       "agents": ["./agents"]
     }

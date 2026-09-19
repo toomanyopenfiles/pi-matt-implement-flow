@@ -4,6 +4,7 @@ description: Implements one ticket from a brief inside a pi-managed worktree. Wo
 package: pi-matt-implement-flow
 tools: read, grep, find, ls, bash, edit, write, contact_supervisor
 thinking: high
+timeoutMs: 3600000
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

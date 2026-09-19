@@ -1,6 +1,6 @@
 # 决策记录
 
-> 最后更新 2026-09-15（第二轮）。已定 = 用户明确说过或已实测确认。
+> 最后更新 2026-09-19（D19 配置向导 + 超时契约）。已定 = 用户明确说过或已实测确认。
 >
 > **Q1–Q8 已全部落定**（D7–D15）。其中 D14、D15 是 `/tmp/mif-probe` 探针实测**修正**过的结论——探针推翻了第一轮的一个推断，详见 [`verified-facts.md`](./verified-facts.md) §10。
 
@@ -254,6 +254,23 @@ E2E 首轮的用户抽查抓到账本三处失真（row 02 滞留 claimed；fix-
 3. edit 失败恢复规程：重读文件 → 拆单段分别重发，禁止凭记忆补写。
 
 **为何不上 ledger.json**：机器可读账本能根治 edit 匹配失败，但引入脚本依赖且失去人读性；对单编排器场景收益不抵成本（留作多 session 并发时的备选项）。
+
+### D19 · 模型配置向导 + 超时契约（2026-09-19，用户需求 + 实证调查）
+
+**背景**：用户要求 ① session 内可直接为 coder / reviewer / final-reviewer 配置 model / thinking（不经 LLM 对话、自动写 settings）；② 修掉实测触发的 30 分钟 run 超时（st-babel-translate 票 01，`Subagent timed out after 1800000ms`——平台对每个 plain single-agent async child，含 workflow 内 runs.all 子项，默认 30 分钟死线，`DEFAULT_ASYNC_TIMEOUT_MS`）与 gate verify 的 120 秒隐含限制（`DEFAULT_VERIFY_TIMEOUT_MS = 120_000`，包内常量不可配）。
+
+**关键事实**（源码核实）：
+
+1. model/thinking 有 agent 级 settings 覆盖（`subagents.agentOverrides`，键 = 运行时全名如 `pi-matt-implement-flow.coder`，project 赢 user，逐字段合并）；**超时没有**——agentOverrides 字段白名单里没有 timeoutMs，agent 级超时只能 frontmatter / per-call。
+2. pi-subagents **每次 subagent 调用都重读 settings**（`discoverAgentsUncached`）→ 写入后**下次派发即生效，无需重启 pi**。
+3. bash 等长跑工具无平台级硬死线（不配 = 无上限）；per 角色超时的「无上限不配」原则只适用于工具级，不适用于 run 级（run 级不配有 30 分钟默认）。
+
+**决策**：
+
+1. **三角色 timeoutMs 统一 3600000（1h）**，写入各自 frontmatter——随包分发、对 fix-resume 自动继承。
+2. **SKILL.md 派发模板 gate verify 显式 `timeoutMs: 600000`**——平台 120s 常量只能 per-entry 覆盖；不动 pi-subagents 源码。
+3. **`/matt-flow-config` 配置向导用 pi 扩展实现**（`extensions/matt-flow-config.js`，非 skill）：`pi.registerCommand` + `ctx.ui.select/confirm/input`，零 LLM 参与；可配角色 model（`ctx.scopedModels` 菜单 + 手动输入）/ thinking、show 当前生效解析、clear 覆盖；写入前 diff + confirm。写路径镜像平台解析（user = PI_CODING_AGENT_DIR 或 `~/.pi/agent/settings.json`；project = 最近候选根，忠实实现 `projectRootResolution: nearest|git-root` 策略）。**不做**：全局超时向导（2026-09-19 两轴 review 实测：`timeoutMs` 不是 settings 键，真正落点是 `~/.pi/agent/extensions/subagent/config.json` 顶层；用户裁定砍掉该功能，需要全局收紧/放宽时直写该文件并改 frontmatter）；httpIdleTimeoutMs（用户裁定不留）、工具级超时（原则：不配无上限的项）、eject/update agent 定义（fork 语义会遮蔽包更新）。
+4. 守护：不变量 9（extensions 声明）与不变量 10（三 agent timeoutMs + gate anchor）进 `registration-checks.js`；纯逻辑在 `scripts/flow-config-core.js`，`scripts/flow-config.test.js` 全覆盖。
 
 ---
 

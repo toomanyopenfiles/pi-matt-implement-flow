@@ -26,6 +26,13 @@ const {
   checkRound0EnvSurvey,
   LEDGER_SCRIPT,
   checkLedgerScript,
+  EXTENSION_SCRIPT,
+  checkExtensionRegistration,
+  checkFlowConfigExtension,
+  AGENT_TIMEOUT_MS,
+  GATE_VERIFY_TIMEOUT_MS,
+  checkAgentTimeouts,
+  checkGateVerifyTimeout,
 } = require('./registration-checks.js');
 
 function readAgentFrontmatter() {
@@ -121,6 +128,22 @@ test('Round 0 carries the environment-survey step (survey is prose, destination 
   assert.deepEqual(checkRound0EnvSurvey(skillText), []);
 });
 
+test('pi.extensions declares the flow-config extension and the path exists', () => {
+  assert.deepEqual(checkExtensionRegistration(manifest), []);
+});
+
+test('the flow-config extension file ships with the package', () => {
+  assert.deepEqual(checkFlowConfigExtension(), []);
+});
+
+test('all three agents declare timeoutMs: 3600000 (1h run deadline, D19)', () => {
+  assert.deepEqual(checkAgentTimeouts(readAgentFrontmatter()), []);
+});
+
+test('SKILL.md pins the gate verify timeout at 600000 (platform default is a fixed, unconfigurable 120s)', () => {
+  assert.deepEqual(checkGateVerifyTimeout(readText(PKG_ROOT, 'SKILL.md')), []);
+});
+
 // --- 模拟破坏：假想 fixture，绝不改动真实文件。每条恰好对应一条真实不变量。 ---
 
 test('breakage simulation: a pi.skills entry renamed to a missing file is flagged', () => {
@@ -144,6 +167,37 @@ test('breakage simulation: a missing ledger script is flagged', () => {
   assert.deepEqual(checkLedgerScript({ isFile: () => false }), [
     `ledger script missing: ${LEDGER_SCRIPT} — the mechanical-ledger protocol's only write surface`,
   ]);
+});
+
+test('breakage simulation: a removed pi.extensions declaration is flagged', () => {
+  assert.deepEqual(checkExtensionRegistration({ pi: {} }), [
+    'package.json: pi.extensions must declare at least one extension path',
+  ]);
+});
+
+test('breakage simulation: a renamed extension directory is flagged', () => {
+  assert.deepEqual(
+    checkExtensionRegistration({ pi: { extensions: ['./extensions-renamed'] } }, { isFile: () => false, isDir: () => false }),
+    ['pi.extensions entry points at a missing path: ./extensions-renamed'],
+  );
+});
+
+test('breakage simulation: a deleted flow-config extension file is flagged', () => {
+  assert.deepEqual(checkFlowConfigExtension({ isFile: () => false }), [
+    `flow-config extension missing: ${EXTENSION_SCRIPT} — /matt-flow-config is its registration surface`,
+  ]);
+});
+
+test('breakage simulation: an agent losing its timeoutMs is flagged', () => {
+  const frontmatter = readAgentFrontmatter();
+  const broken = { ...frontmatter, coder: { ...frontmatter.coder, timeoutMs: undefined } };
+  const problems = checkAgentTimeouts(broken).filter((p) => p.includes('coder'));
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /must declare timeoutMs: 3600000/);
+});
+
+test('breakage simulation: the gate verify timeout being dropped from the dispatch template is flagged', () => {
+  assert.match(checkGateVerifyTimeout('verify: [{ id: "gate", command: "npm test" }]')[0], /must pin the gate verify timeout/);
 });
 
 test('breakage simulation: SKILL.md name drifting from the package name is flagged', () => {

@@ -9,8 +9,11 @@ const path = require('node:path');
 
 const PKG_ROOT = path.resolve(__dirname, '..');
 
+// 常量单一来源：agent 角色表与超时契约值来自 flow-config-core（D19），避免两处漂移。
+const { ROLES, AGENT_TIMEOUT_MS, GATE_VERIFY_TIMEOUT_MS } = require('./flow-config-core.js');
+
 // 三个 agent 的名字（不含包前缀）。包全名 = `${packageName}.${agentName}`。
-const AGENT_NAMES = ['coder', 'reviewer', 'final-reviewer'];
+const AGENT_NAMES = ROLES;
 
 // --- 读取（只读原语，供测试装配真实包树） ---
 
@@ -228,6 +231,66 @@ function checkLedgerScript({ isFile = isFileAt } = {}) {
     : [`ledger script missing: ${LEDGER_SCRIPT} — the mechanical-ledger protocol's only write surface`];
 }
 
+// —— 不变量 9：pi.extensions 声明与 /matt-flow-config 扩展文件（D19）。
+// 谓词为 path-only（与兄弟 checker 同形），默认绑定包根。
+function checkExtensionRegistration(manifest, {
+  isFile = (p) => isFileAt(PKG_ROOT, p),
+  isDir = (p) => isDirAt(PKG_ROOT, p),
+} = {}) {
+  const problems = [];
+  const declared = manifest?.pi?.extensions ?? [];
+  if (!Array.isArray(declared) || declared.length === 0) {
+    problems.push('package.json: pi.extensions must declare at least one extension path');
+    return problems;
+  }
+  for (const entry of declared) {
+    if (typeof entry !== 'string') {
+      problems.push(`pi.extensions entry is not a string path: ${JSON.stringify(entry)}`);
+      continue;
+    }
+    // 条目可以是文件或目录（pi manifest 两者都合法）；相对路径以包根为基准。
+    if (!isFile(entry) && !isDir(entry)) {
+      problems.push(`pi.extensions entry points at a missing path: ${entry}`);
+    }
+  }
+  return problems;
+}
+
+const EXTENSION_SCRIPT = 'extensions/matt-flow-config.js';
+function checkFlowConfigExtension({ isFile = (p) => isFileAt(PKG_ROOT, p) } = {}) {
+  return isFile(EXTENSION_SCRIPT)
+    ? []
+    : [`flow-config extension missing: ${EXTENSION_SCRIPT} — /matt-flow-config is its registration surface`];
+}
+
+// —— 不变量 10：超时契约（D19）：三个 agent 各自声明 1h run 死线，
+// SKILL.md 派发模板的 gate verify 条目显式 10 分钟（平台常量 120s 不可配，只能 per-entry 覆盖）。
+function checkAgentTimeoutFrontmatter(frontmatter, agentName) {
+  if (!frontmatter) return [`missing agent file for "${agentName}"`];
+  return frontmatter.timeoutMs === String(AGENT_TIMEOUT_MS)
+    ? []
+    : [
+        `agent "${agentName}" frontmatter must declare timeoutMs: ${AGENT_TIMEOUT_MS} (1h run deadline; platform default without it is 30 min), got: ${frontmatter.timeoutMs ?? '(missing)'}`,
+      ];
+}
+
+function checkAgentTimeouts(agentFrontmatter) {
+  const problems = [];
+  for (const agentName of AGENT_NAMES) {
+    problems.push(...checkAgentTimeoutFrontmatter(agentFrontmatter[agentName], agentName));
+  }
+  return problems;
+}
+
+const GATE_VERIFY_ANCHOR = `verify: [{ id: "gate", command: "npm test", timeoutMs: ${GATE_VERIFY_TIMEOUT_MS} }]`;
+function checkGateVerifyTimeout(skillText) {
+  return skillText.includes(GATE_VERIFY_ANCHOR)
+    ? []
+    : [
+        `SKILL.md coder dispatch template must pin the gate verify timeout verbatim: ${GATE_VERIFY_ANCHOR} (platform verify default is a fixed 120 s and not configurable)`,
+      ];
+}
+
 module.exports = {
   PKG_ROOT,
   AGENT_NAMES,
@@ -246,4 +309,11 @@ module.exports = {
   checkRound0EnvSurvey,
   LEDGER_SCRIPT,
   checkLedgerScript,
+  EXTENSION_SCRIPT,
+  checkExtensionRegistration,
+  checkFlowConfigExtension,
+  AGENT_TIMEOUT_MS,
+  GATE_VERIFY_TIMEOUT_MS,
+  checkAgentTimeouts,
+  checkGateVerifyTimeout,
 };

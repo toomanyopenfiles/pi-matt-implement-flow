@@ -92,7 +92,7 @@ const results = await runs.all([
       ],
       evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "residual-risks", "no-staged-files"],
       report: "on",
-      verify: [{ id: "gate", command: "npm test" }]
+      verify: [{ id: "gate", command: "npm test", timeoutMs: 600000 }]
     },
     outputSchema: {
       type: "object",
@@ -115,6 +115,7 @@ Record each child as a `dispatch` event（记账：`--ticket --key --run-id`，`
 
 - **Why an explicit `acceptance` object instead of the `gate` shorthand** (they are mutually exclusive): it pins the evidence contract at dispatch time instead of letting the platform infer it from task wording.
 - **`report: "on"`** moves the report-format checks into the final `structured_output` call — a missing or malformed `acceptanceReport` fails the tool call and the coder retries in-session, instead of the whole run being rejected after the child is gone; it also injects the exact report field list into the coder's prompt, so field names are no longer guessed.
+- **Gate timeout**: the platform's verify-command default is a fixed 120 s — too short for full suites in a cold worktree, and the constant is not configurable; the dispatch pins `timeoutMs: 600000` (10 min) per verify entry.
 - **Remaining limit**: evidence *completeness* (e.g. a present-but-empty `validationOutput`) is still checked only at run settlement — that is what the `## Acceptance Contract` block in the brief covers. `outputSchema` is required for `report: "on"` (the dispatch above already has it).
 - **The fix loop** needs no acceptance of its own: a retained resume replays the stored contract, so the follow-up brief only has to ask for the full report again.
 
