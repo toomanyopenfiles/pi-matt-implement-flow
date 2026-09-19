@@ -3,10 +3,10 @@
 //   1. 三 agent（coder / reviewer / final-reviewer）的 model / thinking 覆盖
 //      （subagents.agentOverrides）；
 //   2. 流程开关（settings 顶层自定义节 mattImplementFlow：reviewer / maxFixRounds /
-//      maxConcurrent）——本包私有，不碰任何平台键；生效语义是 init 快照（D20）。
+//      maxConcurrent）——本包私有，不碰任何平台键；生效语义是 init 快照。
 // 纯 ctx.ui 菜单流，不经过大模型；文案全英文（用户要求）。
 //
-// 生效语义（源码核实，见 docs/design/decisions.md D19）：pi-subagents 每次
+// 生效语义（源码核实）：pi-subagents 每次
 // subagent 调用都重读 settings（discoverAgentsUncached）——写入后下一次派发
 // 即生效，无需重启 pi；正在运行的 child 不受影响。流程配置则在下一次 run 的
 // init 事件冻结进台账，进行中的 run 不受中途改配置影响。

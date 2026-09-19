@@ -252,13 +252,13 @@ test('buildShowView renders all three roles, their effective values, and the inh
   assert.match(view, /parent session model \(inherit target\): p\/parent-model/);
 });
 
-test('constants: the documented timeout contract values (D19)', () => {
+test('constants: the documented timeout contract values', () => {
   assert.equal(AGENT_TIMEOUT_MS, 3600000);
   assert.equal(GATE_VERIFY_TIMEOUT_MS, 600000);
   assert.deepEqual(THINKING_LEVELS, ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 });
 
-// --- 流程配置（settings 顶层自定义节；D20） ---
+// --- 流程配置（settings 顶层自定义节） ---
 
 test('flowSectionFor normalizes one layer: boolean reviewer, >=1 integer budgets, junk ignored', () => {
   assert.deepEqual(

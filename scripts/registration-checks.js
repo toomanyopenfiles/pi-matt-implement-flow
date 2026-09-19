@@ -9,7 +9,7 @@ const path = require('node:path');
 
 const PKG_ROOT = path.resolve(__dirname, '..');
 
-// 常量单一来源：agent 角色表与超时契约值来自 flow-config-core（D19），避免两处漂移。
+// 常量单一来源：agent 角色表与超时契约值来自 flow-config-core，避免两处漂移。
 const { ROLES, AGENT_TIMEOUT_MS, GATE_VERIFY_TIMEOUT_MS } = require('./flow-config-core.js');
 
 // 三个 agent 的名字（不含包前缀）。包全名 = `${packageName}.${agentName}`。
@@ -231,7 +231,7 @@ function checkLedgerScript({ isFile = isFileAt } = {}) {
     : [`ledger script missing: ${LEDGER_SCRIPT} — the mechanical-ledger protocol's only write surface`];
 }
 
-// —— 不变量 9：pi.extensions 声明与 /matt-flow-config 扩展文件（D19）。
+// —— 不变量 9：pi.extensions 声明与 /matt-flow-config 扩展文件。
 // 谓词为 path-only（与兄弟 checker 同形），默认绑定包根。
 function checkExtensionRegistration(manifest, {
   isFile = (p) => isFileAt(PKG_ROOT, p),
@@ -263,7 +263,7 @@ function checkFlowConfigExtension({ isFile = (p) => isFileAt(PKG_ROOT, p) } = {}
     : [`flow-config extension missing: ${EXTENSION_SCRIPT} — /matt-flow-config is its registration surface`];
 }
 
-// —— 不变量 10：超时契约（D19）：三个 agent 各自声明 1h run 死线，
+// —— 不变量 10：超时契约：三个 agent 各自声明 1h run 死线，
 // SKILL.md 派发模板的 gate verify 条目显式 10 分钟（平台常量 120s 不可配，只能 per-entry 覆盖）。
 function checkAgentTimeoutFrontmatter(frontmatter, agentName) {
   if (!frontmatter) return [`missing agent file for "${agentName}"`];

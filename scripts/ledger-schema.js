@@ -49,7 +49,7 @@ const ENUMS = {
 const EVENT_TYPES = {
   init: {
     required: ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand', 'tracker'],
-    // 可选流程形态快照（D20）：reviewer=on|off、maxFixRounds、maxConcurrent。
+    // 可选流程形态快照：reviewer=on|off、maxFixRounds、maxConcurrent。
     // 省略 = 默认形态（on / 2 / 3）——旧账本自然兼容。
     optional: ['reviewer', 'maxFixRounds', 'maxConcurrent'],
   },

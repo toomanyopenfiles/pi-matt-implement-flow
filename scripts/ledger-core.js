@@ -68,7 +68,7 @@ function countTickets(events) {
 
 const isTaskFile = (file) => !file || !file.type || file.type === 'task';
 
-// 本 run 的流程形态（init 快照旗标；D20）。旧账本无旗标 = 默认形态（reviewer on /
+// 本 run 的流程形态（init 快照旗标）。旧账本无旗标 = 默认形态（reviewer on /
 // 预算 2 / 并发 3），自然兼容。reviewer=off 时：不记 verdict/fix，merge 无需 verdict。
 function flowShape(events) {
   const p = events.find((e) => e.type === 'init')?.payload ?? {};

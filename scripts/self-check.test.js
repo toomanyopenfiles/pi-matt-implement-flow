@@ -136,7 +136,7 @@ test('the flow-config extension file ships with the package', () => {
   assert.deepEqual(checkFlowConfigExtension(), []);
 });
 
-test('all three agents declare timeoutMs: 3600000 (1h run deadline, D19)', () => {
+test('all three agents declare timeoutMs: 3600000 (1h run deadline)', () => {
   assert.deepEqual(checkAgentTimeouts(readAgentFrontmatter()), []);
 });
 

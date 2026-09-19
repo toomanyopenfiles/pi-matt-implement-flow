@@ -2,7 +2,7 @@
 
 // /matt-flow-config 的纯逻辑层（无 pi 依赖、无 UI、文件访问全部可注入）。
 // UI 接线在 extensions/matt-flow-config.js；本文件只回答「改什么、怎么合并、
-// 生效值是什么」。所有事实出处见 docs/design/decisions.md D19。
+// 生效值是什么」。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,7 +11,7 @@ const PACKAGE_ID = 'pi-matt-implement-flow';
 const ROLES = ['coder', 'reviewer', 'final-reviewer'];
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-// --- 流程配置（settings.json 顶层自定义节；D20） ---
+// --- 流程配置（settings.json 顶层自定义节） ---
 // 本包自己的流程开关，只在 pi-matt-implement-flow 内生效——绝不写 subagents.*
 // 等平台键，平台对未知顶层键直接忽略。生效语义（方案乙）：run 启动时由编排器把
 // 生效值作为 init 事件旗标冻结进台账，此后 ledger 校验按快照执行，中途改配置
