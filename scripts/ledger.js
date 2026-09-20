@@ -14,6 +14,7 @@
 
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const schema = require('./ledger-schema');
 const core = require('./ledger-core');
@@ -49,7 +50,8 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
 说明:
   add      记账：脚本盖权威时间戳/单调序号/版本/git HEAD 锚点，append 后自动再生台账
   build    台账再生：四段 markdown（头部/表格/时间线/对账结论），确定性重建
-  check    对账：账实差异核验，非零退出码 = 有差异；派发与合并前、compaction 后必跑
+  check    对账：账实差异核验，非零退出码 = 有差异；派发与合并前、compaction 后必跑；
+           并对 final 事件的 runId 做 best-effort 平台证据核验（不可核验仅警告，不影响退出码）
   时间不由 LLM 提供；自由文本统一 --note；校验拒绝时给出原因，修正后重试；
   与校验器分歧 → add anomaly --note "..." 并停下上报（无任何绕过旗标）。
 `;
@@ -76,6 +78,12 @@ function loadEvents(eventsPath) {
     }
   }
   return { events, degraded: false, loadError: null };
+}
+
+// 平台会话目录名：--<仓库路径各段以 '-' 连接>--
+// （与 audit-report/collect.js 的 sessionDirName 同约定——探测口径同源，避免两处漂移）
+function sessionDirName(repoPath) {
+  return `--${repoPath.split(path.sep).filter(Boolean).join('-')}--`;
 }
 
 // --- 真相层采集（只读）---
@@ -161,6 +169,38 @@ function collectTruth({ runtimeDir, events }) {
         return { sha, subject, tokens };
       });
   }
+
+  // 终审平台证据探测（check 的 best-effort 核验；尊重 HOME，便于黑盒测试指向伪造 fixture）。
+  // 约定与审计工具同源：<HOME>/.pi/agent/sessions/--<仓库路径各段以 '-' 连接>--/subagent-artifacts/
+  // 下以 runId 开头的产物文件组（_meta.json / _output.md / _transcript.jsonl）。
+  // 主路径按仓库路径推导；推导不中时与审计工具同规则做全局兜底扫描。全程只读。
+  truth.finalEvidence = (runId) => {
+    const root = path.join(os.homedir(), '.pi', 'agent', 'sessions');
+    const dirs = [];
+    if (repoRoot) {
+      const primary = path.join(root, sessionDirName(repoRoot), 'subagent-artifacts');
+      if (fs.existsSync(primary)) dirs.push(primary);
+    }
+    if (!dirs.length) {
+      try {
+        for (const d of fs.readdirSync(root)) {
+          const cand = path.join(root, d, 'subagent-artifacts');
+          if (fs.existsSync(cand)) dirs.push(cand);
+        }
+      } catch {
+        /* 会话根不可读 → 不可核验（调用方按警告处理，不失败） */
+      }
+    }
+    for (const dir of dirs) {
+      try {
+        const files = fs.readdirSync(dir).filter((f) => f.startsWith(runId));
+        if (files.length) return { found: true, dir, files };
+      } catch {
+        /* 目录不可读，试下一个 */
+      }
+    }
+    return { found: false, dir: dirs[0] ?? null };
+  };
 
   // gh PR 状态：best-effort，不可用 → null（台账标 unknown，不编造）
   truth.probeGh = (branch) => {
@@ -346,18 +386,22 @@ function cmdBuild({ runtimeDir }) {
 function cmdCheck({ runtimeDir }) {
   const collected = collectOrReject({ runtimeDir, command: 'check' });
   if (!collected) return 1;
-  const { events, recon } = collected;
+  const { events, truth, recon } = collected;
+  // 终审平台证据核验：警告级、不影响退出码（best-effort 不误杀不可核验的账）
+  const evidenceWarnings = core.finalEvidenceWarnings({ events, truth });
   if (recon.diffs.length) {
     out(
       `✗ ${recon.diffs.length} 处账实差异（退出码 1）：`,
       ...recon.diffs.map((d, i) => `  ${i + 1}. ${d}`),
-      ...recon.warnings.map((w) => `⚠ ${w}`)
+      ...recon.warnings.map((w) => `⚠ ${w}`),
+      ...evidenceWarnings.map((w) => `⚠ ${w}`)
     );
     return 1;
   }
   const ticketCount = core.countTickets(events);
   out(`✓ 账实一致（票 ${ticketCount} 张，事件 ${events.length} 条）`);
   for (const w of recon.warnings) out(`⚠ ${w}`);
+  for (const w of evidenceWarnings) out(`⚠ ${w}`);
   return 0;
 }
 
