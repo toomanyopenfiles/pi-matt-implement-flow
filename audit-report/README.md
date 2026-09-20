@@ -32,10 +32,11 @@ node audit-report/report.js --runtime-dir <...> --ai-analysis <report>/ai-analys
 |---|---|
 | `index.html` | 运行总览（分支/spec/流程形态/PR/封账）、**异常与风险区**（确定性检出）、票目总表、叙述化事件时间线、用量与成本、名词表 |
 | `ticket-NN.html` | 每票完整证据链：派发任务书原文 → 实现者结构化报告与验收详情（含门禁输出）→ 评审裁决与问题清单全文 → 评审 diff → 修复轮 → 合并 |
-| `final.html` | 终审（整分支评审）结论与全文、异常记录与升级、封账对账、编排笔记全文 |
+| `final.html` | 终审（整分支评审）结论与全文（有 `final` 事件时裁决取自事件）、异常记录与升级、封账对账、编排笔记全文 |
 
 「异常与风险区」的确定性检出规则：失败的子代理运行、验收被拒、异常记录（anomaly）、
-升级（escalate）、修复轮耗尽预算、未封账、证据缺失、任务书未恢复等。
+升级（escalate）、修复轮耗尽预算、未封账、封账时最新终审裁决为 `not_ready`（带伤封账）、
+证据缺失、任务书未恢复等。
 
 ## AI 分析意见层（可选，两步回填）
 
@@ -59,6 +60,7 @@ node --test audit-report/collect.test.js
 | 证据 | 位置 | 用途 |
 |---|---|---|
 | 事件流 | `<运行目录>/events.jsonl` | 时间线、票状态机、运行 ID |
+| `final` 事件 | `<运行目录>/events.jsonl` 中的 `final` 事件 | 终审运行的 runId 与裁决：事件驱动路径的终审清单、成本桶与 findings 原文均由此定位（账上无 `final` 事件的旧账降级为下行的目录扫描） |
 | 平台证据四件套 | `~/.pi/agent/sessions/--<仓库路径>--/subagent-artifacts/<runId>_*` | 结构化输出、验收账、门禁输出、过程记录 |
 | 主会话 | `~/.pi/agent/sessions/--<仓库路径>--/*.jsonl` | 恢复每次派发任务书原文（平台 artifact 中的输入是红断占位，原文只在主会话） |
 | 票与 spec | `<repo>/.scratch/<slug>/` | 票面原文与标题 |

@@ -2,7 +2,7 @@
 // 收集器：从一次已完成的流程运行目录出发，汇集全部旁路证据，产出中间模型（纯数据，无渲染）。
 //
 // 数据源（全部只读）：
-//   1. <runtimeDir>/events.jsonl      事件流（时间线与状态机的骨架）
+//   1. <runtimeDir>/events.jsonl      事件流（时间线与状态机的骨架；run 级终审裁决取其中的 final 事件）
 //   2. <repo>/.scratch|spec|issues    票文件与 spec（票标题、票面原文）
 //   3. <runtimeDir>/notes.md          编排笔记（散文记忆）
 //   4. <runtimeDir>/reviews|findings  评审材料包与问题清单（评审者的输入与输出）
@@ -94,7 +94,7 @@ function emptyTicket(id) {
 }
 
 function buildRunModel(events) {
-  const run = { init: null, prs: [], close: null, anomalies: [], escalates: [] };
+  const run = { init: null, prs: [], close: null, anomalies: [], escalates: [], finals: [] };
   const tickets = new Map();
   const runRefs = []; // {runId, ticket, key, role, seq, ts}
   const ticketOf = (id) => {
@@ -109,6 +109,13 @@ function buildRunModel(events) {
       case 'anomaly': run.anomalies.push({ seq: e.seq, ts: e.ts, note: p.note || '' }); break;
       case 'escalate': run.escalates.push({ seq: e.seq, ts: e.ts, ticket: p.ticket, note: p.note || '' }); break;
       case 'close': run.close = { seq: e.seq, ts: e.ts, note: p.note || '' }; break;
+      case 'final': {
+        // run 级终审裁决：无 ticket，runId 必选（事件驱动审计与平台证据核验的唯一锚点）。
+        // 多轮终审 = 多条事件，一律以最新一条为准；派发终审的动作本身不记事件。
+        run.finals.push({ seq: e.seq, ts: e.ts, finalVerdict: p.finalVerdict, runId: p.runId, findings: p.findings || '', note: p.note || '' });
+        if (p.runId) runRefs.push({ runId: p.runId, ticket: 'final', key: `final-r${run.finals.length}`, role: 'final-reviewer', seq: e.seq, ts: e.ts });
+        break;
+      }
       case 'dispatch': {
         const t = ticketOf(p.ticket);
         // 修复后的重派发（fallback fresh coder）事件无 round 字段：按该票已消耗的修复数归入下一轮
@@ -305,7 +312,7 @@ function findBriefFor(briefs, key, eventTs) {
 function loadChildRun(dirs, ref, warnings) {
   const hit = findFilesForRun(dirs, ref.runId);
   if (!hit) {
-    warn(warnings, 'run-evidence-missing', `运行 ${ref.runId}（${ref.role}，票 ${ref.ticket}）未找到平台侧证据`);
+    warn(warnings, 'run-evidence-missing', `运行 ${ref.runId}（${ref.role}${ref.ticket && ref.ticket !== 'final' ? `，票 ${ref.ticket}` : '，run 级终审'}）未找到平台侧证据`);
     return { runId: ref.runId, found: false };
   }
   const { dir, files } = hit;
@@ -387,8 +394,29 @@ function loadChildRun(dirs, ref, warnings) {
   return run;
 }
 
-// ---------------------------------------------------------------- 终审运行（不在事件流，按 agent 名扫描）
+// ---------------------------------------------------------------- 终审运行（两条路径：事件驱动优先，旧账降级为目录扫描）
 
+// 事件驱动路径（ADR-0002 Decision 8）：终审运行引用直接取自 final 事件的 runId，
+// 裁决也取自事件（裁决权威在事件流）。不扫目录，因此时间窗过滤不适用——
+// 不存在“同项目历史终审混入”的问题，也不存在与降级路径双计的问题。
+function finalReviewsFromEvents(finals, candidates, warnings) {
+  return finals.map((f, i) => {
+    const ref = { runId: f.runId, ticket: 'final', key: `final-r${i + 1}`, role: 'final-reviewer', seq: f.seq, ts: f.ts };
+    const child = loadChildRun(candidates, ref, warnings);
+    return {
+      ...child,
+      source: 'event',
+      round: i + 1,
+      seq: f.seq,
+      ts: f.ts,
+      verdict: f.finalVerdict || null,
+      findings: f.findings || null,
+      note: f.note || '',
+    };
+  });
+}
+
+// 降级路径（无 final 事件的旧账）：现有「目录名扫描 + 时间窗过滤」行为不变。
 function findFinalReviews(candidates, timeWindow) {
   const out = [];
   for (const dir of candidates) {
@@ -436,8 +464,8 @@ function deriveRisks(model) {
     const c = model.childRuns[r.runId];
     if (c && c.found && c.exitCode != null && c.exitCode !== 0) {
       add('high', `一次 ${roleName(r.role)}运行以失败告终（退出码 ${c.exitCode}）`,
-        `票 ${r.ticket}（key ${r.key || '—'}）的这次运行失败或超时。台账只记最终结果，过程中的失败在此原样暴露。`,
-        [{ label: '运行', ref: r.runId }, { label: '票', ref: `ticket-${r.ticket}.html` }]);
+        `${ticketRef(r)}（key ${r.key || '—'}）的这次运行失败或超时。台账只记最终结果，过程中的失败在此原样暴露。`,
+        [{ label: '运行', ref: r.runId }, ...(r.ticket === 'final' ? [] : [{ label: '票', ref: `ticket-${r.ticket}.html` }])]);
     }
   }
   // R2 验收被拒
@@ -445,7 +473,7 @@ function deriveRisks(model) {
     const c = model.childRuns[r.runId];
     if (c && c.found && c.acceptance && /reject/i.test(String(c.acceptance.status))) {
       add('high', `一次 ${roleName(r.role)}运行的验收被拒收（${c.acceptance.status}）`,
-        `票 ${r.ticket}：平台验收检查未通过（可能缺证据、报告形状不对或门禁失败）。工作可能已完成但被要求重报。`,
+        `${ticketRef(r)}：平台验收检查未通过（可能缺证据、报告形状不对或门禁失败）。工作可能已完成但被要求重报。`,
         [{ label: '运行', ref: r.runId }]);
     }
   }
@@ -470,13 +498,21 @@ function deriveRisks(model) {
   if (!model.run.sealed) {
     add('medium', '运行未封账', '事件流中没有 close 记账，运行可能中途停止或仍进行中——报告反映的可能不是终局。', []);
   }
-  // R7 证据缺失
+  // R7 带伤封账：封账时最新终审裁决为 not_ready（用户拍板放弃的合法出口，但代码带着已知问题收场）
+  const finals = model.run.finals || [];
+  const latestFinal = finals.length ? finals[finals.length - 1] : null;
+  if (model.run.sealed && latestFinal && latestFinal.finalVerdict === 'not_ready') {
+    add('medium', '封账时最新终审裁决为 not_ready（带伤封账）',
+      '整分支终审判定未就绪，运行仍被封账——多半是用户拍板放弃的合法出口，但代码带着已知问题收场，值得回看终审问题清单。',
+      [{ label: '事件', ref: `seq ${latestFinal.seq}` }, { label: '运行', ref: latestFinal.runId }]);
+  }
+  // R8 证据缺失
   const missing = model.runRefs.filter((r) => !model.childRuns[r.runId] || !model.childRuns[r.runId].found);
   if (missing.length) {
     add('low', `${missing.length} 次运行的平台侧证据缺失`, '可能已被平台清理或落在其他项目的会话目录。相关票页会标注证据不可用，时间线与 git 事实不受影响。',
       missing.slice(0, 5).map((r) => ({ label: '运行', ref: r.runId })));
   }
-  // R8 任务书未恢复
+  // R9 任务书未恢复
   const noBrief = [];
   for (const t of model.tickets.values()) {
     for (const d of t.dispatches) {
@@ -486,7 +522,7 @@ function deriveRisks(model) {
   if (noBrief.length) {
     add('low', `${noBrief.length} 次派发的任务书原文未恢复`, `主会话数据中未匹配到这些派发的脚本原文（${noBrief.slice(0, 5).join('、')}${noBrief.length > 5 ? '…' : ''}）。其余证据不受影响。`, []);
   }
-  // R9 需修改裁决多
+  // R10 需修改裁决多
   for (const t of model.tickets.values()) {
     const cr = t.verdicts.filter((v) => v.verdict === 'changes_requested').length;
     if (cr >= 2) {
@@ -501,6 +537,11 @@ function deriveRisks(model) {
 
 function roleName(role) {
   return ROLE_LABEL[role] || role;
+}
+
+// 风险文案里的运行归属：票级运行写票号，run 级终审写“run 级终审”
+function ticketRef(ref) {
+  return ref.ticket === 'final' ? 'run 级终审' : `票 ${ref.ticket}`;
 }
 
 // ---------------------------------------------------------------- 成本统计
@@ -560,12 +601,25 @@ function collect({ runtimeDir }) {
   if (!sessionFiles.length) warn(warnings, 'main-session-missing', '未找到匹配的主会话记录，派发任务书原文不可恢复（其余证据不受影响）');
   const briefs = extractBriefs(sessionFiles);
 
-  // 终审时间窗：从首事件到末事件（容忍 5s 边界）
-  const timeWindow = events.length ? {
-    start: Date.parse(events[0].ts),
-    end: Date.parse(events[events.length - 1].ts),
-  } : null;
-  const finalReviews = findFinalReviews(candidates, timeWindow && timeWindow.start && timeWindow.end ? timeWindow : null);
+  // 终审汇集：事件驱动优先（ADR-0002 Decision 8）。账上有 final 事件 → 从事件取 runId 建终审运行
+  // 引用并入成本表与终审清单，不触发目录扫描（时间窗过滤对事件驱动路径不适用）；账上无 final
+  // 事件的旧账整体降级为现有「目录名扫描 + 时间窗过滤」路径，行为与升级前一致，两条路径不双计。
+  // 「记账前崩溃」的孤儿终审不补扫——恢复流程中被重派发的终审取代。
+  let finalReviews;
+  let finalReviewSource;
+  if (run.finals.length) {
+    finalReviewSource = 'event';
+    finalReviews = finalReviewsFromEvents(run.finals, candidates, warnings);
+  } else {
+    finalReviewSource = 'scan';
+    // 终审时间窗：从首事件到末事件（容忍 5s 边界）
+    const timeWindow = events.length ? {
+      start: Date.parse(events[0].ts),
+      end: Date.parse(events[events.length - 1].ts),
+    } : null;
+    finalReviews = findFinalReviews(candidates, timeWindow && timeWindow.start && timeWindow.end ? timeWindow : null)
+      .map((r) => ({ ...r, source: 'scan', verdict: (r.structuredValue && r.structuredValue.verdict) || null }));
+  }
 
   const ticketList = [...tickets.values()].sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
   loadTicketFiles(runtimeDir, repoPath, run, tickets, warnings);
@@ -590,6 +644,14 @@ function collect({ runtimeDir }) {
   const finalBundleRel = `.pi/matt-implement/${slug}/reviews/final.diff`;
   const fb = readText(path.join(repoPath, finalBundleRel), { max: 512 * 1024 });
   if (fb && typeof fb.text === 'string') bundles[finalBundleRel] = fb;
+
+  // 终审问题清单：与票级同构——按 final 事件的 findings 路径收录原文，不可读则告警而非静默
+  run.finals.forEach((f, i) => {
+    if (!f.findings) return;
+    const c = readText(path.join(repoPath, f.findings), { max: 256 * 1024 });
+    if (c && typeof c.text === 'string') findingsFiles[f.findings] = c;
+    else warn(warnings, 'findings-unreadable', `终审裁决引用的问题清单不可读：${f.findings}（第 ${i + 1} 轮终审）`);
+  });
 
   // 编排笔记
   const notesRaw = readText(path.join(runtimeDir, 'notes.md'), { max: 256 * 1024 });
@@ -616,6 +678,7 @@ function collect({ runtimeDir }) {
     childRuns,
     briefs,
     finalReviews,
+    finalReviewSource,
     notes,
     bundles,
     findingsFiles,

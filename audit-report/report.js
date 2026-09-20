@@ -82,7 +82,7 @@ function buildAiBrief(model) {
   lines.push('## 六、运行清单（runId × 角色 × 状态）');
   for (const r of model.runRefs) {
     const c = model.childRuns[r.runId];
-    lines.push(`- ${r.runId} [${r.role}] 票 ${r.ticket} key=${r.key} ${c && c.found ? `exit=${c.exitCode} 验收=${c.acceptance ? c.acceptance.status : '—'} 模型=${c.model}` : '证据缺失'}`);
+    lines.push(`- ${r.runId} [${r.role}] ${r.ticket === 'final' ? 'run 级终审' : `票 ${r.ticket}`} key=${r.key} ${c && c.found ? `exit=${c.exitCode} 验收=${c.acceptance ? c.acceptance.status : '—'} 模型=${c.model}` : '证据缺失'}`);
   }
   lines.push('');
   return lines.join('\n');
