@@ -238,6 +238,10 @@ function narrateEvent(e) {
     }
     case 'fix': return `票 ${esc(p.ticket)} ${t('修复轮', 'fix round')} ${esc(p.fixNo)}：${t('续跑', 'resume')}同一实现者（key <code>${esc(p.key)}</code>）${p.note ? `——${esc(p.note)}` : ''}。`;
     case 'merge': return `票 ${esc(p.ticket)} <b>合并</b>：merge ${sha(p.mergeSha)}${p.note ? `，${esc(p.note)}` : ''}。`;
+    case 'final': {
+      const [label] = VERDICT_LABEL[p.finalVerdict] || [p.finalVerdict];
+      return `${t('终审', 'final review')}裁决：<b>${esc(label)}</b>（运行 <code>${esc((p.runId || '').slice(0, 8))}</code>）${p.findings ? `，问题清单 <code>${esc(path.basename(p.findings))}</code>` : ''}。`;
+    }
     case 'escalate': return `票 ${esc(p.ticket)} <b class="bad-text">${t('升级', 'escalate')}</b>：${esc(p.note || '预算耗尽，移交维护者。')}`;
     case 'anomaly': return `<b class="bad-text">${t('异常记录', 'anomaly')}</b>：${esc(p.note)}`;
     case 'close': return `<b>${t('封账', 'close')}</b>：运行终结。${esc(p.note || '')}`;
@@ -267,9 +271,9 @@ function renderCost(model) {
   <h2>用量与成本</h2>
   <table class="table">
     <thead><tr><th>环节</th><th>运行次数</th><th>成本</th><th>token</th></tr></thead>
-    <tbody>${rows}<tr class="total"><td>合计（不含终审）</td><td>—</td><td>${fmtCost(model.stats.totalCost)}</td><td>${fmtTokens(model.stats.totalTokens)}</td></tr></tbody>
+    <tbody>${rows}<tr class="total"><td>合计</td><td>—</td><td>${fmtCost(model.stats.totalCost)}</td><td>${fmtTokens(model.stats.totalTokens)}</td></tr></tbody>
   </table>
-  <p class="muted">口径：仅事件流中有运行 ID 记录的子代理；终审运行不在${term('事件流', 'event stream')}中，另见 <a href="final.html">终审与收尾</a>。</p>
+  <p class="muted">口径：事件流中有运行 ID 记录的子代理（含 run 级终审——其运行 ID 由 final 事件承载）；旧账无 final 事件时终审运行降级为平台证据目录扫描汇集，见 <a href="final.html">终审与收尾</a>。</p>
 </section>`;
 }
 
@@ -428,7 +432,7 @@ function fmtSize(o) {
 function renderFinal(model) {
   const fr = model.finalReviews;
   const parts = [];
-  parts.push(`<div class="page-head"><h1>终审与收尾</h1><p class="muted">终审运行不经${term('事件流', 'event stream')}记账，本页按平台证据独立汇集。</p></div>`);
+  parts.push(`<div class="page-head"><h1>终审与收尾</h1><p class="muted">终审运行由${term('事件流', 'event stream')}的 <code>final</code> 事件驱动汇集（runId 与裁决均取自事件）；旧账无 final 事件时降级为平台证据目录扫描。</p></div>`);
 
   if (!fr.length) {
     parts.push('<p class="muted">未找到终审（final-reviewer）运行证据。</p>');
@@ -437,12 +441,18 @@ function renderFinal(model) {
     const bundle = bundleKey ? model.bundles[bundleKey] : null;
     for (const c of fr) {
       const u = c.usage || {};
-      const verdict = c.structuredValue && (c.structuredValue.verdict || null);
+      const verdict = c.verdict || (c.structuredValue && c.structuredValue.verdict) || null;
       const [label, cls] = verdict ? (VERDICT_LABEL[verdict] || [verdict, '']) : ['（结构化结论未提取，见全文）', ''];
+      const findings = c.findings ? model.findingsFiles[c.findings] : null;
       parts.push(`
 <div class="step">
   <div class="step-title">${term('终审', 'final review')} 运行 <code>${esc(c.runId.slice(0, 8))}</code> <span class="muted">· 模型 ${esc(c.model || '—')} · 成本 ${fmtCost(u.cost)}</span></div>
-  <div class="card">结论 <span class="pill ${cls}">${esc(label)}</span></div>
+  <div class="card">结论 <span class="pill ${cls}">${esc(label)}</span>${c.seq != null ? ` <span class="muted small">· 记账序号 ${esc(c.seq)} · ${esc(fmtTs(c.ts))}</span>` : ''}</div>
+  ${c.findings
+    ? findings
+      ? details(`问题清单全文（${esc(path.basename(c.findings))}）`, codeBlock(findings.text))
+      : `<div class="card muted">问题清单文件缺失或不可读：<code>${esc(c.findings)}</code>（可能已被清理）</div>`
+    : ''}
   ${c.structuredValue ? details('结构化结论（原始字段）', codeBlock(JSON.stringify(c.structuredValue, null, 2))) : ''}
   ${c.outputMd ? details('终审报告全文', codeBlock(c.outputMd)) : ''}
   ${bundle ? details(`整分支评审材料包（${fmtSize(bundle)}）`, bundle.truncated ? `${diffBlock(bundle.text)}<div class="muted">（已截断）</div>` : diffBlock(bundle.text)) : ''}

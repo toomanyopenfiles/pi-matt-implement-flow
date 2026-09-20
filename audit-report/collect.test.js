@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
+  collect,
   parseEvents,
   buildRunModel,
   extractKeysFromScript,
@@ -98,6 +99,88 @@ return r;`;
     cleanup: () => {
       fs.rmSync(dir, { recursive: true, force: true });
       // 假会话目录写在 ~/.pi/agent/sessions/ 下，必须一并清理，避免污染真实会话数据
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    },
+  };
+}
+
+// ---------------------------------------------------------------- 终审入流 fixture 工厂
+
+// 终审运行的 runId 常量：事件驱动路径的唯一锚点
+const FINAL_RUN_ID = '44444444-dddd-4ddd-8ddd-dddddddddddd';
+const FINAL_RUN_ID_2 = '55555555-eeee-4eee-8eee-eeeeeeeeeeee';
+// 同项目会话里未被任何 final 事件引用的终审运行（窗口内/窗口外各一，用于分辨两条路径）
+const STRAY_IN_WINDOW = '66666666-ffff-4fff-8fff-ffffffffffff';
+const STRAY_HISTORIC = '77777777-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+function writeRunArtifact(ad, runId, agentName, { ts, cost = 0.01, input = 1000, output = 100, structured = null, outputMd = '输出全文。\n' } = {}) {
+  fs.writeFileSync(path.join(ad, `${runId}_${agentName}_meta.json`), JSON.stringify({
+    runId, agent: agentName, exitCode: 0, model: 'test/model', timestamp: ts,
+    usage: { input, output, cost }, acceptance: { status: 'not-required' },
+  }));
+  fs.writeFileSync(path.join(ad, `${runId}_${agentName}_output.md`), outputMd);
+  const lines = structured
+    ? [{ type: 'message', timestamp: new Date(ts).toISOString(), message: { role: 'assistant', content: [{ type: 'toolCall', name: 'structured_output', id: 'tc1', arguments: { value: structured } }] } }]
+    : [];
+  fs.writeFileSync(path.join(ad, `${runId}_${agentName}_transcript.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+}
+
+// 终审入流 fixture：事件流（可含 final 事件）+ 伪造平台证据目录。
+// finals: [{runId, verdict, findings?}] 按入账顺序写入 final 事件；
+// stray: [{runId, ts, verdict?, cost?}] 只存在于平台证据目录、不被任何事件引用。
+function makeFinalFixture({ finals = [], stray = [], findingsFiles = {} } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-final-'));
+  const repo = path.join(dir, 'repo');
+  const runtimeDir = path.join(repo, '.pi', 'matt-implement', 'demo');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(repo, '.scratch', 'demo', 'issues'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'spec.md'), '# demo spec\n');
+  fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'issues', '01-first.md'), '# 01: 第一张票\n\n做一件事。\n');
+  for (const [rel, text] of Object.entries(findingsFiles)) {
+    const abs = path.join(repo, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, text);
+  }
+
+  const events = [
+    { v: 2, seq: 1, ts: '2026-09-18T18:00:00.000Z', head: 'aa0', type: 'init', payload: { branch: 'feat/demo', branchBase: 'main', baselineSha: 'aa0000', spec: '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local', reviewer: 'on', maxFixRounds: 2, maxConcurrent: 3 } },
+    { v: 2, seq: 2, ts: '2026-09-18T18:10:00.000Z', head: 'aa0', type: 'dispatch', payload: { ticket: '01', key: 't-01', runId: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa', worktree: 'true' } },
+    { v: 2, seq: 3, ts: '2026-09-18T18:20:00.000Z', head: 'aa0', type: 'settled', payload: { ticket: '01', round: 1, headSha: 'bb1111', gate: 'npm test 5/5' } },
+    { v: 2, seq: 4, ts: '2026-09-18T18:25:00.000Z', head: 'aa0', type: 'verdict', payload: { ticket: '01', round: 1, verdict: 'approved', revRunId: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb' } },
+    { v: 2, seq: 5, ts: '2026-09-18T18:30:00.000Z', head: 'aa0', type: 'merge', payload: { ticket: '01', headSha: 'bb1111', mergeSha: 'cc2222' } },
+  ];
+  finals.forEach((f, i) => {
+    events.push({
+      v: 2, seq: events.length + 1, ts: `2026-09-18T18:4${i}:00.000Z`, head: 'aa0', type: 'final',
+      payload: { finalVerdict: f.verdict, runId: f.runId, ...(f.findings ? { findings: f.findings } : {}) },
+    });
+  });
+  events.push({ v: 2, seq: events.length + 1, ts: '2026-09-18T19:00:00.000Z', head: 'aa0', type: 'close', payload: { note: '运行终结。' } });
+  fs.writeFileSync(path.join(runtimeDir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+  const sessionDir = path.join(os.homedir(), '.pi', 'agent', 'sessions', `--${repo.split(path.sep).filter(Boolean).join('-')}--`);
+  const ad = path.join(sessionDir, 'subagent-artifacts');
+  fs.mkdirSync(ad, { recursive: true });
+  writeRunArtifact(ad, '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'pi-matt-implement-flow.coder', { ts: Date.parse('2026-09-18T18:15:00.000Z'), cost: 0.05 });
+  writeRunArtifact(ad, '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'pi-matt-implement-flow.reviewer', { ts: Date.parse('2026-09-18T18:24:00.000Z'), cost: 0.03, structured: { verdict: 'approved' } });
+  finals.forEach((f, i) => {
+    writeRunArtifact(ad, f.runId, 'pi-matt-implement-flow.final-reviewer', {
+      ts: Date.parse(`2026-09-18T18:4${i}:30.000Z`), cost: 0.02, input: 800, output: 80,
+      structured: { verdict: f.verdict, standards: 'ok', spec: 'ok' }, outputMd: '终审报告全文。\n',
+    });
+  });
+  for (const s of stray) {
+    writeRunArtifact(ad, s.runId, 'pi-matt-implement-flow.final-reviewer', {
+      ts: Date.parse(s.ts), cost: s.cost == null ? 0.5 : s.cost,
+      structured: { verdict: s.verdict || 'ready_with_fixes' },
+    });
+  }
+
+  return {
+    dir, repo, runtimeDir, sessionDir, ad,
+    cleanup: () => {
+      fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(sessionDir, { recursive: true, force: true });
     },
   };
@@ -229,6 +312,108 @@ test('buildRunModel：无 round 的 fallback 重派发按已耗修复数归入�
   const t = tickets.get('01');
   assert.equal(t.dispatches[0].round, 1);
   assert.equal(t.dispatches[1].round, 2);
+});
+
+// ---------------------------------------------------------------- 终审入流：事件驱动优先 + 旧账降级
+
+test('collect：含 final 事件的账走事件驱动路径——终审进成本表、清单与裁决来自事件、不触发目录扫描', () => {
+  const fx = makeFinalFixture({
+    finals: [
+      { runId: FINAL_RUN_ID, verdict: 'ready_with_fixes', findings: '.pi/matt-implement/demo/findings/final-r1.md' },
+      { runId: FINAL_RUN_ID_2, verdict: 'ready', findings: '.pi/matt-implement/demo/findings/final-r2.md' },
+    ],
+    // 窗口内但不被任何 final 事件引用的终审运行：扫描路径会收，事件驱动路径不得收
+    stray: [{ runId: STRAY_IN_WINDOW, ts: '2026-09-18T18:35:00.000Z', cost: 9 }],
+    findingsFiles: { '.pi/matt-implement/demo/findings/final-r1.md': '## P1 — 终审发现\n跨票漂移。\n' },
+  });
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    assert.equal(model.finalReviewSource, 'event', '有 final 事件即走事件驱动路径');
+    assert.equal(model.finalReviews.length, 2, '终审清单 = final 事件数');
+    assert.deepEqual(model.finalReviews.map((f) => f.runId), [FINAL_RUN_ID, FINAL_RUN_ID_2], '终审运行 ID 取自事件');
+    assert.deepEqual(model.finalReviews.map((f) => f.verdict), ['ready_with_fixes', 'ready'], '裁决取自事件');
+    assert.ok(model.finalReviews.every((f) => f.found), '事件引用的 runId 直接定位平台证据');
+    assert.ok(!model.finalReviews.some((f) => f.runId === STRAY_IN_WINDOW), '不扫目录：未被事件引用的终审不得混入');
+    assert.ok(!model.warnings.some((w) => w.code === 'run-evidence-missing' && w.detail.includes(FINAL_RUN_ID)), '被引用的终审证据齐备时不得报证据缺失');
+
+    // 成本表：终审桶（角色「终审」）+ 成本/用量计入总计
+    const bucket = model.stats.byRole['final-reviewer'];
+    assert.ok(bucket, '终审进成本表');
+    assert.equal(bucket.runs, 2);
+    assert.ok(Math.abs(bucket.cost - 0.04) < 1e-9, `终审桶成本应为 0.04，得到 ${bucket.cost}`);
+    assert.equal(bucket.tokens, 2 * 880);
+    assert.ok(Math.abs(model.stats.totalCost - 0.12) < 1e-9, `总计应含终审成本（0.05+0.03+0.04），得到 ${model.stats.totalCost}`);
+    assert.equal(model.stats.finalReviews, 2);
+
+    // findings 原文按路径收录；不可读的路径标警告而非崩溃
+    assert.match(model.findingsFiles['.pi/matt-implement/demo/findings/final-r1.md'].text, /跨票漂移/);
+    assert.ok(
+      model.warnings.some((w) => w.code === 'findings-unreadable' && /终审/.test(w.detail)),
+      '终审 findings 缺失应警告',
+    );
+
+    // 封账时最新终审为 ready（非 not_ready）→ 不产出带伤封账风险项
+    assert.ok(!model.risks.some((r) => /not_ready/.test(r.title)));
+
+    // 渲染：终审页展示事件裁决与 findings 原文（缺失则占位）
+    const out = path.join(fx.dir, 'report');
+    renderAll(model, out, null);
+    const finalPage = fs.readFileSync(path.join(out, 'final.html'), 'utf8');
+    assert.ok(finalPage.includes('可交付但需修'), '终审裁决渲染进报告');
+    assert.ok(finalPage.includes('跨票漂移'), '终审 findings 原文收录进报告');
+    assert.ok(finalPage.includes('缺失或不可读'), '不可读的 findings 渲染占位');
+    assert.ok(fs.readFileSync(path.join(out, 'index.html'), 'utf8').includes('终审'), '成本表含终审桶');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect：无 final 事件的旧账整体降级为目录扫描 + 时间窗过滤（行为与现状一致，不双计）', () => {
+  const fx = makeFinalFixture({
+    finals: [],
+    stray: [
+      { runId: STRAY_IN_WINDOW, ts: '2026-09-18T18:35:00.000Z', verdict: 'ready_with_fixes', cost: 0.14 },
+      { runId: STRAY_HISTORIC, ts: '2026-09-01T10:00:00.000Z', verdict: 'not_ready', cost: 0.99 },
+    ],
+  });
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    assert.equal(model.finalReviewSource, 'scan', '无 final 事件即降级为目录扫描');
+    assert.deepEqual(model.finalReviews.map((f) => f.runId), [STRAY_IN_WINDOW], '时间窗过滤仍在：历史终审不得混入');
+    assert.equal(model.finalReviews[0].verdict, 'ready_with_fixes', '降级路径裁决仍取自终审运行的结构化输出');
+    assert.equal(model.stats.finalReviews, 1);
+    assert.equal(model.stats.byRole['final-reviewer'], undefined, '降级路径终审不进成本表（与现状一致，不与事件路径双计）');
+    assert.ok(!model.risks.some((r) => /not_ready/.test(r.title)), '风险项以 final 事件为准，不采信扫描结果');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect：封账时最新终审为 not_ready → 一条 medium 风险项；后续裁决覆盖即消失', () => {
+  const fx = makeFinalFixture({
+    finals: [{ runId: FINAL_RUN_ID, verdict: 'ready' }, { runId: FINAL_RUN_ID_2, verdict: 'not_ready' }],
+  });
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    const risk = model.risks.find((r) => r.title.includes('not_ready'));
+    assert.ok(risk, '封账时最新终审 not_ready 应产出风险项');
+    assert.equal(risk.severity, 'medium');
+    assert.ok(risk.evidence.some((e) => String(e.ref).includes('seq')), '风险项可回溯到 final 事件序号');
+    // 未封账的运行不产出该风险项（未封账另有风险项）
+    assert.ok(!deriveRisks({ ...model, run: { ...model.run, sealed: false } }).some((r) => r.title.includes('not_ready')));
+  } finally {
+    fx.cleanup();
+  }
+
+  const fx2 = makeFinalFixture({
+    finals: [{ runId: FINAL_RUN_ID, verdict: 'not_ready' }, { runId: FINAL_RUN_ID_2, verdict: 'ready' }],
+  });
+  try {
+    const model2 = collect({ runtimeDir: fx2.runtimeDir });
+    assert.ok(!model2.risks.some((r) => r.title.includes('not_ready')), '一律以最新裁决为准：后续 ready 覆盖 not_ready');
+  } finally {
+    fx2.cleanup();
+  }
 });
 
 test('deriveRisks：证据缺失与任务书未恢复降级为 low 且不崩溃', () => {
