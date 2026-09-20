@@ -20,6 +20,8 @@
 
 const TICKET_BRANCH = (num) => `ticket-${num}`;
 const short = (sha) => (sha ? String(sha).slice(0, 7) : 'unknown');
+// 平台 runId（UUID）短码：8 位，与审计工具的报告渲染同约定
+const shortRunId = (id) => (id ? String(id).slice(0, 8) : 'unknown');
 const pad2 = (n) => String(Number(n)).padStart(2, '0');
 
 function compactTime(ts) {
@@ -255,6 +257,17 @@ function gateAdd({ events, type, payload, truth }) {
     case 'escalate': {
       if (t && t.escalates.length) warnings.push(`票 ${num} 已有 escalate 事件——重复升级（警告）`);
       if (t && !t.dispatches.length) warnings.push(`票 ${num} 尚无 dispatch 事件就升级（警告）`);
+      break;
+    }
+    case 'final': {
+      // run 级裁决：无 ticket、不随流程形态漂移（reviewer=off 的运行终审照跑照记）。
+      // 尚无 merge 事件 = 终审跑在票闭环之前，属流程异常而非事实矛盾——警告不拒绝。
+      // 多轮终审 = 多条事件：不设 round 校验、不设同事件去重（一律以最新裁决为准）。
+      if (!events.some((e) => e.type === 'merge')) {
+        warnings.push(
+          '本 run 尚无 merge 事件就有 final——终审通常发生在全部票闭环之后（流程异常，警告不拒绝）'
+        );
+      }
       break;
     }
     case 'close': {
@@ -510,6 +523,11 @@ function renderEvent(e) {
       break;
     case 'escalate':
       parts.push(`ticket=${p.ticket}`);
+      break;
+    case 'final':
+      // 紧凑裁决形式：final verdict=… （不是 final finalVerdict=… 的键名 stutter）；runId 用短码
+      parts.push(`verdict=${p.finalVerdict}`, `runId=${shortRunId(p.runId)}`);
+      if (p.findings) parts.push(`findings=${p.findings}`);
       break;
     case 'pr':
       parts.push(`state=${p.state}`);

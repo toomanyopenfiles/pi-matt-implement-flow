@@ -39,6 +39,9 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
   fix         --ticket --fix-no --key --resume-run-id [--note]
   merge       --ticket --head-sha --merge-sha [--note]
   escalate    --ticket [--note]
+  final       --final-verdict(ready|ready_with_fixes|not_ready) --run-id <runId> [--findings] [--note]
+              # 整分支终审裁决（run 级，无 ticket）；runId 必选——事件驱动审计与平台证据核验的锚点。
+              # 多轮终审 = 多条事件（无去重，一律以最新裁决为准）；无 merge 事件时警告入账。
   anomaly     --note
   pr          --state(opened-draft|ready) [--url] [--note]
   close       [--note]
