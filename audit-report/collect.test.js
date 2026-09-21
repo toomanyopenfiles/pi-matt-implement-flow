@@ -417,11 +417,14 @@ test('collect：封账时最新终审为 not_ready → 一条 medium 风险项�
 });
 
 test('deriveRisks：证据缺失与任务书未恢复降级为 low 且不崩溃', () => {
+  // 运行 ID 必须是 UUID 形状：非 UUID 形状的 runRef 是记账污染的死数据（另有用例覆盖），
+  // 本用例要考的是「活运行但平台证据缺失」这条路径。
+  const ghostRunId = '99999999-9999-4999-8999-999999999999';
   const model = {
     run: { init: { maxFixRounds: 2 }, anomalies: [], escalates: [], sealed: false, prs: [] },
-    tickets: new Map([['01', { id: '01', dispatches: [{ key: 't-01', ts: 't' }], verdicts: [], fixes: [], merges: [] }]]),
-    runRefs: [{ runId: 'ghost', ticket: '01', key: 't-01', role: 'coder' }],
-    childRuns: { ghost: { runId: 'ghost', found: false } },
+    tickets: new Map([['01', { id: '01', dispatches: [{ key: 't-01', ts: 't', runId: ghostRunId }], verdicts: [], fixes: [], merges: [] }]]),
+    runRefs: [{ runId: ghostRunId, ticket: '01', key: 't-01', role: 'coder' }],
+    childRuns: { [ghostRunId]: { runId: ghostRunId, found: false } },
     briefs: [],
   };
   const risks = deriveRisks(model);
@@ -429,4 +432,198 @@ test('deriveRisks：证据缺失与任务书未恢复降级为 low 且不崩溃'
   assert.ok(codes.includes('证据缺失'));
   assert.ok(codes.includes('任务书原文未恢复'));
   assert.ok(codes.includes('未封账'));
+});
+
+// ---------------------------------------------------------------- 审计严密度（票 02）：已恢复降级 + 死 runRef 机判
+
+// 运行 ID 常量：被拒/失败的运行（平台证据带 acceptance 拒收或非零退出码）、补正后的运行、污染 runId
+const REJECTED_RUN_ID = 'a1a1a1a1-1111-4111-8111-111111111111';
+const FAILED_RUN_ID = 'a3a3a3a3-3333-4333-8333-333333333333';
+const REVIEW_RUN_ID = 'a4a4a4a4-4444-4444-8444-444444444444';
+const CORRECTED_RUN_ID = 'b2b2b2b2-2222-4222-8222-222222222222';
+const REVIEW2_RUN_ID = 'b3b3b3b3-3333-4333-8333-333333333333';
+// 记账污染的死数据：真实事故里 shell 变量被写进 --run-id，runId 成了包名（非 UUID 形状）
+const DEAD_RUN_ID = 'demo-broken-runid';
+
+// 审计严密度 fixture：事件流 + 平台证据 + 主会话。
+//   recovery=false      → 拒收后无同票后续结算（未恢复用例）
+//   doubleRejection=true → 票 01 先拒收、再失败（两次事故）、最后一次被后续成功 settle 恢复
+// 票 02 恒有一条污染 runId 的 dispatch + 一条补正后的 dispatch（死 runRef 机判用例）。
+function makeHardeningFixture({ recovery = true, doubleRejection = false } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-hardening-'));
+  const repo = path.join(dir, 'repo');
+  const runtimeDir = path.join(repo, '.pi', 'matt-implement', 'demo');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(repo, '.scratch', 'demo', 'issues'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'spec.md'), '# demo spec\n');
+  fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'issues', '01-first.md'), '# 01: 第一张票\n\n做一件事。\n');
+  fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'issues', '02-second.md'), '# 02: 第二张票\n\n做另一件事。\n');
+
+  const base = Date.parse('2026-09-18T18:00:00.000Z');
+  const events = [];
+  const push = (type, payload) => {
+    events.push({ v: 2, seq: events.length + 1, ts: new Date(base + events.length * 60000).toISOString(), head: 'aa0', type, payload });
+    return events.length; // 返回该事件的序号，供断言引用
+  };
+
+  push('init', { branch: 'feat/demo', branchBase: 'main', baselineSha: 'aa0000', spec: '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local', reviewer: 'on', maxFixRounds: 2, maxConcurrent: 3 });
+  const seqs = {};
+  seqs.rejected = push('dispatch', { ticket: '01', key: 't-01', runId: REJECTED_RUN_ID, worktree: '/tmp/wt-a' });
+  if (doubleRejection) seqs.failed = push('dispatch', { ticket: '01', key: 't-01-fresh', runId: FAILED_RUN_ID, worktree: '/tmp/wt-b' });
+  if (recovery) {
+    push('fix', { ticket: '01', fixNo: 1, key: 'fix-01-r1', resumeRunId: doubleRejection ? FAILED_RUN_ID : REJECTED_RUN_ID, note: '补全验收报告字段后重报' });
+    seqs.settle = push('settled', { ticket: '01', round: 2, headSha: 'dd3333', worktree: '/tmp/wt-a', gate: 'npm test 5 pass / 0 fail' });
+    push('verdict', { ticket: '01', round: 2, verdict: 'approved', revRunId: REVIEW_RUN_ID, note: '补正后零 findings' });
+    push('merge', { ticket: '01', headSha: 'dd3333', mergeSha: 'ee4444', note: '合并后全量绿' });
+  }
+  seqs.dead = push('dispatch', { ticket: '02', key: 't-02', runId: DEAD_RUN_ID, worktree: '/tmp/wt-c' }); // 污染记账：死数据
+  push('dispatch', { ticket: '02', key: 't-02-corrected', runId: CORRECTED_RUN_ID, worktree: '/tmp/wt-c', note: '修正污染记录的 runId' });
+  push('settled', { ticket: '02', round: 1, headSha: 'ff5555', worktree: '/tmp/wt-c', gate: 'npm test 6 pass / 0 fail' });
+  push('verdict', { ticket: '02', round: 1, verdict: 'approved', revRunId: REVIEW2_RUN_ID, note: '零 findings' });
+  push('merge', { ticket: '02', headSha: 'ff5555', mergeSha: 'aa6666', note: '合并后全量绿' });
+  push('close', { note: '两票闭环。' });
+  fs.writeFileSync(path.join(runtimeDir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+  // 主会话：一波派发脚本（key 里只有 t-01 与补正后的 t-02-corrected——污染记录 key t-02 不在其中）+ 一次 resume
+  const sessionDir = path.join(os.homedir(), '.pi', 'agent', 'sessions', `--${repo.split(path.sep).filter(Boolean).join('-')}--`);
+  const ad = path.join(sessionDir, 'subagent-artifacts');
+  fs.mkdirSync(ad, { recursive: true });
+  const waveScript = `const root = ${JSON.stringify(repo)};
+const results = await runs.all([
+  { key: 't-01', agent: 'pi-matt-implement-flow.coder', task: 'Ticket 01: 第一张票。Base commit: aa0000. Test command: npm test.', worktree: true },
+  { key: 't-02-corrected', agent: 'pi-matt-implement-flow.coder', task: 'Ticket 02: 第二张票。Base commit: aa0000. Test command: npm test.', worktree: true },
+]);
+return results;`;
+  const resumeScript = `const r = await runs.run('fix-01-r1', { resume: '${doubleRejection ? FAILED_RUN_ID : REJECTED_RUN_ID}', task: '验收报告缺字段：补齐后重报。' });`;
+  const sessionFile = path.join(sessionDir, '2026-09-18T17-59-00-000Z_demo.jsonl');
+  fs.writeFileSync(sessionFile, [
+    { type: 'message', timestamp: '2026-09-18T17:59:59.000Z', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'subagent', id: 'tc1', arguments: { workflowScript: waveScript, async: true } }] } },
+    { type: 'message', timestamp: '2026-09-18T18:05:59.000Z', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'subagent', id: 'tc2', arguments: { workflowScript: resumeScript, async: true } }] } },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+
+  // 平台证据：被拒的运行（acceptance rejected）/ 失败的运行（退出码 1）/ 补正后的运行（验收通过）
+  const writeCoder = (runId, acceptance, exitCode = 0) => {
+    fs.writeFileSync(path.join(ad, `${runId}_pi-matt-implement-flow.coder_meta.json`), JSON.stringify({
+      runId, agent: 'pi-matt-implement-flow.coder', exitCode, model: 'test/model', usage: { input: 1000, output: 100, cost: 0.01 },
+      ...(acceptance ? { acceptance } : {}),
+    }));
+    fs.writeFileSync(path.join(ad, `${runId}_pi-matt-implement-flow.coder_output.md`), '实现完成。\n');
+  };
+  const writeReviewer = (runId, verdict) => {
+    fs.writeFileSync(path.join(ad, `${runId}_pi-matt-implement-flow.reviewer_meta.json`), JSON.stringify({
+      runId, agent: 'pi-matt-implement-flow.reviewer', exitCode: 0, model: 'test/model', usage: { input: 500, output: 50, cost: 0.005 }, acceptance: { status: 'not-required' },
+    }));
+    fs.writeFileSync(path.join(ad, `${runId}_pi-matt-implement-flow.reviewer_output.md`), '两轴聚合完成。\n');
+    fs.writeFileSync(path.join(ad, `${runId}_pi-matt-implement-flow.reviewer_transcript.jsonl`),
+      JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'structured_output', arguments: { value: { verdict } } }] } }) + '\n');
+  };
+  writeCoder(REJECTED_RUN_ID, {
+    status: 'rejected', evidenceStatus: 'missing',
+    runtimeChecks: [{ id: 'evidence:residual-risks', status: 'failed', message: 'missing' }],
+    verifyRuns: [{ id: 'gate', command: 'npm test', status: 'passed', exitCode: 0, durationMs: 100, stdout: '5 pass 0 fail' }],
+    childReport: { headSha: 'dd3333' },
+  });
+  if (doubleRejection) writeCoder(FAILED_RUN_ID, null, 1);
+  writeCoder(CORRECTED_RUN_ID, { status: 'passed', evidenceStatus: 'complete' });
+  writeReviewer(REVIEW_RUN_ID, 'approved');
+  writeReviewer(REVIEW2_RUN_ID, 'approved');
+
+  return {
+    dir, repo, runtimeDir, sessionDir, ad, seqs,
+    cleanup: () => {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    },
+  };
+}
+
+test('collect：拒收的运行同票后续成功 settle → 降 medium 标「后续运行已恢复」并附恢复运行引用', () => {
+  const fx = makeHardeningFixture();
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    const risk = model.risks.find((r) => r.title.includes('验收被拒收'));
+    assert.ok(risk, '被拒收的运行应产出风险项');
+    assert.equal(risk.severity, 'medium', '同票后续有成功 settle：降为 medium（不删除风险本体）');
+    assert.ok(risk.title.includes('后续运行已恢复'), '标题标注「后续运行已恢复」');
+    assert.ok(risk.detail.includes('后续运行已恢复'), 'detail 说明降级依据（哪个后续运行恢复了它）');
+    assert.ok(risk.title.includes(`（rejected）`), '风险本体文案保留：标签不替换事实');
+    assert.ok(risk.evidence.some((e) => e.label === '恢复运行' && e.ref === REJECTED_RUN_ID), 'evidence 附恢复运行 runRef（resume 复用同一运行）');
+    assert.ok(risk.evidence.some((e) => e.ref === `seq ${fx.seqs.settle}`), 'evidence 附恢复结算事件序号');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect：拒收后同票无后续成功 settle → 维持 high 原样（零行为变化）', () => {
+  const fx = makeHardeningFixture({ recovery: false });
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    const risk = model.risks.find((r) => r.title.includes('验收被拒收'));
+    assert.ok(risk, '被拒收的运行仍应产出风险项');
+    assert.equal(risk.severity, 'high', '从未恢复：维持 high');
+    assert.ok(!risk.title.includes('后续运行已恢复'), '不得标注「已恢复」');
+    assert.ok(!/恢复/.test(risk.detail), 'detail 不得出现恢复叙述');
+    assert.ok(!risk.evidence.some((e) => e.label === '恢复运行' || e.label === '恢复结算'), '不得附恢复引用');
+    assert.ok(risk.evidence.some((e) => e.label === '运行' && e.ref === REJECTED_RUN_ID), '原有运行引用不变');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect：非 UUID 形状 runId 的 runRef 是死数据——不探测平台证据、不产出证据缺失类风险', () => {
+  const fx = makeHardeningFixture();
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    assert.ok(!model.runRefs.some((r) => r.runId === DEAD_RUN_ID), '死 runRef 不进运行清单（不当作一次运行）');
+    assert.deepEqual(model.deadRunRefs.map((r) => r.runId), [DEAD_RUN_ID], '死 runRef 单独留痕，供人核对');
+    assert.ok(!model.childRuns[DEAD_RUN_ID], '不为其探测平台证据（childRuns 无该键）');
+    assert.ok(model.warnings.some((w) => w.code === 'run-ref-dead' && w.detail.includes(DEAD_RUN_ID)), '死数据以告警留痕而非静默');
+    assert.ok(!model.warnings.some((w) => w.code === 'run-evidence-missing' && w.detail.includes(DEAD_RUN_ID)), '不产出「平台证据缺失」告警');
+    assert.ok(!model.risks.some((r) => r.title.includes('证据缺失')), '不参与证据缺失类风险推导');
+    assert.ok(!model.risks.some((r) => r.title.includes('任务书原文未恢复')), '污染派发不产出衍生风险');
+    assert.ok(!JSON.stringify(model.risks).includes(DEAD_RUN_ID), '风险清单里零死 runRef 痕迹');
+    // 补正后的同一票运行照常取证（不因同票有死数据而放弃探测）
+    assert.equal(model.childRuns[CORRECTED_RUN_ID].found, true, '补正运行照常探测平台证据');
+    assert.equal(model.runRefs.filter((r) => r.ticket === '02' && r.role === 'coder').length, 1, '票 02 的活实现者运行只剩补正后那次');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect：拒绝→失败→成功不被一次成功抹平——只有各自有后续恢复的那次降 medium', () => {
+  const fx = makeHardeningFixture({ doubleRejection: true });
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    const rejected = model.risks.find((r) => r.title.includes('验收被拒收'));
+    const failed = model.risks.find((r) => r.title.includes('以失败告终'));
+    assert.ok(rejected && failed, '两次事故各自产出风险项（风险本体一条都不删）');
+    assert.equal(rejected.severity, 'high', '前一次拒收之后同票又出事故：它未被恢复，维持 high');
+    assert.ok(!rejected.title.includes('后续运行已恢复'), '前一次事故不得被后续那一次成功豁免');
+    assert.equal(failed.severity, 'medium', '后一次失败之后同票成功 settle：降 medium');
+    assert.ok(failed.title.includes('后续运行已恢复'), '后一次事故标注「后续运行已恢复」');
+    assert.ok(failed.evidence.some((e) => e.label === '恢复运行' && e.ref === FAILED_RUN_ID), '恢复引用指向被 resume 的那次运行');
+    assert.ok(rejected.evidence.some((e) => e.label === '运行' && e.ref === REJECTED_RUN_ID), '前一次事故仍指向自己的运行');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：fixture 账首页风险区——恢复类风险 medium 带引用，死 runRef 零衍生风险', () => {
+  const fx = makeHardeningFixture();
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    const out = path.join(fx.dir, 'report');
+    renderAll(model, out, null);
+    const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+    const riskSection = index.split('<section class="section" id="risks">')[1].split('</section>')[0];
+    assert.ok(riskSection.includes('后续运行已恢复'), '首页风险区标出「抖动」：恢复类风险带已恢复标注');
+    assert.ok(riskSection.includes('risk-medium') && riskSection.includes('pill medium'), '恢复类风险以 medium 分级渲染');
+    assert.ok(riskSection.includes(REJECTED_RUN_ID), '恢复运行引用进首页（可一键跳到恢复现场）');
+    assert.ok(!riskSection.includes(DEAD_RUN_ID), '首页风险区不得出现死 runRef 衍生风险');
+    assert.ok(!riskSection.includes('证据缺失'), '首页风险区无证据缺失类风险');
+    assert.ok(index.includes(DEAD_RUN_ID.slice(0, 8)), '时间线仍如实渲染污染 dispatch 事件（事件级事实不删）');
+  } finally {
+    fx.cleanup();
+  }
 });
