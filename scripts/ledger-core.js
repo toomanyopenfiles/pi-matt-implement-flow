@@ -20,6 +20,9 @@
 //     ticketsWarning: 'string|null',                                   // 枚举不可用的原因
 //   }
 
+// schema 是纯模块（不碰 IO）：refSeq 的数值形态共用它的单一转换点，避免 core 里再写一份
+const { refSeqNumber } = require('./ledger-schema');
+
 const TICKET_BRANCH = (num) => `ticket-${num}`;
 const short = (sha) => (sha ? String(sha).slice(0, 7) : 'unknown');
 // 平台 runId（UUID）短码：8 位，与审计工具的报告渲染同约定
@@ -307,7 +310,7 @@ function gateAdd({ events, type, payload, truth }) {
       // 补正链指针（票 03）：「正整数」一档由 schema 的 parseFlags 执法，此处执法后两档——
       // 小于当前序号（不得指向未来或自身）与对应事件存在（含序号有洞的账）。违规拒绝，无绕过旗标。
       if (payload.refSeq !== undefined) {
-        const n = Number(payload.refSeq);
+        const n = refSeqNumber(payload.refSeq); // 数值形态经 schema 的单一转换点归一
         const currentSeq = (events.at(-1)?.seq ?? 0) + 1; // 本事件将拿到的序号
         if (n >= currentSeq) {
           reasons.push(
@@ -409,8 +412,8 @@ function reconcile({ events, truth }) {
   const seqSet = new Set(events.map((e) => e.seq));
   for (const e of events) {
     if (e.type !== 'anomaly' || e.payload?.refSeq === undefined) continue;
-    const n = Number(e.payload.refSeq);
-    if (!Number.isInteger(n) || n < 1 || n >= e.seq || !seqSet.has(n)) {
+    const n = refSeqNumber(e.payload.refSeq); // 数值形态经单一转换点归一（兼住手改/降级再生留下的字符串或坏值）
+    if (n == null || n >= e.seq || !seqSet.has(n)) {
       diffs.push(
         `第 ${e.seq} 行 anomaly 的 refSeq=${e.payload.refSeq} 不是指向既有事件` +
           `（须为正整数、小于自身序号 ${e.seq}，且该序号已入账）`

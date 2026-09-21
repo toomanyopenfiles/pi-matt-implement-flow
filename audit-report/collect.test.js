@@ -128,7 +128,7 @@ function writeRunArtifact(ad, runId, agentName, { ts, cost = 0.01, input = 1000,
 // 终审入流 fixture：事件流（可含 final 事件）+ 伪造平台证据目录。
 // finals: [{runId, verdict, findings?}] 按入账顺序写入 final 事件；
 // stray: [{runId, ts, verdict?, cost?}] 只存在于平台证据目录、不被任何事件引用。
-function makeFinalFixture({ finals = [], stray = [], findingsFiles = {} } = {}) {
+function makeFinalFixture({ finals = [], deadFinals = [], stray = [], findingsFiles = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-final-'));
   const repo = path.join(dir, 'repo');
   const runtimeDir = path.join(repo, '.pi', 'matt-implement', 'demo');
@@ -153,6 +153,13 @@ function makeFinalFixture({ finals = [], stray = [], findingsFiles = {} } = {}) 
   finals.forEach((f, i) => {
     events.push({
       v: 2, seq: events.length + 1, ts: `2026-09-18T18:4${i}:00.000Z`, head: 'aa0', type: 'final',
+      payload: { finalVerdict: f.verdict, runId: f.runId, ...(f.findings ? { findings: f.findings } : {}) },
+    });
+  });
+  // 死 runId 的 final 事件（记账污染形态）：事件照旧入流，平台侧不存在任何可探测的证据
+  deadFinals.forEach((f, i) => {
+    events.push({
+      v: 2, seq: events.length + 1, ts: `2026-09-18T18:5${i}:00.000Z`, head: 'aa0', type: 'final',
       payload: { finalVerdict: f.verdict, runId: f.runId, ...(f.findings ? { findings: f.findings } : {}) },
     });
   });
@@ -368,6 +375,33 @@ test('collect：含 final 事件的账走事件驱动路径——终审进成本
   }
 });
 
+test('collect：final 事件上是死 runId（非 UUID 形状）→ 不探测平台证据，只留 run-ref-dead 告警（无矛盾的证据缺失告警）', () => {
+  // 记账污染形态（真实事故：shell 变量被写进 --run-id）：final 事件照旧入流，runId 不是 UUID
+  const DEAD_FINAL_RUN_ID = 'demo-polluted-final-runid';
+  const fx = makeFinalFixture({ deadFinals: [{ runId: DEAD_FINAL_RUN_ID, verdict: 'ready' }] });
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    // 事件级事实不删：终审条目保留、裁决仍取自事件（只是没有可核验的平台证据）
+    const entry = model.finalReviews.find((f) => f.runId === DEAD_FINAL_RUN_ID);
+    assert.ok(entry, 'final 事件仍进终审清单（裁决权威在事件流）');
+    assert.equal(entry.verdict, 'ready');
+    assert.equal(entry.found, false);
+    assert.equal(entry.deadRunRef, true, '死数据引用显式标注，供报告区分');
+    // 与 runRefs 同一分流：死留痕、不探测、不产出互相矛盾的告警
+    assert.ok(model.deadRunRefs.some((r) => r.runId === DEAD_FINAL_RUN_ID), '死 runRef 单独留痕');
+    assert.ok(model.warnings.some((w) => w.code === 'run-ref-dead' && w.detail.includes(DEAD_FINAL_RUN_ID)), '死数据以告警留痕');
+    assert.ok(!model.warnings.some((w) => w.code === 'run-evidence-missing' && w.detail.includes(DEAD_FINAL_RUN_ID)), '不探测平台证据：无证据缺失告警');
+    // 终审页对死数据条目给出缘由，裁决照旧展示
+    const out = path.join(fx.dir, 'report');
+    renderAll(model, out, null);
+    const finalPage = fs.readFileSync(path.join(out, 'final.html'), 'utf8');
+    assert.ok(finalPage.includes('可交付'), '裁决照旧渲染');
+    assert.ok(finalPage.includes('记账污染'), '终审页标注死数据缘由（不探测平台证据）');
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('collect：无 final 事件的旧账整体降级为目录扫描 + 时间窗过滤（行为与现状一致，不双计）', () => {
   const fx = makeFinalFixture({
     finals: [],
@@ -432,6 +466,8 @@ test('deriveRisks：证据缺失与任务书未恢复降级为 low 且不崩溃'
   assert.ok(codes.includes('证据缺失'));
   assert.ok(codes.includes('任务书原文未恢复'));
   assert.ok(codes.includes('未封账'));
+  // 未被补正的普通缺失不带补正标注（零变化）：补正标注只在 anomaly 指向它时出现
+  assert.ok(!risks.some((r) => r.title.includes('已被补正')));
 });
 
 // ---------------------------------------------------------------- 审计严密度（票 02）：已恢复降级 + 死 runRef 机判
@@ -609,6 +645,22 @@ test('collect：拒绝→失败→成功不被一次成功抹平——只有各�
   }
 });
 
+test('deriveRisks：装置未分流时死 runRef 走同一分流函数剔除（单一分流实现）', () => {
+  // 直接调用 deriveRisks 的装置可能没经过 collect 的顶层分流：兜底必须复用同一实现，
+  // 而不是在推导里各写一份 filter(isUuidRunId)。
+  const model = {
+    run: { init: { maxFixRounds: 2 }, anomalies: [], escalates: [], sealed: true, prs: [] },
+    tickets: new Map(),
+    runRefs: [{ runId: DEAD_RUN_ID, ticket: '02', key: 't-02', role: 'coder' }],
+    childRuns: {},
+    briefs: [],
+  };
+  assert.ok(
+    !deriveRisks(model).some((r) => r.title.includes('证据缺失')),
+    '死 runRef 不参与证据缺失类推导（与 collect 顶层分流同一规则）',
+  );
+});
+
 test('collect + render：fixture 账首页风险区——恢复类风险 medium 带引用，死 runRef 零衍生风险', () => {
   const fx = makeHardeningFixture();
   try {
@@ -663,5 +715,93 @@ test('deriveRisks R3：无 refSeq / 补正缺失 / 指向别的票 / 悬空 refS
     const risk = risksFor(events).find((r) => r.title.includes('异常'));
     assert.equal(risk.severity, 'high', `${name}：未补正即维持 high`);
     assert.doesNotMatch(risk.title, /已补正/, name);
+  }
+});
+
+// ---------------------------------------------------------------- 票 03 × 票 02：衍生风险与补正链共存
+
+// UUID 形状却错值（复制粘贴污染）：形状合法 → 死 runRef 机判（票 02）覆盖不到它，
+// 「平台证据缺失」衍生风险存活；anomaly 的 refSeq 指向它 → 必须在报告里标注「已被补正」
+// （spec 用户故事 5；Implementation Decisions「审计消费 refSeq」）。
+const WRONG_UUID_RUN_ID = 'c1c1c1c1-1111-4111-8111-111111111111';
+const UUID_POLLUTION_CORRECTED_RUN_ID = 'd2d2d2d2-2222-4222-8222-222222222222';
+
+function makeUuidPollutionFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-uuid-pollution-'));
+  const repo = path.join(dir, 'repo');
+  const runtimeDir = path.join(repo, '.pi', 'matt-implement', 'demo');
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(repo, '.scratch', 'demo', 'issues'), { recursive: true });
+  fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'spec.md'), '# demo spec\n');
+  fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'issues', '03-third.md'), '# 03: 第三张票\n\n做第三件事。\n');
+
+  const events = [
+    { v: 3, seq: 1, ts: '2026-09-18T18:00:00.000Z', head: 'aa0', type: 'init', payload: { branch: 'feat/demo', branchBase: 'main', baselineSha: 'aa0000', spec: '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local' } },
+    { v: 3, seq: 2, ts: '2026-09-18T18:02:00.000Z', head: 'aa0', type: 'dispatch', payload: { ticket: '03', key: 't-03', runId: WRONG_UUID_RUN_ID, worktree: '/tmp/wt-a' } },
+    // 真实写点形态：refSeq 按旗标原文入账（字符串），审计侧经单一转换点归一
+    { v: 3, seq: 3, ts: '2026-09-18T18:03:00.000Z', head: 'aa0', type: 'anomaly', payload: { note: 'seq=2 的 dispatch runId 复制粘贴错值；下一条 dispatch 为修正记录', refSeq: '2' } },
+    { v: 3, seq: 4, ts: '2026-09-18T18:04:00.000Z', head: 'aa0', type: 'dispatch', payload: { ticket: '03', key: 't-03-corrected', runId: UUID_POLLUTION_CORRECTED_RUN_ID, worktree: '/tmp/wt-a', note: '修正污染记录的 runId' } },
+    { v: 3, seq: 5, ts: '2026-09-18T18:05:00.000Z', head: 'aa0', type: 'settled', payload: { ticket: '03', round: 1, headSha: 'ff5555', gate: 'npm test 6 pass / 0 fail' } },
+    { v: 3, seq: 6, ts: '2026-09-18T18:06:00.000Z', head: 'aa0', type: 'merge', payload: { ticket: '03', headSha: 'ff5555', mergeSha: 'aa6666' } },
+    { v: 3, seq: 7, ts: '2026-09-18T18:07:00.000Z', head: 'aa0', type: 'close', payload: { note: '运行终结。' } },
+  ];
+  fs.writeFileSync(path.join(runtimeDir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+  // 主会话：两个 key 都有任务书（污染只发生在 runId，不波及 key）——派发不产出「任务书未恢复」噪声
+  const sessionDir = path.join(os.homedir(), '.pi', 'agent', 'sessions', `--${repo.split(path.sep).filter(Boolean).join('-')}--`);
+  const ad = path.join(sessionDir, 'subagent-artifacts');
+  fs.mkdirSync(ad, { recursive: true });
+  const waveScript = `const ids = ['${WRONG_UUID_RUN_ID}', '${UUID_POLLUTION_CORRECTED_RUN_ID}'];
+const results = await runs.all([
+  { key: 't-03', agent: 'pi-matt-implement-flow.coder', task: 'Ticket 03: 第三张票。Test command: npm test.', worktree: true },
+  { key: 't-03-corrected', agent: 'pi-matt-implement-flow.coder', task: 'Ticket 03: 第三张票。Test command: npm test.', worktree: true },
+]);
+return results;`;
+  fs.writeFileSync(
+    path.join(sessionDir, '2026-09-18T17-59-00-000Z_demo.jsonl'),
+    JSON.stringify({ type: 'message', timestamp: '2026-09-18T18:01:30.000Z', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'subagent', id: 'tc1', arguments: { workflowScript: waveScript, async: true } }] } }) + '\n',
+  );
+  // 平台证据：补正后的运行证据齐备；错值 runId 查无证据（形状合法 → 机判不剔除它）
+  writeRunArtifact(ad, UUID_POLLUTION_CORRECTED_RUN_ID, 'pi-matt-implement-flow.coder', { ts: Date.parse('2026-09-18T18:04:30.000Z'), cost: 0.01 });
+
+  return {
+    dir, repo, runtimeDir, sessionDir, ad,
+    cleanup: () => {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    },
+  };
+}
+
+test('collect：UUID 形状错值的污染 dispatch + refSeq anomaly → 衍生「证据缺失」风险标注「已被补正」', () => {
+  const fx = makeUuidPollutionFixture();
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    // 形状合法 → 不是死 runRef 机判的对象：仍被探测（查无证据本身是事实），告警照旧
+    assert.equal(model.childRuns[WRONG_UUID_RUN_ID].found, false, '错值 runId 存活于运行清单（形状合法）');
+    assert.ok(
+      model.warnings.some((w) => w.code === 'run-evidence-missing' && w.detail.includes(WRONG_UUID_RUN_ID)),
+      '证据缺失告警照旧（机判不覆盖形状合法的错值）',
+    );
+    // 衍生风险存活 → 必须带「已被补正」标注（补正链机器可读，不必人读散文）
+    const missing = model.risks.filter((r) => r.title.includes('证据缺失'));
+    assert.equal(missing.length, 1, '仅污染运行缺证据（补正后的运行证据齐备）');
+    assert.match(missing[0].title, /已被补正/, '衍生风险标注处置状态（风险本体不删除）');
+    assert.equal(missing[0].severity, 'low');
+    assert.ok(missing[0].evidence.some((e) => e.label === '运行' && e.ref === WRONG_UUID_RUN_ID));
+    assert.ok(missing[0].evidence.some((e) => String(e.ref) === 'seq 3'), '补正依据可回跳 anomaly 事件（seq 3）');
+    assert.ok(missing[0].evidence.some((e) => String(e.ref) === 'seq 4'), '可回跳补正记录（seq 4）');
+    // R3 自身照旧：anomaly 留痕降 medium 标「已补正」（票 03 行为零变化）
+    const anomalyRisk = model.risks.find((r) => r.title.includes('异常'));
+    assert.equal(anomalyRisk.severity, 'medium');
+    assert.match(anomalyRisk.title, /已补正/);
+    // 首页风险区：衍生风险的标注进渲染
+    const out = path.join(fx.dir, 'report');
+    renderAll(model, out, null);
+    const riskSection = fs.readFileSync(path.join(out, 'index.html'), 'utf8').split('<section class="section" id="risks">')[1].split('</section>')[0];
+    assert.ok(riskSection.includes('已被补正'), '首页风险区可区分「补正后的残留」与「真伤」');
+  } finally {
+    fx.cleanup();
   }
 });

@@ -86,6 +86,16 @@ function normalizeTicket(v) {
   return String(Number(v)).padStart(2, '0');
 }
 
+// refSeq（anomaly 的补正链指针，票 03）的数值形态：旗标值按原文入账（字符串，与 round 同惯例），
+// 读取侧只在 refSeqNumber 这一处归一——写点校验、check 对账与审计 collect 三处共用同一实现，
+// 避免各自 Number() 漂移。非正整数（含非数字、0、负数、小数）返回 null：调用方按「没有可用的
+// 序号」处理（写点另有 schema 层的正整数档拒绝，此函数不承担校验职责）。
+function refSeqNumber(value) {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 ? n : null;
+}
+
 // flags 式载荷解析（非裸 JSON——LLM 不会因 shell 引号写坏事件）。
 // 返回 { payload, errors }：errors 非空即拒绝（校验档：拒绝）。
 function parseFlags(tokens, typeName) {
@@ -173,6 +183,7 @@ module.exports = {
   FLAG_TO_KEY,
   KEY_TO_FLAG,
   normalizeTicket,
+  refSeqNumber,
   parseFlags,
   makeEnvelope,
 };

@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ledger add anomaly --ref-seq N` — the anomaly escape hatch can now point at the existing
+  event it concerns or corrects, making the correction link machine-readable instead of
+  prose. The pointer is validated at write time (positive integer, smaller than the current
+  seq, pointing at an event already in the stream), `check` reports dangling or out-of-range
+  pointers as ledger drift, and the timeline renders `↩ ref-seq N`.
+
 ### Changed
 
+- Event envelope version bumped to 3: `anomaly` events may carry the optional `refSeq`
+  correction pointer. Old ledgers (v1/v2, no `refSeq`) build and check with zero new noise —
+  the reader has no version branches.
+- Audit report severity now reflects what was actually remediated: a run rejected by
+  acceptance and recovered by a later settle on the same ticket is downgraded to medium and
+  tagged as recovered (with a link to the recovery run); `runId`s that are not UUID-shaped
+  are treated as accounting pollution instead of missing platform evidence; and a polluted
+  dispatch that carries a `refSeq` correction link is tagged as corrected instead of
+  surfacing as a live evidence-missing risk.
 - Whole-branch final review is now a first-class ledger event (`final`): the ledger
   header shows the latest verdict and run id, sealing the ledger is gated on a verdict
   once work has been merged, and the audit report derives the final-review run, cost,

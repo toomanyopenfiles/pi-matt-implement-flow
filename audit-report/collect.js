@@ -18,6 +18,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
+// refSeq 的数值形态经 schema 的单一转换点归一（与写点校验、check 对账共用同一实现）
+const { refSeqNumber } = require('../scripts/ledger-schema');
 
 const MAX_TEXT = 400 * 1024; // 单文件收录上限，超出截断并标注
 
@@ -106,7 +108,7 @@ function buildRunModel(events) {
     switch (e.type) {
       case 'init': run.init = { ...p, seq: e.seq, ts: e.ts }; break;
       case 'pr': run.prs.push({ ...p, seq: e.seq, ts: e.ts }); break;
-      case 'anomaly': run.anomalies.push({ seq: e.seq, ts: e.ts, note: p.note || '', refSeq: p.refSeq == null ? null : Number(p.refSeq) || null }); break;
+      case 'anomaly': run.anomalies.push({ seq: e.seq, ts: e.ts, note: p.note || '', refSeq: refSeqNumber(p.refSeq) }); break;
       case 'escalate': run.escalates.push({ seq: e.seq, ts: e.ts, ticket: p.ticket, note: p.note || '' }); break;
       case 'close': run.close = { seq: e.seq, ts: e.ts, note: p.note || '' }; break;
       case 'final': {
@@ -421,7 +423,13 @@ function loadChildRun(dirs, ref, warnings) {
 function finalReviewsFromEvents(finals, candidates, warnings) {
   return finals.map((f, i) => {
     const ref = { runId: f.runId, ticket: 'final', key: `final-r${i + 1}`, role: 'final-reviewer', seq: f.seq, ts: f.ts };
-    const child = loadChildRun(candidates, ref, warnings);
+    // 死 runRef 分流同样适用于终审路径（与 runRefs 同一机判）：runId 存在但不是 UUID 形状
+    // = 记账污染，不探测平台证据（否则与 run-ref-dead 告警并存产出互相矛盾的「证据缺失」
+    // 告警）。事件级事实不删：终审条目保留、裁决仍取自事件，只是没有可核验的平台证据；
+    // runId 缺失的残缺记账不在此列（照旧走证据探测并告警）。
+    const child = f.runId && !isUuidRunId(f.runId)
+      ? { runId: f.runId, found: false, deadRunRef: true }
+      : loadChildRun(candidates, ref, warnings);
     return {
       ...child,
       source: 'event',
@@ -477,7 +485,11 @@ function gitFacts(repoPath, shas) {
 function deriveRisks(model) {
   const risks = [];
   const add = (severity, title, detail, evidence) => risks.push({ severity, title, detail, evidence: evidence || [] });
-  const liveRefs = (model.runRefs || []).filter((r) => isUuidRunId(r.runId)); // 死 runRef 不参与任何推导
+  // 分流规则只有 splitRunRefs 一处实现：collect 顶层已分流（model.runRefs 即 live），
+  // 直接调用 deriveRisks 的测试装置未分流时在此复用同一函数兜底。
+  const { live: liveRefs } = splitRunRefs(model.runRefs || []);
+  // 「已被补正」判定同样只有 correctionFor 一处实现，一次批量取用（R3 与衍生风险共用）
+  const corrections = correctionsByRefSeq(model.events || [], model.run.anomalies);
   const incidents = incidentRefs(model, liveRefs);
 
   // R1 失败的子代理运行
@@ -502,7 +514,7 @@ function deriveRisks(model) {
   }
   // R3 异常记录
   for (const a of model.run.anomalies) {
-    const fix = correctionFor(model.events || [], a);
+    const fix = corrections.get(a.refSeq);
     if (fix) {
       // 已补正（票 03）：anomaly 带 refSeq 且被指向事件同票后续有补正记录——留痕不删除，
       // 只把报告口径降为 medium 并标注处置状态（降级依据必须可复核）。
@@ -538,11 +550,27 @@ function deriveRisks(model) {
       '整分支终审判定未就绪，运行仍被封账——多半是用户拍板放弃的合法出口，但代码带着已知问题收场，值得回看终审问题清单。',
       [{ label: '事件', ref: `seq ${latestFinal.seq}` }, { label: '运行', ref: latestFinal.runId }]);
   }
-  // R8 证据缺失（死 runRef 已在上游分流，此处只判活运行）
+  // R8 证据缺失（死 runRef 已在上游分流，此处只判活运行）。两种机制共存：形状合法但错值的
+  // runId（复制粘贴污染）机判覆盖不到，其衍生风险照旧存活——若 anomaly.refSeq 指向引入它的
+  // 那次记账，则标注「已被补正」（风险本体不删除，与 R3 同哲学）；未被补正者维持原口径。
   const missing = liveRefs.filter((r) => !model.childRuns[r.runId] || !model.childRuns[r.runId].found);
-  if (missing.length) {
-    add('low', `${missing.length} 次运行的平台侧证据缺失`, '可能已被平台清理或落在其他项目的会话目录。相关票页会标注证据不可用，时间线与 git 事实不受影响。',
-      missing.slice(0, 5).map((r) => ({ label: '运行', ref: r.runId })));
+  const correctedMissing = missing.filter((r) => corrections.has(r.seq));
+  const plainMissing = missing.filter((r) => !corrections.has(r.seq));
+  if (plainMissing.length) {
+    add('low', `${plainMissing.length} 次运行的平台侧证据缺失`, '可能已被平台清理或落在其他项目的会话目录。相关票页会标注证据不可用，时间线与 git 事实不受影响。',
+      plainMissing.slice(0, 5).map((r) => ({ label: '运行', ref: r.runId })));
+  }
+  if (correctedMissing.length) {
+    add('low', `${correctedMissing.length} 次运行的平台侧证据缺失${CORRECTED_TAG}`,
+      '这些运行引用已被 anomaly 的补正记录取代（指向事件的同票同类型后续记录）——平台证据缺失是记账污染的残留，不是运行时事实；风险本体保留供核对，补正依据见引用。',
+      correctedMissing.slice(0, 5).flatMap((r) => {
+        const fix = corrections.get(r.seq);
+        return [
+          { label: '运行', ref: r.runId },
+          { label: '异常', ref: `seq ${fix.anomaly.seq}` },
+          { label: '补正', ref: `seq ${fix.correction.seq}` },
+        ];
+      }));
   }
   // R9 任务书未恢复（死 runRef 的派发是记账污染的记录，不是事实：不产出衍生风险）
   const noBrief = [];
@@ -578,6 +606,9 @@ function deriveRisks(model) {
 // 恢复运行的引用、风险本体不删除；拒绝→拒绝→成功不被一次成功抹平（前一次失败之后的下一个
 // 同票事实仍是失败，故它维持 high，只有各自有后续恢复的那次才降级）。
 const RECOVERED_TAG = '——后续运行已恢复';
+// 补正链的标注口径（票 03 × 票 02）：anomaly.refSeq 指向的事件已有同票同类型后续记录取代之时，
+// 其衍生风险（证据缺失类）带此标注——风险本体保留，只把处置状态变成机器可读。
+const CORRECTED_TAG = '——已被补正';
 
 // 一次运行是否构成事故：平台证据里退出码非零（失败）或验收被拒收（拒收）
 function incidentOf(ref, model) {
@@ -592,16 +623,11 @@ function incidentRefs(model, liveRefs) {
   return liveRefs.filter((r) => incidentOf(r, model));
 }
 
-function ticketById(model) {
-  const m = new Map();
-  const list = model.tickets && typeof model.tickets.values === 'function' ? model.tickets.values() : [];
-  for (const t of list) m.set(t.id, t);
-  return m;
-}
-
 function recoveryFor(model, ref, incidents) {
   if (ref.ticket === 'final') return null; // run 级终审无票：不存在「同票后续运行」这一判据
-  const ticket = ticketById(model).get(ref.ticket);
+  // model.tickets 即真相来源（collect 产物是渲染用的排序数组、测试装置是 Map）：
+  // 用 .values() 统一取票（与 R5/R9/R10 同一取法），不再为此重建一份 Map。
+  const ticket = [...(model.tickets || []).values()].find((t) => t.id === ref.ticket);
   if (!ticket || !(ticket.settles || []).length) return null;
   const seq = Number(ref.seq) || 0;
   const settle = ticket.settles
@@ -651,6 +677,17 @@ function correctionFor(events, anomaly) {
     (e) => e.seq > target.seq && e.type === target.type && e.payload && e.payload.ticket === ticket
   );
   return correction ? { target, correction } : null;
+}
+
+// 补正链索引（票 03 的 correctionFor 是唯一判定，此处只做一次批量取用）：
+// anomaly.refSeq → { anomaly, target, correction }；R3 本体与衍生风险（证据缺失类）共用。
+function correctionsByRefSeq(events, anomalies) {
+  const map = new Map();
+  for (const a of anomalies || []) {
+    const fix = correctionFor(events, a);
+    if (fix) map.set(a.refSeq, { anomaly: a, ...fix });
+  }
+  return map;
 }
 
 // 风险文案里的运行归属：票级运行写票号，run 级终审写“run 级终审”
