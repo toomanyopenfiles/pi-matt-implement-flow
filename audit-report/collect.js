@@ -49,6 +49,14 @@ function warn(warnings, code, detail) {
   warnings.push({ code, detail });
 }
 
+// payload 里的路径（init.spec / verdict --findings / final --findings）按约定是 repo 相对
+// 路径，但编排器也可能记成绝对主仓库路径（brief 的 path rule）：绝对路径直接用，
+// 相对路径才拼 repo 根。真实事故语料：postmortem-hardening 运行的 init --spec 记了
+// 绝对路径，拼接后路径重复 → 票面原文层全量降级。
+function resolvePayloadPath(repoPath, p) {
+  return p && path.isAbsolute(p) ? p : path.join(repoPath, p);
+}
+
 // ---------------------------------------------------------------- 事件流
 
 function parseEvents(runtimeDir, warnings) {
@@ -191,7 +199,7 @@ function loadTicketFiles(runtimeDir, repoPath, run, tickets, warnings) {
   const specPath = run.init && run.init.spec ? run.init.spec : null;
   // spec 形如 .scratch/<slug>/spec.md → issues 目录是其同级 issues/
   const issuesDir = specPath
-    ? path.join(repoPath, path.dirname(specPath), 'issues')
+    ? path.join(resolvePayloadPath(repoPath, path.dirname(specPath)), 'issues')
     : path.join(repoPath, '.scratch', slug, 'issues');
   const files = fs.existsSync(issuesDir) ? fs.readdirSync(issuesDir).filter((f) => f.endsWith('.md')).sort() : [];
   for (const t of tickets.values()) {
@@ -786,7 +794,7 @@ function collect({ runtimeDir }) {
   for (const t of ticketList) {
     for (const v of t.verdicts) {
       if (v.findings) {
-        const abs = path.join(repoPath, v.findings);
+        const abs = resolvePayloadPath(repoPath, v.findings);
         const c = readText(abs, { max: 256 * 1024 });
         if (c && typeof c.text === 'string') findingsFiles[v.findings] = c;
         else warn(warnings, 'findings-unreadable', `裁决引用的问题清单不可读：${v.findings}（票 ${t.id} 第 ${v.round} 轮）`);
@@ -804,7 +812,7 @@ function collect({ runtimeDir }) {
   // 终审问题清单：与票级同构——按 final 事件的 findings 路径收录原文，不可读则告警而非静默
   run.finals.forEach((f, i) => {
     if (!f.findings) return;
-    const c = readText(path.join(repoPath, f.findings), { max: 256 * 1024 });
+    const c = readText(resolvePayloadPath(repoPath, f.findings), { max: 256 * 1024 });
     if (c && typeof c.text === 'string') findingsFiles[f.findings] = c;
     else warn(warnings, 'findings-unreadable', `终审裁决引用的问题清单不可读：${f.findings}（第 ${i + 1} 轮终审）`);
   });

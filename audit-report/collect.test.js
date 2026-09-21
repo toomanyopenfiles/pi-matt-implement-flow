@@ -485,7 +485,7 @@ const DEAD_RUN_ID = 'demo-broken-runid';
 //   recovery=false      → 拒收后无同票后续结算（未恢复用例）
 //   doubleRejection=true → 票 01 先拒收、再失败（两次事故）、最后一次被后续成功 settle 恢复
 // 票 02 恒有一条污染 runId 的 dispatch + 一条补正后的 dispatch（死 runRef 机判用例）。
-function makeHardeningFixture({ recovery = true, doubleRejection = false } = {}) {
+function makeHardeningFixture({ recovery = true, doubleRejection = false, absoluteSpec = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-hardening-'));
   const repo = path.join(dir, 'repo');
   const runtimeDir = path.join(repo, '.pi', 'matt-implement', 'demo');
@@ -503,7 +503,7 @@ function makeHardeningFixture({ recovery = true, doubleRejection = false } = {})
     return events.length; // 返回该事件的序号，供断言引用
   };
 
-  push('init', { branch: 'feat/demo', branchBase: 'main', baselineSha: 'aa0000', spec: '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local', reviewer: 'on', maxFixRounds: 2, maxConcurrent: 3 });
+  push('init', { branch: 'feat/demo', branchBase: 'main', baselineSha: 'aa0000', spec: absoluteSpec ? path.join(repo, '.scratch', 'demo', 'spec.md') : '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local', reviewer: 'on', maxFixRounds: 2, maxConcurrent: 3 });
   const seqs = {};
   seqs.rejected = push('dispatch', { ticket: '01', key: 't-01', runId: REJECTED_RUN_ID, worktree: '/tmp/wt-a' });
   if (doubleRejection) seqs.failed = push('dispatch', { ticket: '01', key: 't-01-fresh', runId: FAILED_RUN_ID, worktree: '/tmp/wt-b' });
@@ -675,6 +675,19 @@ test('collect + render：fixture 账首页风险区——恢复类风险 medium 
     assert.ok(!riskSection.includes(DEAD_RUN_ID), '首页风险区不得出现死 runRef 衍生风险');
     assert.ok(!riskSection.includes('证据缺失'), '首页风险区无证据缺失类风险');
     assert.ok(index.includes(DEAD_RUN_ID.slice(0, 8)), '时间线仍如实渲染污染 dispatch 事件（事件级事实不删）');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect：init spec 记成绝对主仓库路径 → 票文件照常加载，不再产出 ticket-file-missing', () => {
+  const fx = makeHardeningFixture({ absoluteSpec: true });
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir });
+    const first = (model.tickets || []).find((t) => t.id === '01');
+    assert.ok(first && first.file && first.title && first.body, '绝对 spec 路径下票文件、标题、票面照常加载');
+    assert.match(first.title, /第一张票/, '票标题解析不受路径形态影响');
+    assert.ok(!model.warnings.some((w) => w.code === 'ticket-file-missing'), '不再产生 ticket-file-missing 警告');
   } finally {
     fx.cleanup();
   }
