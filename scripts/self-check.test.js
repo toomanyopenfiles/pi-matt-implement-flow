@@ -33,6 +33,7 @@ const {
   GATE_VERIFY_TIMEOUT_MS,
   checkAgentTimeouts,
   checkGateVerifyTimeout,
+  checkAcceptanceEvidenceContract,
 } = require('./registration-checks.js');
 
 function readAgentFrontmatter() {
@@ -142,6 +143,10 @@ test('all three agents declare timeoutMs: 3600000 (1h run deadline)', () => {
 
 test('SKILL.md pins the gate verify timeout at 600000 (platform default is a fixed, unconfigurable 120s)', () => {
   assert.deepEqual(checkGateVerifyTimeout(readText(PKG_ROOT, 'SKILL.md')), []);
+});
+
+test('the coder acceptance contract is softened: the dispatched evidence list excludes residual-risks and the Rules sentence enforces exactly that list', () => {
+  assert.deepEqual(checkAcceptanceEvidenceContract(readText(PKG_ROOT, 'SKILL.md')), []);
 });
 
 // --- 模拟破坏：假想 fixture，绝不改动真实文件。每条恰好对应一条真实不变量。 ---
@@ -289,6 +294,47 @@ test('breakage simulation: the environment-survey step going missing is flagged'
   assert.deepEqual(checkRound0EnvSurvey('### Round 1\nEnvironment survey 环境事实\n'), [
     'SKILL.md is missing the "### Round 0" section',
   ]);
+});
+
+test('breakage simulation: residual-risks returning to the dispatched evidence list is flagged', () => {
+  const hardened =
+    'evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "residual-risks", "no-staged-files"],\n' +
+    '- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence from the dispatched set (changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files) rejects the run.\n';
+  const problems = checkAcceptanceEvidenceContract(hardened);
+  assert.equal(problems.length, 2);
+  assert.match(problems[0], /dispatch evidence list still enforces the advisory field "residual-risks"/);
+  assert.match(problems[1], /dispatch evidence list drifted from the softened contract/);
+});
+
+test('breakage simulation: a Rules sentence enforcing a set other than the dispatched list is flagged', () => {
+  const drifted =
+    'evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "no-staged-files"],\n' +
+    '- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence from the dispatched set (changed-files, tests-added, commands-run, validation-output, no-staged-files, docs-updated) rejects the run.\n';
+  const problems = checkAcceptanceEvidenceContract(drifted);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /Rules sentence disagrees with the dispatched evidence list/);
+});
+
+test('breakage simulation: the Rules sentence losing its enforced-set list is flagged', () => {
+  const vague =
+    'evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "no-staged-files"],\n' +
+    '- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence rejects the run.\n';
+  const problems = checkAcceptanceEvidenceContract(vague);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /Rules sentence no longer names the enforced evidence set/);
+  // 折行不改变语义：Rules 句跨行、执法集合与 evidence 数组一致时不得误报（空白归一化）。
+  const wrapped =
+    'evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "no-staged-files"],\n' +
+    '- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence from the dispatched set\n' +
+    '(changed-files, tests-added, commands-run,\nvalidation-output, no-staged-files) rejects the run.\n';
+  assert.deepEqual(checkAcceptanceEvidenceContract(wrapped), []);
+});
+
+test('breakage simulation: a dispatch losing its evidence array outright is flagged', () => {
+  assert.match(
+    checkAcceptanceEvidenceContract('acceptance: { level: "verified", report: "on" }')[0],
+    /no parseable acceptance evidence list/
+  );
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

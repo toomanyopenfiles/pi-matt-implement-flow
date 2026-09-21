@@ -291,6 +291,64 @@ function checkGateVerifyTimeout(skillText) {
       ];
 }
 
+// —— 不变量 11：验收契约软化——意见型证据字段处置的单一真相。
+// 派发 acceptance 的 evidence 清单里 residual-risks（纯意见型、无 git 对应物）从强制降为建议：
+// 它不再参与「证据缺失 → run 拒收」的集合，因此纯文档票不会因漏填一个字段被平台拒收。
+// 三处契约文本（evidence 数组、Acceptance Contract 的 Rules 句、fix follow-up 简报）必须同口径，
+// 这里机械锁定其中两处：清单本身（不含 residual-risks，其余五项原样）与 Rules 句的执法集合。
+const ADVISORY_EVIDENCE_FIELD = 'residual-risks';
+const DISPATCHED_EVIDENCE_FIELDS = [
+  'changed-files',
+  'tests-added',
+  'commands-run',
+  'validation-output',
+  'no-staged-files',
+];
+const RULES_ENFORCEMENT_PATTERN = /missing evidence from the dispatched set \(([^)]*)\) rejects the run/;
+
+function parseDispatchedEvidenceFields(skillText) {
+  const match = skillText.match(/evidence:\s*\[([^\]]*)\]/);
+  return match ? [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : null;
+}
+
+function normalizeEvidenceFields(fields) {
+  return [...fields].map((f) => f.trim()).filter(Boolean).sort();
+}
+
+function checkAcceptanceEvidenceContract(skillText) {
+  const problems = [];
+  const dispatched = parseDispatchedEvidenceFields(skillText);
+  if (!dispatched) {
+    return [
+      'SKILL.md coder dispatch carries no parseable acceptance evidence list (`evidence: [...]`) — the dispatched evidence contract has no mechanical anchor',
+    ];
+  }
+  if (dispatched.includes(ADVISORY_EVIDENCE_FIELD)) {
+    problems.push(
+      `SKILL.md dispatch evidence list still enforces the advisory field "${ADVISORY_EVIDENCE_FIELD}" — the opinion-type field must stay out of the missing-evidence-rejects-the-run set`
+    );
+  }
+  if (normalizeEvidenceFields(dispatched).join(',') !== normalizeEvidenceFields(DISPATCHED_EVIDENCE_FIELDS).join(',')) {
+    problems.push(
+      `SKILL.md dispatch evidence list drifted from the softened contract — expected [${DISPATCHED_EVIDENCE_FIELDS.join(', ')}], got [${dispatched.join(', ')}]`
+    );
+  }
+  const enforced = (normalizeWhitespace(skillText).match(RULES_ENFORCEMENT_PATTERN) ?? [])[1];
+  if (enforced === undefined) {
+    problems.push(
+      'SKILL.md Acceptance Contract Rules sentence no longer names the enforced evidence set (`missing evidence from the dispatched set (<fields>) rejects the run`) — the sentence must stay in one voice with the dispatched list'
+    );
+  } else {
+    const enforcedFields = enforced.split(/\s*,\s*/);
+    if (normalizeEvidenceFields(enforcedFields).join(',') !== normalizeEvidenceFields(dispatched).join(',')) {
+      problems.push(
+        `SKILL.md Acceptance Contract Rules sentence disagrees with the dispatched evidence list — sentence enforces [${enforcedFields.join(', ')}], dispatch declares [${dispatched.join(', ')}]`
+      );
+    }
+  }
+  return problems;
+}
+
 module.exports = {
   PKG_ROOT,
   AGENT_NAMES,
@@ -316,4 +374,7 @@ module.exports = {
   GATE_VERIFY_TIMEOUT_MS,
   checkAgentTimeouts,
   checkGateVerifyTimeout,
+  DISPATCHED_EVIDENCE_FIELDS,
+  ADVISORY_EVIDENCE_FIELD,
+  checkAcceptanceEvidenceContract,
 };
