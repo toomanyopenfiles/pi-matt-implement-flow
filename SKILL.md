@@ -102,7 +102,7 @@ const results = await runs.all([
         "Implement the requested change without widening scope",
         "Return evidence sufficient for an independent acceptance review"
       ],
-      evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "residual-risks", "no-staged-files"],
+      evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "no-staged-files"],
       report: "on",
       verify: [{ id: "gate", command: "npm test", timeoutMs: 600000 }]
     },
@@ -240,7 +240,7 @@ Rules:
 - validationOutput carries the VERBATIM key lines of the gate command you ran (e.g. "274 passed in 40.35s") — never null, never empty, never a paraphrase; an empty validationOutput fails the run.
 - testsAddedOrUpdated lists every test file you created or modified; use [] only when none.
 - criteriaSatisfied[].id must match the criteria above, answered with concrete proof.
-- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence rejects the run.
+- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence from the dispatched set (changed-files, tests-added, commands-run, validation-output, no-staged-files) rejects the run; `residualRisks` is advisory and never a rejection cause.
 ```
 
 ### Reviewer brief
@@ -258,7 +258,7 @@ Run your two-axis process and return the structured verdict.
 
 ```
 Review round <k> found issues: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/<NN>-r<k>.md.
-Fix them in your worktree, rerun the full suite, commit everything, and report exactly as before — the full structured output with value and acceptanceReport as SIBLING top-level keys (never nested), every `## Acceptance Contract` field filled: validationOutput with the real rerun output (verbatim pass/fail lines, never null), testsAddedOrUpdated listing any test files touched ([] only if none).
+Fix them in your worktree, rerun the full suite, commit everything, and report exactly as before — the full structured output with value and acceptanceReport as SIBLING top-level keys (never nested), every dispatched `## Acceptance Contract` evidence field filled: validationOutput with the real rerun output (verbatim pass/fail lines, never null), testsAddedOrUpdated listing any test files touched ([] only if none).
 ```
 
 ### Integration fixer (no isolation)

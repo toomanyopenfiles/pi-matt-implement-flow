@@ -156,7 +156,7 @@ test('add init: 事件行含脚本盖的版本/序号/时间戳/HEAD 锚点，�
   const events = readEvents(f);
   assert.equal(events.length, 1);
   const e = events[0];
-  assert.equal(e.v, 2, '信封版本随事件分类学演进（final 事件入流 → v=2）');
+  assert.equal(e.v, 3, '信封版本随事件分类学演进（anomaly refSeq 联动 → v=3）');
   assert.equal(e.seq, 1);
   assert.match(e.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   assert.match(e.ts, /(Z|[+-]\d{2}:\d{2})$/, '时间戳必须含时区');
@@ -875,7 +875,7 @@ test('init 非法快照值被 schema 拒绝（枚举 / 正整数）', (t) => {
 
 const FINAL_RUN_ID = '89656ee2-8603-4407-957b-9d7f24e0f364';
 
-test('add final: 三值裁决全部入账，事件行含信封四件套（v=2 / 单调序号 / 权威时间戳 / HEAD 锚点）', (t) => {
+test('add final: 三值裁决全部入账，事件行含信封四件套（v=3 / 单调序号 / 权威时间戳 / HEAD 锚点）', (t) => {
   const f = makeFixture(t);
   initRun(f);
   for (const verdict of ['ready', 'ready_with_fixes', 'not_ready']) {
@@ -895,7 +895,7 @@ test('add final: 三值裁决全部入账，事件行含信封四件套（v=2 / 
   );
   const head = f.git('rev-parse HEAD');
   for (const e of finals) {
-    assert.equal(e.v, 2, '事件分类学演进 → 信封版本升为 2（旧账按 v 识别）');
+    assert.equal(e.v, 3, '事件分类学演进 → 信封版本升为 3（旧账按 v 识别）');
     assert.equal(e.payload.runId, FINAL_RUN_ID);
     assert.match(e.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, '权威时间戳由脚本盖');
     assert.equal(e.head, head, '写入时刻 HEAD 锚点由脚本盖');
@@ -1263,4 +1263,169 @@ test('旧账兼容：无 final 事件的完整旧账（v=1 信封）build/check 
   assert.match(build.stdout, /^state: complete/m);
   assert.match(build.stdout, /^final: none$/m, '旧账无 final 事件 → 头部按最小形态显示 none');
   assert.match(build.stdout, /账实一致/);
+});
+
+// ====================================================================
+// 票 03：anomaly refSeq 联动与信封 v3
+// ====================================================================
+
+test('add anomaly --ref-seq N：正常入账（payload 含 refSeq），时间线渲染 ↩ ref-seq N；无 refSeq 行零变化', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
+  const r = addAll(f, 'anomaly', {
+    note: 'seq=2 的 dispatch 字段被 shell 变量污染；下一条 dispatch 为修正记录',
+    'ref-seq': '2',
+  });
+  assert.equal(r.status, 0, r.stdout);
+  const anomaly = readEvents(f).at(-1);
+  assert.equal(anomaly.type, 'anomaly');
+  assert.equal(anomaly.seq, 3);
+  assert.equal(anomaly.v, 3, '信封版本随分类学演进（refSeq 联动 → v=3）');
+  assert.equal(anomaly.payload.refSeq, '2', 'refSeq 指向既有事件序号（旗标值原样入账，与 round 同）');
+  assert.match(anomaly.payload.note, /污染/);
+
+  const md = readLedger(f);
+  const line3 = md.split('\n').find((l) => l.startsWith('- [3] '));
+  assert.ok(line3, '时间线应有 anomaly 行');
+  assert.ok(
+    line3.endsWith(
+      'anomaly ↩ ref-seq 2 note=seq=2 的 dispatch 字段被 shell 变量污染；下一条 dispatch 为修正记录' +
+        ' note="seq=2 的 dispatch 字段被 shell 变量污染；下一条 dispatch 为修正记录"'
+    ),
+    `补正链指针必须渲染在 anomaly 行上：${line3}`
+  );
+
+  // 不带 refSeq 的 anomaly：渲染与升级前逐字一致（默认 payload 展开形态原样保留）
+  assert.equal(addAll(f, 'anomaly', { note: '无关异常，不指向任何事件' }).status, 0);
+  const line4 = readLedger(f).split('\n').find((l) => l.startsWith('- [4] '));
+  assert.ok(
+    line4.endsWith('anomaly note=无关异常，不指向任何事件 note="无关异常，不指向任何事件"'),
+    `无 refSeq 的行渲染零变化：${line4}`
+  );
+});
+
+test('--help：anomaly 用法行含 --ref-seq，并说明 refSeq 指向既有事件的语义', (t) => {
+  const r = ledger(['--help'], { cwd: os.tmpdir() });
+  assert.equal(r.status, 0, r.stdout);
+  assert.match(r.stdout, /^\s+anomaly\s+--note \[--ref-seq N\]$/m);
+  assert.match(r.stdout, /refSeq/);
+  assert.match(r.stdout, /正整数/);
+  assert.match(r.stdout, /小于/);
+});
+
+test('add anomaly --ref-seq 三重拒绝：非正整数 / 不小于当前序号 / 绕过旗标 → 非零退出 + 中文原因 + 不入账', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const before = readLedger(f);
+  const base = ['add', 'anomaly', '--runtime-dir', f.runtime, '--note', '指向性异常'];
+  const cases = [
+    { name: '非正整数 0', args: [...base, '--ref-seq', '0'], reason: /refSeq 必须是正整数/ },
+    { name: '非正整数（非数字）', args: [...base, '--ref-seq', 'abc'], reason: /refSeq 必须是正整数/ },
+    { name: '不小于当前序号（自身序号）', args: [...base, '--ref-seq', '2'], reason: /refSeq=2 不小于当前序号 2/ },
+    { name: '不小于当前序号（未来序号）', args: [...base, '--ref-seq', '99'], reason: /refSeq=99 不小于当前序号 2/ },
+    { name: '绕过旗标', args: [...base, '--ref-seq', '1', '--force', 'true'], reason: /未知旗标 --force/ },
+  ];
+  for (const c of cases) {
+    const r = ledger(c.args, { cwd: f.dir });
+    assert.equal(r.status, 1, `${c.name} 必须被拒绝：${r.stdout}`);
+    assert.match(r.stdout, /拒绝/, c.name);
+    assert.match(r.stdout, c.reason, c.name);
+  }
+  assert.equal(readEvents(f).length, 1, '被拒的 anomaly 不得入账');
+  assert.equal(readLedger(f), before, '被拒的记账不得触发台账再生');
+});
+
+test('add anomaly --ref-seq 指向不存在事件（事件流序号有洞）→ 拒绝 + 不入账；洞之外的既有事件仍可指向', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
+  // 手工制造序号洞（模拟 append-only 被破坏的账）：第二行 seq 2 → 3
+  const events = readEvents(f);
+  events[1].seq = 3;
+  fs.writeFileSync(f.eventsPath, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+  const before = readEvents(f);
+  const r = addAll(f, 'anomaly', { note: '指向洞里的 seq 2', 'ref-seq': '2' });
+  assert.equal(r.status, 1, `悬空 refSeq 必须拒绝：${r.stdout}`);
+  assert.match(r.stdout, /拒绝/);
+  assert.match(r.stdout, /refSeq=2 指向的事件不存在/);
+  assert.deepEqual(readEvents(f), before, '被拒的 anomaly 不得入账');
+
+  // 校验看的是「对应事件存在」而非「序号连续」：洞之外的既有事件照常可指向
+  const ok = addAll(f, 'anomaly', { note: '指向 seq 3', 'ref-seq': '3' });
+  assert.equal(ok.status, 0, ok.stdout);
+  assert.equal(readEvents(f).at(-1).payload.refSeq, '3');
+});
+
+test('check 对账：refSeq 越界/悬空 → 账实差异；合法 refSeq 零差异', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
+  assert.equal(addAll(f, 'anomaly', { note: '污染留痕', 'ref-seq': '2' }).status, 0);
+
+  const good = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(good.status, 0, `合法 refSeq 不得新增差异：${good.stdout}`);
+  assert.match(good.stdout, /账实一致/);
+
+  // 手改事件流：refSeq 指向未来序号（越界）——写点拒绝后的漏网之鱼靠 check 暴露
+  const future = readEvents(f);
+  future[2].payload.refSeq = 99;
+  fs.writeFileSync(f.eventsPath, future.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const r1 = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r1.status, 1, `越界 refSeq 必须判为账实差异：${r1.stdout}`);
+  assert.match(r1.stdout, /账实差异/);
+  assert.match(r1.stdout, /第 3 行 anomaly 的 refSeq=99 不是指向既有事件/);
+  assert.match(r1.stdout, /小于自身序号 3/);
+
+  // 手改事件流：制造序号洞，refSeq 指向洞里（悬空）
+  const holed = readEvents(f);
+  holed[1].seq = 5;
+  holed[2].payload.refSeq = 2;
+  fs.writeFileSync(f.eventsPath, holed.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const r2 = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r2.status, 1, `悬空 refSeq 必须判为账实差异：${r2.stdout}`);
+  assert.match(r2.stdout, /第 3 行 anomaly 的 refSeq=2 不是指向既有事件/);
+});
+
+test('旧账兼容：v=2 信封（含 final 事件、无 refSeq）的完整旧账 build/check 零新增差异', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const base = f.baseline();
+  const { head, merge } = mergeTicket(f, '01');
+  writeTicketFile(f.dir, '01', '自检基线', { status: 'resolved' });
+  writeTicketFile(f.dir, '02', 'README 速览', { status: 'escalated', blockedBy: '01' });
+  // 手写升级前的旧账：v=2 信封（final 已入流）、anomaly 仍是散文时代形态（无 refSeq）
+  const ts = (i) => new Date(Date.UTC(2026, 8, 20, 3, i, 0)).toISOString();
+  const legacy = [
+    { v: 2, seq: 1, ts: ts(0), head: base, type: 'init', payload: { branch: 'feat/demo', branchBase: 'main', baselineSha: base, spec: '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local' } },
+    { v: 2, seq: 2, ts: ts(1), head, type: 'dispatch', payload: { ticket: '01', key: 't-01', runId: '9ea3e64b' } },
+    { v: 2, seq: 3, ts: ts(2), head, type: 'settled', payload: { ticket: '01', round: 1, headSha: head } },
+    { v: 2, seq: 4, ts: ts(3), head, type: 'verdict', payload: { ticket: '01', round: 1, verdict: 'approved' } },
+    { v: 2, seq: 5, ts: ts(4), head: merge, type: 'merge', payload: { ticket: '01', headSha: head, mergeSha: merge } },
+    { v: 2, seq: 6, ts: ts(5), head, type: 'anomaly', payload: { note: '散文时代的异常留痕（无 refSeq）' } },
+    { v: 2, seq: 7, ts: ts(6), head, type: 'final', payload: { finalVerdict: 'ready', runId: FINAL_RUN_ID } },
+    { v: 2, seq: 8, ts: ts(7), head, type: 'escalate', payload: { ticket: '02' } },
+    { v: 2, seq: 9, ts: ts(8), head, type: 'close', payload: {} },
+  ];
+  fs.writeFileSync(f.eventsPath, legacy.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const home = fakeHome(t, { repoDir: f.dir, runIds: [FINAL_RUN_ID] });
+
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir, env: { HOME: home } });
+  assert.equal(check.status, 0, `v=2 旧账 check 必须照旧零差异：${check.stdout}`);
+  assert.doesNotMatch(check.stdout, /⚠/, 'v=2 旧账不得新增警告');
+  assert.doesNotMatch(check.stdout, /✗/, 'v=2 旧账不得新增报错');
+
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir, env: { HOME: home } });
+  assert.equal(build.status, 0, build.stdout);
+  assert.doesNotMatch(build.stdout, /⚠/, 'v=2 旧账 build 不得新增警告');
+  assert.doesNotMatch(build.stdout, /✗/, 'v=2 旧账 build 不得新增报错');
+  assert.match(build.stdout, /^final: ready \(89656ee2\)$/m, 'v=2 的 final 事件照旧识别');
+  assert.match(build.stdout, /账实一致/);
+  assert.match(
+    build.stdout,
+    /\[6\] .* anomaly note=散文时代的异常留痕（无 refSeq） note="散文时代的异常留痕（无 refSeq）"$/m,
+    '无 refSeq 的 anomaly 行渲染逐字不变（默认 payload 展开形态）'
+  );
+  assert.doesNotMatch(build.stdout, /↩/, '旧账不得凭空长出补正链指针');
 });

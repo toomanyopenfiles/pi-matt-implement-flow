@@ -448,6 +448,7 @@ function renderFinal(model) {
 <div class="step">
   <div class="step-title">${term('终审', 'final review')} 运行 <code>${esc(c.runId.slice(0, 8))}</code> <span class="muted">· 模型 ${esc(c.model || '—')} · 成本 ${fmtCost(u.cost)}</span></div>
   <div class="card">结论 <span class="pill ${cls}">${esc(label)}</span>${c.seq != null ? ` <span class="muted small">· 记账序号 ${esc(c.seq)} · ${esc(fmtTs(c.ts))}</span>` : ''}</div>
+  ${c.deadRunRef ? '<div class="card muted">该 final 事件的 runId 不是 UUID 形状——判定为记账污染的死数据：不探测平台证据；裁决仍以事件流为准（取证告警另见 run-ref-dead 留痕）。</div>' : ''}
   ${c.findings
     ? findings
       ? details(`问题清单全文（${esc(path.basename(c.findings))}）`, codeBlock(findings.text))

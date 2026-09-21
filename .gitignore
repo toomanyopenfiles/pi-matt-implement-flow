@@ -7,6 +7,9 @@ docs/learning/
 # 编排器账本 / review bundle / findings
 .pi/matt-implement/
 
+# 项目设置不共享
+.pi/settings.json
+
 # pi-subagents 运行期状态（pi 自身已排除，这里让我们的自检口径一致）
 .pi/subagents/
 
