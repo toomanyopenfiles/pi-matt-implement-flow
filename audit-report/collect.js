@@ -163,6 +163,25 @@ function dedupe(runRefs) {
   return [...seen.values()].sort((a, b) => a.seq - b.seq);
 }
 
+// ---------------------------------------------------------------- runId 形状机判（死数据识别）
+
+// 平台 runId 一律 UUID 形状（36 位十六进制-连字符）。不匹配者是记账污染的直接形态
+// （真实事故：shell 变量被写进 --run-id，runId 成了包名）——死数据：
+// 不探测平台证据、不参与风险推导（不写、不猜、不补造它对应的运行）。
+const RUN_ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuidRunId(runId) {
+  return typeof runId === 'string' && RUN_ID_UUID.test(runId);
+}
+
+// 分流：live 进运行清单与平台证据探测；dead 单独留痕（warning），不参与任何推导
+function splitRunRefs(runRefs) {
+  const live = [];
+  const dead = [];
+  for (const r of runRefs) (isUuidRunId(r.runId) ? live : dead).push(r);
+  return { live, dead };
+}
+
 // ---------------------------------------------------------------- 票标题与票面
 
 function loadTicketFiles(runtimeDir, repoPath, run, tickets, warnings) {
@@ -458,23 +477,27 @@ function gitFacts(repoPath, shas) {
 function deriveRisks(model) {
   const risks = [];
   const add = (severity, title, detail, evidence) => risks.push({ severity, title, detail, evidence: evidence || [] });
+  const liveRefs = (model.runRefs || []).filter((r) => isUuidRunId(r.runId)); // 死 runRef 不参与任何推导
+  const incidents = incidentRefs(model, liveRefs);
 
   // R1 失败的子代理运行
-  for (const r of model.runRefs) {
+  for (const r of liveRefs) {
     const c = model.childRuns[r.runId];
     if (c && c.found && c.exitCode != null && c.exitCode !== 0) {
-      add('high', `一次 ${roleName(r.role)}运行以失败告终（退出码 ${c.exitCode}）`,
-        `${ticketRef(r)}（key ${r.key || '—'}）的这次运行失败或超时。台账只记最终结果，过程中的失败在此原样暴露。`,
-        [{ label: '运行', ref: r.runId }, ...(r.ticket === 'final' ? [] : [{ label: '票', ref: `ticket-${r.ticket}.html` }])]);
+      const rec = recoveryFor(model, r, incidents);
+      add(rec ? 'medium' : 'high', `一次 ${roleName(r.role)}运行以失败告终（退出码 ${c.exitCode}）${rec ? RECOVERED_TAG : ''}`,
+        `${ticketRef(r)}（key ${r.key || '—'}）的这次运行失败或超时。台账只记最终结果，过程中的失败在此原样暴露。${recoveryNote(rec)}`,
+        [{ label: '运行', ref: r.runId }, ...(r.ticket === 'final' ? [] : [{ label: '票', ref: `ticket-${r.ticket}.html` }]), ...recoveryEvidence(rec)]);
     }
   }
   // R2 验收被拒
-  for (const r of model.runRefs) {
+  for (const r of liveRefs) {
     const c = model.childRuns[r.runId];
     if (c && c.found && c.acceptance && /reject/i.test(String(c.acceptance.status))) {
-      add('high', `一次 ${roleName(r.role)}运行的验收被拒收（${c.acceptance.status}）`,
-        `${ticketRef(r)}：平台验收检查未通过（可能缺证据、报告形状不对或门禁失败）。工作可能已完成但被要求重报。`,
-        [{ label: '运行', ref: r.runId }]);
+      const rec = recoveryFor(model, r, incidents);
+      add(rec ? 'medium' : 'high', `一次 ${roleName(r.role)}运行的验收被拒收（${c.acceptance.status}）${rec ? RECOVERED_TAG : ''}`,
+        `${ticketRef(r)}：平台验收检查未通过（可能缺证据、报告形状不对或门禁失败）。工作可能已完成但被要求重报。${recoveryNote(rec)}`,
+        [{ label: '运行', ref: r.runId }, ...recoveryEvidence(rec)]);
     }
   }
   // R3 异常记录
@@ -506,16 +529,17 @@ function deriveRisks(model) {
       '整分支终审判定未就绪，运行仍被封账——多半是用户拍板放弃的合法出口，但代码带着已知问题收场，值得回看终审问题清单。',
       [{ label: '事件', ref: `seq ${latestFinal.seq}` }, { label: '运行', ref: latestFinal.runId }]);
   }
-  // R8 证据缺失
-  const missing = model.runRefs.filter((r) => !model.childRuns[r.runId] || !model.childRuns[r.runId].found);
+  // R8 证据缺失（死 runRef 已在上游分流，此处只判活运行）
+  const missing = liveRefs.filter((r) => !model.childRuns[r.runId] || !model.childRuns[r.runId].found);
   if (missing.length) {
     add('low', `${missing.length} 次运行的平台侧证据缺失`, '可能已被平台清理或落在其他项目的会话目录。相关票页会标注证据不可用，时间线与 git 事实不受影响。',
       missing.slice(0, 5).map((r) => ({ label: '运行', ref: r.runId })));
   }
-  // R9 任务书未恢复
+  // R9 任务书未恢复（死 runRef 的派发是记账污染的记录，不是事实：不产出衍生风险）
   const noBrief = [];
   for (const t of model.tickets.values()) {
     for (const d of t.dispatches) {
+      if (d.runId && !isUuidRunId(d.runId)) continue;
       if (!findBriefFor(model.briefs, d.key, d.ts)) noBrief.push(`${t.id}/${d.key}`);
     }
   }
@@ -533,6 +557,73 @@ function deriveRisks(model) {
   const order = { high: 0, medium: 1, low: 2 };
   risks.sort((a, b) => order[a.severity] - order[b.severity]);
   return risks;
+}
+
+// ---------------------------------------------------------------- 「已恢复」判定（R1/R2 的事实性豁免）
+
+// 判定完全在审计侧的派生阶段做，台账与事件流零变更。一次失败/拒收被判定为「已恢复」的条件：
+//   同票存在更晚序号的成功 settled 运行，且该次失败与那个 settle 之间没有同票的另一次事故。
+// settled 在写点即校验 headSha 在 git 中真实存在（成功结算的定义），故「存在更晚序号的 settle」
+// 就是「成功 settle」的证据。
+// 设计红线：事实性豁免而非补偿性豁免——降级只到 medium（工作确实被打断过）、detail 必须给出
+// 恢复运行的引用、风险本体不删除；拒绝→拒绝→成功不被一次成功抹平（前一次失败之后的下一个
+// 同票事实仍是失败，故它维持 high，只有各自有后续恢复的那次才降级）。
+const RECOVERED_TAG = '——后续运行已恢复';
+
+// 一次运行是否构成事故：平台证据里退出码非零（失败）或验收被拒收（拒收）
+function incidentOf(ref, model) {
+  const c = model.childRuns && model.childRuns[ref.runId];
+  if (!c || !c.found) return false;
+  const failed = c.exitCode != null && c.exitCode !== 0;
+  const rejected = !!(c.acceptance && /reject/i.test(String(c.acceptance.status)));
+  return failed || rejected;
+}
+
+function incidentRefs(model, liveRefs) {
+  return liveRefs.filter((r) => incidentOf(r, model));
+}
+
+function ticketById(model) {
+  const m = new Map();
+  const list = model.tickets && typeof model.tickets.values === 'function' ? model.tickets.values() : [];
+  for (const t of list) m.set(t.id, t);
+  return m;
+}
+
+function recoveryFor(model, ref, incidents) {
+  if (ref.ticket === 'final') return null; // run 级终审无票：不存在「同票后续运行」这一判据
+  const ticket = ticketById(model).get(ref.ticket);
+  if (!ticket || !(ticket.settles || []).length) return null;
+  const seq = Number(ref.seq) || 0;
+  const settle = ticket.settles
+    .filter((s) => Number(s.seq) > seq)
+    .sort((a, b) => Number(a.seq) - Number(b.seq))[0];
+  if (!settle) return null;
+  // 该次事故之后、该 settle 之前若还有同票事故，本次不算被恢复（一次成功不抹平多次事故）
+  const interrupted = incidents.some((i) => i.ticket === ref.ticket && i.runId !== ref.runId
+    && Number(i.seq) > seq && Number(i.seq) < Number(settle.seq));
+  if (interrupted) return null;
+  // 恢复运行：该 settle 之前同票最后一次活运行（resume 复用同一 runId 时即被拒的那次运行）
+  const before = (model.runRefs || [])
+    .filter((r) => r.ticket === ref.ticket && Number(r.seq) <= Number(settle.seq))
+    .sort((a, b) => Number(a.seq) - Number(b.seq));
+  const run = before.length ? before[before.length - 1] : null;
+  return { settle, runId: run ? run.runId : null };
+}
+
+function recoveryNote(rec) {
+  if (!rec) return '';
+  const where = `事件 seq ${rec.settle.seq}${rec.settle.headSha ? `，提交 ${String(rec.settle.headSha).slice(0, 12)}` : ''}`;
+  const who = rec.runId ? `运行 ${rec.runId}（${where}）` : `同票后续运行（${where}）`;
+  return `同票的后续运行已恢复：${who}已成功 settle——该次事故是过程抖动而非未处置的伤，故降为 medium（事实性豁免：工作确实被打断过，风险本体不删除）。`;
+}
+
+function recoveryEvidence(rec) {
+  if (!rec) return [];
+  return [
+    ...(rec.runId ? [{ label: '恢复运行', ref: rec.runId }] : []),
+    { label: '恢复结算', ref: `seq ${rec.settle.seq}` },
+  ];
 }
 
 function roleName(role) {
@@ -592,12 +683,17 @@ function collect({ runtimeDir }) {
 
   const events = parseEvents(runtimeDir, warnings);
   const { run, tickets, runRefs } = buildRunModel(events);
+  const { live: liveRefs, dead: deadRefs } = splitRunRefs(runRefs);
+  for (const r of deadRefs) {
+    warn(warnings, 'run-ref-dead',
+      `运行引用 ${r.runId}（${r.ticket === 'final' ? 'run 级终审' : `票 ${r.ticket}`}，key ${r.key || '—'}，事件 seq ${r.seq}）的 runId 不是 UUID 形状——判定为记账污染的死数据：不探测平台证据、不参与证据缺失类风险推导`);
+  }
 
   const candidates = artifactDirCandidates(repoPath, warnings);
   const childRuns = {};
-  for (const ref of runRefs) childRuns[ref.runId] = loadChildRun(candidates, ref, warnings);
+  for (const ref of liveRefs) childRuns[ref.runId] = loadChildRun(candidates, ref, warnings);
 
-  const sessionFiles = mainSessionCandidates(repoPath, runRefs.map((r) => r.runId), warnings);
+  const sessionFiles = mainSessionCandidates(repoPath, liveRefs.map((r) => r.runId), warnings);
   if (!sessionFiles.length) warn(warnings, 'main-session-missing', '未找到匹配的主会话记录，派发任务书原文不可恢复（其余证据不受影响）');
   const briefs = extractBriefs(sessionFiles);
 
@@ -674,7 +770,8 @@ function collect({ runtimeDir }) {
     events,
     run,
     tickets: ticketList,
-    runRefs,
+    runRefs: liveRefs,
+    deadRunRefs: deadRefs,
     childRuns,
     briefs,
     finalReviews,
