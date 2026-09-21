@@ -106,7 +106,7 @@ function buildRunModel(events) {
     switch (e.type) {
       case 'init': run.init = { ...p, seq: e.seq, ts: e.ts }; break;
       case 'pr': run.prs.push({ ...p, seq: e.seq, ts: e.ts }); break;
-      case 'anomaly': run.anomalies.push({ seq: e.seq, ts: e.ts, note: p.note || '' }); break;
+      case 'anomaly': run.anomalies.push({ seq: e.seq, ts: e.ts, note: p.note || '', refSeq: p.refSeq == null ? null : Number(p.refSeq) || null }); break;
       case 'escalate': run.escalates.push({ seq: e.seq, ts: e.ts, ticket: p.ticket, note: p.note || '' }); break;
       case 'close': run.close = { seq: e.seq, ts: e.ts, note: p.note || '' }; break;
       case 'final': {
@@ -502,7 +502,16 @@ function deriveRisks(model) {
   }
   // R3 异常记录
   for (const a of model.run.anomalies) {
-    add('high', `编排器记了一条异常（序号 ${a.seq}）`, a.note, [{ label: '事件', ref: `seq ${a.seq}` }]);
+    const fix = correctionFor(model.events || [], a);
+    if (fix) {
+      // 已补正（票 03）：anomaly 带 refSeq 且被指向事件同票后续有补正记录——留痕不删除，
+      // 只把报告口径降为 medium 并标注处置状态（降级依据必须可复核）。
+      add('medium', `编排器记了一条异常（序号 ${a.seq}）——已补正`,
+        `${a.note}｜补正依据：本异常指向的 seq ${fix.target.seq}（${fix.target.type}，票 ${fix.target.payload.ticket}）在 seq ${fix.correction.seq} 有同类型后续记录取代之；异常留痕保留，仅报告口径降级。`,
+        [{ label: '事件', ref: `seq ${a.seq}` }, { label: '补正', ref: `seq ${fix.correction.seq}` }]);
+    } else {
+      add('high', `编排器记了一条异常（序号 ${a.seq}）`, a.note, [{ label: '事件', ref: `seq ${a.seq}` }]);
+    }
   }
   // R4 升级
   for (const e of model.run.escalates) {
@@ -628,6 +637,20 @@ function recoveryEvidence(rec) {
 
 function roleName(role) {
   return ROLE_LABEL[role] || role;
+}
+
+// R3 的「已补正」判定（票 03）：anomaly 的 refSeq 指向的既有事件，若同票、序号更晚处存在
+// 同类型（取代性重记）事件，则视为补正记录在案。无 refSeq（旧账/散文时代）、目标事件
+// 不存在、或同票后续没有同类型记录 → 返回 null，R3 维持 high 原样。
+function correctionFor(events, anomaly) {
+  if (anomaly.refSeq == null) return null;
+  const target = events.find((e) => e.seq === anomaly.refSeq);
+  const ticket = target && target.payload && target.payload.ticket;
+  if (!ticket) return null;
+  const correction = events.find(
+    (e) => e.seq > target.seq && e.type === target.type && e.payload && e.payload.ticket === ticket
+  );
+  return correction ? { target, correction } : null;
 }
 
 // 风险文案里的运行归属：票级运行写票号，run 级终审写“run 级终审”

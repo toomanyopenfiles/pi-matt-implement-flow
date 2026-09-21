@@ -303,8 +303,27 @@ function gateAdd({ events, type, payload, truth }) {
       }
       break;
     }
+    case 'anomaly': {
+      // 补正链指针（票 03）：「正整数」一档由 schema 的 parseFlags 执法，此处执法后两档——
+      // 小于当前序号（不得指向未来或自身）与对应事件存在（含序号有洞的账）。违规拒绝，无绕过旗标。
+      if (payload.refSeq !== undefined) {
+        const n = Number(payload.refSeq);
+        const currentSeq = (events.at(-1)?.seq ?? 0) + 1; // 本事件将拿到的序号
+        if (n >= currentSeq) {
+          reasons.push(
+            `refSeq=${n} 不小于当前序号 ${currentSeq}——refSeq 只能指向已入账的既有事件（不能指向未来或自身）`
+          );
+        } else if (!events.some((e) => e.seq === n)) {
+          reasons.push(
+            `refSeq=${n} 指向的事件不存在——当前事件流没有 seq=${n} 的事件（append-only 序号被破坏？）；` +
+              '指不到对应事件时去掉 --ref-seq 重记'
+          );
+        }
+      }
+      break;
+    }
     default:
-      break; // pr / anomaly：无额外门
+      break; // pr：无额外门
   }
   return { ok: reasons.length === 0, reasons, warnings };
 }
@@ -382,6 +401,20 @@ function reconcile({ events, truth }) {
       if (merged && truth.branchExists(bname)) {
         diffs.push(`票 ${num} 已合并但分支 ${bname} 仍存在（应清理）`);
       }
+    }
+  }
+
+  // 6) anomaly 的 refSeq 补正链（票 03）：越界/悬空 → 账实差异。写点已执法，此处兼住手改
+  // 事件流或降级再生后留下的坏链；无 refSeq 的旧账零行为变化。
+  const seqSet = new Set(events.map((e) => e.seq));
+  for (const e of events) {
+    if (e.type !== 'anomaly' || e.payload?.refSeq === undefined) continue;
+    const n = Number(e.payload.refSeq);
+    if (!Number.isInteger(n) || n < 1 || n >= e.seq || !seqSet.has(n)) {
+      diffs.push(
+        `第 ${e.seq} 行 anomaly 的 refSeq=${e.payload.refSeq} 不是指向既有事件` +
+          `（须为正整数、小于自身序号 ${e.seq}，且该序号已入账）`
+      );
     }
   }
 
@@ -585,6 +618,16 @@ function renderEvent(e) {
     case 'pr':
       parts.push(`state=${p.state}`);
       if (p.url) parts.push(`url=${p.url}`);
+      break;
+    case 'anomaly':
+      // 补正链指针（票 03）：refSeq 指向本异常所针对/更正的既有事件，渲染为 ↩ ref-seq N
+      // （不再重复 payload 展开的 refSeq= 键）。其余键照旧走 payload 展开——
+      // 无 refSeq 的旧账行渲染逐字不变。
+      if (p.refSeq != null) parts.push(`↩ ref-seq ${p.refSeq}`);
+      for (const [k, v] of Object.entries(p)) {
+        if (k === 'refSeq') continue;
+        parts.push(`${k}=${v}`);
+      }
       break;
     case 'close':
       break;

@@ -627,3 +627,41 @@ test('collect + render：fixture 账首页风险区——恢复类风险 medium 
     fx.cleanup();
   }
 });
+
+// ---------------------------------------------------------------- 票 03：anomaly refSeq 补正链（R3 降级）
+
+// 被污染的 dispatch 及其同票补正记录（形状取自真实旧账 final-verdict-event seq 15/16/17）
+const POLLUTED_DISPATCH = { v: 2, seq: 2, ts: 't2', head: 'aa0', type: 'dispatch', payload: { ticket: '03', key: 't-03', runId: 'pi-matt-implement-flow' } };
+const POLLUTION_ANOMALY = { v: 3, seq: 3, ts: 't3', head: 'aa0', type: 'anomaly', payload: { note: 'seq=2 的 dispatch 字段被 shell 污染', refSeq: 2 } };
+const CORRECTED_DISPATCH = { v: 3, seq: 4, ts: 't4', head: 'aa0', type: 'dispatch', payload: { ticket: '03', key: 't-03-corrected', runId: 'b56132cd-3267-4027-a963-c3ea19b49461' } };
+
+// deriveRisks 的最小模型装置：R3 只看 run.anomalies + events，其余推导喂空装置
+function risksFor(events) {
+  const { run } = buildRunModel(events);
+  return deriveRisks({ run, events, tickets: new Map(), runRefs: [], childRuns: {}, briefs: [] });
+}
+
+test('deriveRisks R3：anomaly 带 refSeq 且被指向事件同票后续有补正记录 → 降 medium 标「已补正」', () => {
+  const risks = risksFor([POLLUTED_DISPATCH, POLLUTION_ANOMALY, CORRECTED_DISPATCH]);
+  const risk = risks.find((r) => r.title.includes('异常'));
+  assert.ok(risk, '异常留痕不删除：风险项照旧产出');
+  assert.equal(risk.severity, 'medium', '补正在案 → 降 medium（工作确实被打断过，不消项）');
+  assert.match(risk.title, /已补正/);
+  assert.match(risk.detail, /seq 4/, '降级依据必须给出补正记录的事件序号');
+  assert.ok(risk.evidence.some((e) => String(e.ref).includes('seq 3')), '仍可回跳异常事件本身');
+  assert.ok(risk.evidence.some((e) => String(e.ref).includes('seq 4')), '可回跳补正记录');
+});
+
+test('deriveRisks R3：无 refSeq / 补正缺失 / 指向别的票 / 悬空 refSeq → 一律维持 high 原样', () => {
+  const cases = {
+    '无 refSeq（散文时代形态）': [POLLUTED_DISPATCH, { ...POLLUTION_ANOMALY, payload: { note: '散文异常，无链接' } }],
+    '被指向事件同票后续无补正记录': [POLLUTED_DISPATCH, POLLUTION_ANOMALY, { v: 3, seq: 4, ts: 't4', head: 'aa0', type: 'pr', payload: { state: 'ready' } }],
+    '后续同类型记录属于别的票': [POLLUTED_DISPATCH, POLLUTION_ANOMALY, { v: 3, seq: 4, ts: 't4', head: 'aa0', type: 'dispatch', payload: { ticket: '04', key: 't-04', runId: 'r4' } }],
+    'refSeq 悬空（指向不存在的事件）': [POLLUTED_DISPATCH, { ...POLLUTION_ANOMALY, payload: { note: '指向洞里', refSeq: 99 } }],
+  };
+  for (const [name, events] of Object.entries(cases)) {
+    const risk = risksFor(events).find((r) => r.title.includes('异常'));
+    assert.equal(risk.severity, 'high', `${name}：未补正即维持 high`);
+    assert.doesNotMatch(risk.title, /已补正/, name);
+  }
+});

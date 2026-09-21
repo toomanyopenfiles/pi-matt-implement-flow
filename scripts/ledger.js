@@ -43,7 +43,9 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
   final       --final-verdict(ready|ready_with_fixes|not_ready) --run-id <runId> [--findings] [--note]
               # 整分支终审裁决（run 级，无 ticket）；runId 必选——事件驱动审计与平台证据核验的锚点。
               # 多轮终审 = 多条事件（无去重，一律以最新裁决为准）；无 merge 事件时警告入账。
-  anomaly     --note
+  anomaly     --note [--ref-seq N]
+              # refSeq 指向本异常所针对/更正的既有事件序号：须为正整数、小于当前序号，
+              # 且该序号的事件已入账；违规拒绝（无绕过旗标）。指不到对应事件时去掉 --ref-seq 重记。
   pr          --state(opened-draft|ready) [--url] [--note]
   close       [--note]
 
