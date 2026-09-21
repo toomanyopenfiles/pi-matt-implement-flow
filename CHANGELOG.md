@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-22
 ### Added
 
 - `ledger add anomaly --ref-seq N` — the anomaly escape hatch can now point at the existing
@@ -32,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   findings and verdict from the event stream instead of scanning artifact directories.
   Internal enhancement — the user-visible surface is a more complete ledger and audit
   report, with the final review now auditable.
+
+### Fixed
+
+- Audit report no longer double-joins absolute payload paths: `init --spec`, `verdict
+  --findings` and `final --findings` may be recorded as absolute repo paths (per the
+  brief's path rule) or relative ones — absolute paths are now used as-is instead of
+  being joined onto the repo root, which previously degraded ticket-source evidence
+  to `ticket-file-missing`.
+
+[Unreleased]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/releases/tag/v0.1.0
 
 ## [0.1.0] - 2026-09-20
 
