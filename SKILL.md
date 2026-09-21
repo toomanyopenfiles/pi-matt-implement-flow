@@ -59,13 +59,13 @@ Your memory has three layers, each with exactly one owner. Terms (per `CONTEXT.m
 - **Orchestration notes** — `.pi/matt-implement/<feature-slug>/notes.md`. Prose memory: process narrative, lessons, the user's verbal decisions. Facts ("what happened, when") go to the event stream; prose ("why, what we learned") goes here. Prose never competes with the event stream as a source of truth.
 
 - **You never hand-write the ledger.** Every state transition is recorded (记账) with one script command: `node <this-package>/scripts/ledger.js add <type> --runtime-dir .pi/matt-implement/<feature-slug> [flags]` (`<this-package>` is the directory containing this SKILL.md).
-- **Event types, flags-style (never raw JSON)**: `init` / `dispatch` / `settled` / `verdict` / `fix` / `merge` / `escalate` / `anomaly` / `pr` / `close` — run `--help` for each type's exact flag set; free text is always `--note`.
+- **Event types, flags-style (never raw JSON)**: `init` / `dispatch` / `settled` / `verdict` / `fix` / `merge` / `escalate` / `final` / `anomaly` / `pr` / `close` — run `--help` for each type's exact flag set; free text is always `--note`.
 - **The script validates before writing**: bad payloads are rejected with a reason — fix and retry immediately (your context is freshest now); state-machine violations and definite git contradictions are rejected outright; facts that are merely not-yet-verifiable (e.g. a worktree not yet in `git worktree list`) come back as warnings and the event is recorded.
 - **There are no bypass flags.** When you disagree with the validator, record `anomaly --note "..."` and stop to report.
 
 Three command disciplines:
 
-1. **Record on every state transition**: dispatch, settle, verdict, fix dispatch, merge, escalation, PR transitions; `close` (封账) seals the run — the ledger flips to `state: complete` and every further record is rejected.
+1. **Record on every state transition**: dispatch, settle, verdict, fix dispatch, merge, escalation, the final review's verdict (终审裁决 — one run-level `final` event per round), PR transitions; `close` (封账) seals the run — the ledger flips to `state: complete` and every further record is rejected.
 2. **Reconcile (对账) before every dispatch and every merge**: `node <this-package>/scripts/ledger.js check --runtime-dir ...` — non-zero exit means ledger-truth drift, listed item by item. Fix the world to match truth or truth to match the world; never the ledger by hand.
 3. **Regenerate after compaction**: `node <this-package>/scripts/ledger.js build --runtime-dir ...` prints the full four-section ledger; continue from its output plus the orchestration notes, never from memory.
 
@@ -201,10 +201,11 @@ Recompute the frontier. While tickets remain: top the dispatch back up to N. Don
 ### Final gate
 
 1. Write the whole-branch bundle `git diff <feature-base>...HEAD` and dispatch `pi-matt-implement-flow.final-reviewer` with `worktree: true, baseRef: "refs/heads/feat/<slug>", acceptance: false` and a verdict schema of `ready | ready_with_fixes | not_ready`.
-2. **With fixes**: one coder without isolation fixes every finding, commit; re-run the final review only if the changes are substantial. **Not ready**: escalate to the user with the review pointers.
-3. Push. Mark the PR ready for review, or report the branch name when there is no remote; record `pr --state ready` if a PR exists.
-4. Remove every remaining worktree and ticket branch.
-5. **封账**: record `close` — the ledger flips to `state: complete`, and a sealed run can never be mistaken for an active one by the next session.
+2. **Record the verdict**（记账 `final`）: write the findings to `.pi/matt-implement/<feature-slug>/findings/final-r<k>.md` (`<k>` = final-review round), then record — `node <this-package>/scripts/ledger.js add final --runtime-dir .pi/matt-implement/<feature-slug> --final-verdict <ready|ready_with_fixes|not_ready> --run-id <runId> [--findings .pi/matt-implement/<feature-slug>/findings/final-r<k>.md]`. It is a run-level event (no `--ticket`); the final-reviewer's dispatch is not recorded separately — `--run-id` carries it, the same shape as a ticket reviewer's `--rev-run-id`. Every round of final review is one `final` event, and the **latest** verdict is the branch's readiness — never an earlier round's.
+3. **With fixes**: one coder without isolation fixes every finding, commit; re-run the final review only if the changes are substantial — a re-run is a new round, so it gets its own `final` event. **Not ready**: escalate to the user with the review pointers. If the user calls the run off, record `close` (封账) as usual — the seal gate (封账门) lets a user's give-up through at warning level, and its enforcement belongs to the script, not to this file.
+4. Push. Mark the PR ready for review, or report the branch name when there is no remote; record `pr --state ready` if a PR exists.
+5. Remove every remaining worktree and ticket branch.
+6. **封账**: record `close` — the ledger flips to `state: complete`, and a sealed run can never be mistaken for an active one by the next session.
 
 Report: tickets closed with their merge SHAs, the PR link or branch, and every escalated ticket with its review pointer.
 

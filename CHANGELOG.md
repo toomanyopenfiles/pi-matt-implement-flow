@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Whole-branch final review is now a first-class ledger event (`final`): the ledger
+  header shows the latest verdict and run id, sealing the ledger is gated on a verdict
+  once work has been merged, and the audit report derives the final-review run, cost,
+  findings and verdict from the event stream instead of scanning artifact directories.
+  Internal enhancement — the user-visible surface is a more complete ledger and audit
+  report, with the final review now auditable.
+
 ## [0.1.0] - 2026-09-20
 
 Initial public release.

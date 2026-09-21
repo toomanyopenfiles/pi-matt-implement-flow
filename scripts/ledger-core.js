@@ -3,6 +3,7 @@
 // 台账核心判定（纯逻辑，真相层 IO 由 CLI 注入为 truth 对象）：
 //   - gateAdd     add 写点的三档校验：拒绝（schema/枚举/状态机/确定矛盾）→ 警告（此刻尚不可核实）→ 矛盾拒绝
 //   - closeBlockers 封账资格：每票须有 merge/escalate 事件，或属非任务票（spec 母票 / resolved 研究票）
+//   - finalEvidenceWarnings 终审平台证据的 best-effort 核验（仅 check 使用，警告级、不影响退出码）
 //   - reconcile   账实差异核验（check 子命令与 build 的对账结论段共用同一判定）
 //   - renderLedger 四段台账再生：头部 / 表格 / 时间线 / 对账结论（临时文件+原子替换由 CLI 负责）
 //
@@ -14,12 +15,15 @@
 //     commitMessage(sha): 'string|null', fileExists(p): bool,
 //     mergesWithTokens: [{sha, subject, tokens: ['01',...]}] | null,   // 无 init 基线 → null
 //     remoteUrl: 'string|null', probeGh(branch): 'opened-draft'|'ready'|'none'|null,
+//     finalEvidence(runId): { found: bool, dir: 'string|null' },  // 平台会话产物探测（只读）
 //     tickets: [{num, file, title, status, type, blockedBy: [...]}],    // 本地 tracker 枚举
 //     ticketsWarning: 'string|null',                                   // 枚举不可用的原因
 //   }
 
 const TICKET_BRANCH = (num) => `ticket-${num}`;
 const short = (sha) => (sha ? String(sha).slice(0, 7) : 'unknown');
+// 平台 runId（UUID）短码：8 位，与审计工具的报告渲染同约定
+const shortRunId = (id) => (id ? String(id).slice(0, 8) : 'unknown');
 const pad2 = (n) => String(Number(n)).padStart(2, '0');
 
 function compactTime(ts) {
@@ -78,6 +82,9 @@ function flowShape(events) {
     maxConcurrent: p.maxConcurrent === undefined ? 3 : Number(p.maxConcurrent),
   };
 }
+
+// 最新终审裁决（run 级事实）：多轮终审一律以最新为准，头部 final: 行与封账门共用同一判定
+const latestFinal = (events) => events.filter((e) => e.type === 'final').at(-1) ?? null;
 
 // ------------------------------------------------------------------
 // 封账资格：非任务票排除（spec 母票 / resolved 研究票 / wontfix）
@@ -257,6 +264,17 @@ function gateAdd({ events, type, payload, truth }) {
       if (t && !t.dispatches.length) warnings.push(`票 ${num} 尚无 dispatch 事件就升级（警告）`);
       break;
     }
+    case 'final': {
+      // run 级裁决：无 ticket、不随流程形态漂移（reviewer=off 的运行终审照跑照记）。
+      // 尚无 merge 事件 = 终审跑在票闭环之前，属流程异常而非事实矛盾——警告不拒绝。
+      // 多轮终审 = 多条事件：不设 round 校验、不设同事件去重（一律以最新裁决为准）。
+      if (!events.some((e) => e.type === 'merge')) {
+        warnings.push(
+          '本 run 尚无 merge 事件就有 final——终审通常发生在全部票闭环之后（流程异常，警告不拒绝）'
+        );
+      }
+      break;
+    }
     case 'close': {
       const blockers = closeBlockers({ events, truth });
       if (blockers.length) {
@@ -264,6 +282,23 @@ function gateAdd({ events, type, payload, truth }) {
           `封账被拒：${blockers.length} 张票未闭环——` +
             blockers.map((b) => `票 ${b.num}（${b.reason}，无 merge/escalate）`).join('；') +
             '。先合并或升级；spec 母票 / resolved 研究票等非任务票不阻塞'
+        );
+      }
+      // 封账门（分层，ADR-0002 Decision 5）：有合并工作的运行须已有终审裁决入账；
+      // 最新裁决 not_ready 警告放行（用户拍板放弃的合法出口——强拒绝会让放弃的 run 永远卡在 running）；
+      // 零合并票的运行（全 escalate / 空跑）没有终审环节，不检查。
+      const mergeCount = events.filter((e) => e.type === 'merge').length;
+      const latest = latestFinal(events);
+      if (mergeCount && !latest) {
+        reasons.push(
+          `封账被拒：本 run 有合并工作（${mergeCount} 条 merge 事件）但尚无终审裁决——先记账 ` +
+            'final --final-verdict(ready|ready_with_fixes|not_ready) --run-id <runId>；' +
+            '封账门：有合并工作的运行须已有终审裁决入账（零合并票的运行不检查终审）'
+        );
+      } else if (mergeCount && latest.payload.finalVerdict === 'not_ready') {
+        warnings.push(
+          `封账警告：最新终审裁决为 not_ready（runId ${shortRunId(latest.payload.runId)}，seq ${latest.seq}）——` +
+            '按弃跑放行（用户拍板放弃的合法出口），本账在此标注警告'
         );
       }
       break;
@@ -351,6 +386,34 @@ function reconcile({ events, truth }) {
   }
 
   return { diffs, warnings };
+}
+
+// ------------------------------------------------------------------
+// 终审平台证据核验（check 专用，best-effort）
+// ------------------------------------------------------------------
+
+// final 事件的 runId 指向的平台子代理证据是否还在（探测由 truth.finalEvidence 注入）。
+// 不可核验或已被清理 → 逐条警告，绝不影响退出码：误杀不可核验的账比漏报更糟。
+// 只在 check 的 stdout 出现，不进台账——台账由事件流 + 真相层确定性再生，不随 HOME 下的
+// 平台产物漂移（对账结论段的语义是账实差异计数，spec 已定不在此加终审段）。
+function finalEvidenceWarnings({ events, truth }) {
+  const warnings = [];
+  const seen = new Set();
+  for (const e of events) {
+    if (e.type !== 'final') continue;
+    const runId = e.payload?.runId;
+    if (!runId || seen.has(runId)) continue; // 同一 runId 被多轮引用只报一次
+    seen.add(runId);
+    const probe = truth.finalEvidence ? truth.finalEvidence(runId) : null;
+    if (probe?.found) continue;
+    const why = probe?.dir
+      ? `产物目录 ${probe.dir} 中无该 runId 的产物（可能已被平台清理）`
+      : '平台会话产物目录不可得（不可核验）';
+    warnings.push(
+      `终审平台证据核验：final seq ${e.seq} 的 runId ${runId} —— ${why}（best-effort 核验，不影响退出码）`
+    );
+  }
+  return warnings;
 }
 
 // ------------------------------------------------------------------
@@ -459,6 +522,9 @@ function renderHeader({ events, truth }) {
     `flow: reviewer=${flow.reviewer ? 'on' : 'off'}, maxFixRounds=${flow.maxFixRounds}, maxConcurrent=${flow.maxConcurrent}`
   );
   lines.push(`pr: ${prState({ events, truth })}`);
+  // final: 与 pr: 同为终局状态类事实，两行对称；多轮终审取最新一条，无 final 时显示 none
+  const fin = latestFinal(events);
+  lines.push(fin ? `final: ${fin.payload.finalVerdict} (${shortRunId(fin.payload.runId)})` : 'final: none');
   lines.push('');
   return lines.join('\n');
 }
@@ -510,6 +576,11 @@ function renderEvent(e) {
       break;
     case 'escalate':
       parts.push(`ticket=${p.ticket}`);
+      break;
+    case 'final':
+      // 紧凑裁决形式：final verdict=… （不是 final finalVerdict=… 的键名 stutter）；runId 用短码
+      parts.push(`verdict=${p.finalVerdict}`, `runId=${shortRunId(p.runId)}`);
+      if (p.findings) parts.push(`findings=${p.findings}`);
       break;
     case 'pr':
       parts.push(`state=${p.state}`);
@@ -563,9 +634,11 @@ module.exports = {
   TICKET_BRANCH,
   closeBlockers,
   countTickets,
+  finalEvidenceWarnings,
   flowShape,
   gateAdd,
   indexByTicket,
+  latestFinal,
   reconcile,
   renderLedger,
 };

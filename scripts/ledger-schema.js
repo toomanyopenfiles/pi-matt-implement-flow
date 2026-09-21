@@ -1,11 +1,12 @@
 'use strict';
 
 // 事件分类学与 CLI 载荷 schema（纯函数，无 IO）。
-// 十类事件枚举定死（spec：事件分类学）；每类事件有固定的必选/可选参数集；
+// 十一类事件枚举定死（spec：事件分类学）；每类事件有固定的必选/可选参数集；
 // 自由文本统一 --note。本模块不知道文件系统与 git——真相层查询由 ledger.js 注入。
 
-// 信封格式版本：事件分类学演进时 +1，旧运行账本按此迁移。
-const EVENT_VERSION = 1;
+// 信封格式版本：事件分类学演进时 +1，旧运行账本按此识别（v=2 起含 run 级 final 事件）。
+// 现无代码消费该字段——升版是分类学自家教义的显式动作，不是迁移触发器（旧账不迁移）。
+const EVENT_VERSION = 2;
 
 // kebab-case CLI 旗标 → payload 字段（camelCase）
 const FLAG_TO_KEY = {
@@ -17,6 +18,7 @@ const FLAG_TO_KEY = {
   'head-sha': 'headSha',
   gate: 'gate',
   verdict: 'verdict',
+  'final-verdict': 'finalVerdict',
   findings: 'findings',
   'rev-run-id': 'revRunId',
   'fix-no': 'fixNo',
@@ -40,12 +42,16 @@ const KEY_TO_FLAG = Object.fromEntries(Object.entries(FLAG_TO_KEY).map(([f, k]) 
 // 枚举字段：值必须落在集合内（校验档：拒绝）
 const ENUMS = {
   verdict: ['approved', 'changes_requested'],
+  // 终审的整分支三值裁决。不复用 verdict 键：枚举校验按 key 全局生效，复用会被票级二值拒绝
+  // （ADR-0002 Decision 1）。
+  finalVerdict: ['ready', 'ready_with_fixes', 'not_ready'],
   state: ['opened-draft', 'ready'],
   tracker: ['local', 'github', 'gitlab'],
   reviewer: ['on', 'off'],
 };
 
-// 事件分类学（10 类，枚举定死）。reviewer 派发不单独记事件——由 verdict 的 revRunId 承载。
+// 事件分类学（11 类，枚举定死）。reviewer 派发不单独记事件——由 verdict 的 revRunId 承载；
+// final-reviewer 的派发同理不记，runId 由 run 级 final 事件承载。
 const EVENT_TYPES = {
   init: {
     required: ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand', 'tracker'],
@@ -63,6 +69,9 @@ const EVENT_TYPES = {
   merge: { required: ['ticket', 'headSha', 'mergeSha'], optional: ['note'] },
   escalate: { required: ['ticket'], optional: ['note'] },
   anomaly: { required: ['note'], optional: [] },
+  // 整分支终审裁决（run 级状态转换，无 ticket）。runId 必选：事件驱动审计与平台证据
+  // 核验的唯一锚点（票级还有 dispatch/fix 兜底，终审没有）。多轮终审 = 多条事件，不去重。
+  final: { required: ['finalVerdict', 'runId'], optional: ['findings', 'note'] },
   pr: { required: ['state'], optional: ['url', 'note'] },
   close: { required: [], optional: ['note'] },
 };
