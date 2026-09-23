@@ -79,7 +79,7 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
               # gh 收发为 best-effort 薄 IO：先拉状态再规划、规划通过后才写入——
               # 拉取失败即整体中止（无半成品推送）；部分失败逐动作报告已完成/未完成，
               # 重跑安全（幂等规划只补未完成的动作）。同步成功后输出传输件清理指引。
-              # run 已封账时拒绝执行（封账后事件流拒写，同步失败将无从记账）。
+              # run 已封账或 PR 已标 ready 时拒绝执行（同步须在两时点之前）。
 
 说明:
   add      记账：脚本盖权威时间戳/单调序号/版本/git HEAD 锚点，append 后自动再生台账
@@ -766,17 +766,24 @@ function cmdSync({ runtimeDir, rest }) {
     return 2;
   }
 
-  // 时点约束先于一切网络动作：同步须发生在封账之前（ADR-0003——封账后事件流拒写，
-  // 同步失败将无从记账，账实静默裂开）。
+  // 时点约束先于一切网络动作：同步须发生在封账之前、pr --state ready 之前
+  //（ADR-0003——封账后事件流拒写，同步失败将无从记账；PR ready 后 closing keywords
+  // 与同步抢关票，spec 接口契约的时点约束只剩未落实的前半时无效）。
   const { events, loadError } = loadEvents(path.join(runtimeDir, EVENTS_FILE));
   if (loadError) {
     out(`✗ 拒绝：${loadError}`);
     return 1;
   }
-  if (events.some((e) => e?.type === 'close')) {
+  const tooLate = events.some((e) => e?.type === 'close')
+    ? 'run 已封账'
+    : events.some((e) => e?.type === 'pr' && e?.payload?.state === 'ready')
+      ? 'PR 已标 ready（pr --state ready 已入账）'
+      : null;
+  if (tooLate) {
     out(
-      '✗ 拒绝：run 已封账——同步须发生在封账之前、pr --state ready 之前；',
-      '  封账后事件流拒写，此时同步失败将无从记账。确有未推送状态：向用户上报后人工处理。',
+      `✗ 拒绝：${tooLate}——同步须发生在封账之前、pr --state ready 之前；`,
+      '  封账后事件流拒写、PR ready 后 closing keywords 与同步抢关票——此时同步失败将无从记账；',
+      '  确有未推送状态：向用户上报后人工处理。',
     );
     return 1;
   }
@@ -830,8 +837,8 @@ function cmdSync({ runtimeDir, rest }) {
     } catch (e) {
       out(
         `✗ 同步未执行任何动作：gh issue view ${num} 拉取失败——${ghDetail(e)}`,
-        '  同步先拉状态再规划、规划通过后才写入：拉取失败即整体中止（无半成品推送）；',
-        '  排查 gh 登录/网络（或确认该 issue 未被删除）后重跑——已推送的部分不受影响。',
+        '  同步先拉状态再规划、规划通过后才写入：拉取失败即整体中止，零写入（无半成品推送）；',
+        '  排查 gh 登录/网络（或确认该 issue 未被删除）后重跑。',
       );
       return 1;
     }

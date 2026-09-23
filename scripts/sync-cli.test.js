@@ -17,8 +17,10 @@ const path = require('node:path');
 const LEDGER = path.resolve(__dirname, 'ledger.js');
 
 // --- gh 桩（Node 脚本）：状态存 GH_STUB_STATE 指向的 JSON 文件，调用追加进 GH_STUB_LOG ---
-// GH_STUB_FAIL_NUM_VIEW：该号的 issue view 模拟失败（tracker 缺票）；GH_STUB_FAIL_WRITE：
-// 下一次写入动作（close/comment/edit）模拟失败——部分同步的注入点。
+// GH_STUB_FAIL：所有调用模拟失败（网络不可用）；GH_STUB_FAIL_WRITE=<num>：该号的写入
+// 动作（close/comment/edit）模拟失败——部分同步状态的注入点（每次 gh 调用是独立进程，
+// 同号多次写入各自都会拦；用例用它拦最后一个动作，此前的动作照常推送）。
+// issue view 的失败不设专门开关：从桩状态里删号即真实缺票（同步对象缺失用例）。
 
 const GH_STUB = `#!/usr/bin/env node
 'use strict';
@@ -41,7 +43,7 @@ const save = (s) => fs.writeFileSync(stateFile, JSON.stringify(s));
 const writeFail = () => {
   const f = process.env.GH_STUB_FAIL_WRITE;
   if (!f) return false;
-  delete process.env.GH_STUB_FAIL_WRITE; // 只拦一次——后续动作放行
+  delete process.env.GH_STUB_FAIL_WRITE; // 只防同进程内重入——每个 gh 调用是独立进程，跨调用各自判定
   return num === f;
 };
 if (kind === 'view') {
@@ -150,6 +152,13 @@ function stateOf(f, num) {
 
 // gh 桩日志行：'-R o/r issue view 1043 --json …'——视图调用以 'issue view' 子串识别
 const isViewCall = (line) => /(^|\s)issue view /.test(line);
+
+function writeEvents(f, events) {
+  fs.writeFileSync(
+    path.join(f.runtime, 'events.jsonl'),
+    events.map((e) => JSON.stringify(e)).join('\n') + '\n',
+  );
+}
 
 // 恒定 fixture：合并票 1043（Comments 有 SHA）、升级票 1102（Comments 有原因）、
 // 在途票 1044（无事实，不是同步对象）、spec 母票 3001（closing 收尾评论）。
@@ -317,15 +326,41 @@ test('sync 拒绝：快照不存在（tracker=local 无需同步的提示）', (
 test('sync 拒绝：run 已封账——同步须发生在封账之前', (t) => {
   const f = makeFixture(t);
   seedSealFixture(f);
-  fs.writeFileSync(
-    path.join(f.runtime, 'events.jsonl'),
-    JSON.stringify({ type: 'init', seq: 1 }) + '\n' + JSON.stringify({ type: 'close', seq: 9 }) + '\n',
-  );
+  writeEvents(f, [
+    { type: 'init', seq: 1 },
+    { type: 'close', seq: 9 },
+  ]);
   const r = sync(f, [], withGh(f));
   assert.equal(r.status, 1);
   assert.match(r.stdout, /已封账/);
   assert.match(r.stdout, /封账之前/);
   assert.equal(callLog(f).length, 0);
+});
+
+test('sync 拒绝：PR 已标 ready（pr --state ready 已入账）——同步须在 PR 标 ready 之前', (t) => {
+  const f = makeFixture(t);
+  seedSealFixture(f);
+  writeEvents(f, [
+    { type: 'init', seq: 1 },
+    { type: 'pr', seq: 2, payload: { state: 'ready' } },
+  ]);
+  const r = sync(f, [], withGh(f));
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /PR 已标 ready/);
+  assert.match(r.stdout, /之前/);
+  assert.equal(callLog(f).length, 0, '拒绝面不触碰 gh');
+});
+
+test('sync 放行：pr --state opened-draft 不拦同步（时点门只对 ready 生效）', (t) => {
+  const f = makeFixture(t);
+  seedSealFixture(f);
+  writeEvents(f, [
+    { type: 'init', seq: 1 },
+    { type: 'pr', seq: 2, payload: { state: 'opened-draft' } },
+  ]);
+  const r = sync(f, [], withGh(f));
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /同步完成/);
 });
 
 test('sync 拒绝：abandon 缺 claimant/reason、mode 非法、未知旗标（exit 2 用法拒绝）', (t) => {
