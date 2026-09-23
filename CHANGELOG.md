@@ -7,9 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Audit report output is bilingual: `--lang zh|en` (default `zh`) selects the language of the
+  report site — page chrome, deterministic risk texts, forensics warnings, timeline narration,
+  glossary definitions — and of every by-product (AI analysis brief, CLI output). All copy lives
+  in `audit-report/i18n.js` as paired zh/en catalogs (key parity is test-guarded); facts,
+  evidence and risk findings are language-independent.
+
 ## [0.2.0] - 2026-09-22
 ### Added
 
+- `audit-report/` — offline post-mortem audit tool for a finished run:
+  `node audit-report/report.js --runtime-dir <repo>/.pi/matt-implement/<slug>` collects the
+  event stream, platform subagent evidence, main-session dispatch briefs and git facts into a
+  browsable static report site (run overview with a deterministic risk section, per-ticket
+  evidence chains, a final-review page, and a glossary). Zero LLM calls, zero main-flow
+  intrusion, tested against synthetic fixtures (`node --test audit-report/collect.test.js`);
+  not shipped in the npm `files` allowlist. As-shipped behavior worth noting:
+  - Deterministic risk rules (failed runs, rejected acceptance, anomalies, escalations,
+    exhausted fix budgets, unsealed runs, sealing with a `not_ready` final verdict, missing
+    platform evidence, unrestored dispatch briefs, repeated `changes_requested` verdicts),
+    with three presentation tags that never delete a risk: a run failed/rejected and recovered
+    by a later settle on the same ticket is downgraded to medium and tagged as recovered
+    (linking the recovery run); an anomaly whose `refSeq` correction was superseded by a
+    same-ticket record is tagged as corrected (its derived evidence-missing risk likewise);
+    `runId`s that are not UUID-shaped are accounting pollution — flagged as `run-ref-dead`
+    instead of surfacing as missing platform evidence.
+  - The final-review run, cost, findings and verdict are derived from the `final` event;
+    pre-`final` ledgers fall back to artifact-directory scanning.
+  - Payload paths (`init --spec`, `verdict --findings`, `final --findings`) are located
+    whether recorded as absolute repo paths (per the brief's path rule) or relative ones —
+    no double-joining onto the repo root degrading ticket-source evidence to
+    `ticket-file-missing`.
+  - Optional two-step AI opinion layer, kept strictly separate from fact: `--ai-brief` exports
+    a self-contained evidence brief; the analyzed `ai-analysis.json` (placed in the report
+    directory or passed via `--ai-analysis`) renders as an explicitly non-factual opinion
+    section.
 - `ledger add anomaly --ref-seq N` — the anomaly escape hatch can now point at the existing
   event it concerns or corrects, making the correction link machine-readable instead of
   prose. The pointer is validated at write time (positive integer, smaller than the current
@@ -21,30 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Event envelope version bumped to 3: `anomaly` events may carry the optional `refSeq`
   correction pointer. Old ledgers (v1/v2, no `refSeq`) build and check with zero new noise —
   the reader has no version branches.
-- Audit report severity now reflects what was actually remediated: a run rejected by
-  acceptance and recovered by a later settle on the same ticket is downgraded to medium and
-  tagged as recovered (with a link to the recovery run); `runId`s that are not UUID-shaped
-  are treated as accounting pollution instead of missing platform evidence; and a polluted
-  dispatch that carries a `refSeq` correction link is tagged as corrected instead of
-  surfacing as a live evidence-missing risk.
 - Whole-branch final review is now a first-class ledger event (`final`): the ledger
-  header shows the latest verdict and run id, sealing the ledger is gated on a verdict
-  once work has been merged, and the audit report derives the final-review run, cost,
-  findings and verdict from the event stream instead of scanning artifact directories.
-  Internal enhancement — the user-visible surface is a more complete ledger and audit
-  report, with the final review now auditable.
-
-### Fixed
-
-- Audit report no longer double-joins absolute payload paths: `init --spec`, `verdict
-  --findings` and `final --findings` may be recorded as absolute repo paths (per the
-  brief's path rule) or relative ones — absolute paths are now used as-is instead of
-  being joined onto the repo root, which previously degraded ticket-source evidence
-  to `ticket-file-missing`.
-
-[Unreleased]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/releases/tag/v0.1.0
+  header shows the latest verdict and run id, and sealing the ledger is gated on a verdict
+  once work has been merged. Every round of final review is one event, and the latest
+  verdict is the branch's readiness.
+- Acceptance contract softened: `residual-risks` left the mandatory dispatched-evidence
+  list — it is advisory and never a rejection reason. The mandatory five (changed files,
+  new tests, run command, verify output, no-staged-files) are unchanged; registration
+  self-check gains an invariant pinning the contract.
 
 ## [0.1.0] - 2026-09-20
 
@@ -78,3 +96,7 @@ Initial public release.
   the Chinese version rewritten for natural phrasing with consistent English terminology
   (spec / ticket / coder / worktree / review).
 - Package and repo descriptions now state the relationship to Matt Pocock's `/implement`.
+
+[Unreleased]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/releases/tag/v0.1.0

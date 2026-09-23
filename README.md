@@ -167,6 +167,10 @@ Every run writes a local run directory, `.pi/matt-implement/<feature>/`:
 - `ledger.md` and `events.jsonl` are maintained by the flow; do not hand-edit them. Notes belong in `notes.md`.
 - After the run, once only the branch / PR matters, keep the directory as a record or clean it up — your call.
 
+## Audit report
+
+Audit a finished run after the fact: [`audit-report/`](./audit-report/README.md) turns the run directory into a browsable static report site — zero LLM calls, the main flow untouched.
+
 ## License
 
 [MIT](./LICENSE)

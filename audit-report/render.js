@@ -1,11 +1,13 @@
 'use strict';
 // 渲染器：中间模型 → 静态 HTML（人类可读、面向审核者）。
-// 原则：中文为主、术语括注原文并链接到首页名词表、事实与意见分区、全部证据可折叠展开。
+// 原则：术语括注对照语言并链接到首页名词表、事实与意见分区、全部证据可折叠展开。
+// 全部面向人类的文案走 i18n.js：语言由 model.lang 决定（collect 写入，默认中文）。
 
 const fs = require('fs');
 const path = require('path');
 const { TERMS, lookup } = require('./glossary');
-const { ROLE_LABEL, findBriefFor } = require('./collect');
+const { findBriefFor } = require('./collect');
+const { makeT, roleLabel, hasKey } = require('./i18n');
 
 // ---------------------------------------------------------------- 基础
 
@@ -15,11 +17,13 @@ function esc(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-// 术语链接：term('评审裁决','verdict') → <a class="term" ...>评审裁决（verdict）</a>
-function term(zh, en) {
+// 术语链接：term(T, '评审裁决', 'verdict') → 中文界面「评审裁决（verdict）」/ 英文界面「verdict（评审裁决）」
+function term(T, zh, en) {
   const t = lookup(en) || lookup(zh);
-  if (!t) return `${esc(zh)}（${esc(en)}）`;
-  return `<a class="term" href="index.html#g-${esc(t.id)}" title="${esc(t.def)}">${esc(zh)}（${esc(t.en)}）</a>`;
+  const label = T.lang === 'zh' ? `${esc(zh)}（${esc(en)}）` : `${esc(en)}（${esc(zh)}）`;
+  if (!t) return label;
+  const def = t.def[T.lang] || t.def.zh;
+  return `<a class="term" href="index.html#g-${esc(t.id)}" title="${esc(def)}">${label}</a>`;
 }
 
 function fmtTs(ts) {
@@ -69,20 +73,25 @@ function diffBlock(text) {
   return `<pre class="code diff">${lines.join('\n')}</pre>`;
 }
 
-const SEV_LABEL = { high: '高危', medium: '注意', low: '背景' };
-const VERDICT_LABEL = {
-  approved: ['通过', 'ok'],
-  changes_requested: ['需修改', 'warn'],
-  ready: ['可交付', 'ok'],
-  ready_with_fixes: ['可交付但需修', 'warn'],
-  not_ready: ['不可交付', 'bad'],
+// 裁决标签（文案）+ 样式类（语言无关）
+const VERDICT_CLS = {
+  approved: 'ok',
+  changes_requested: 'warn',
+  ready: 'ok',
+  ready_with_fixes: 'warn',
+  not_ready: 'bad',
 };
+function verdictLabel(T, code) {
+  const key = `verdict.${code}`;
+  // 裁决码未入表时原样展示码值（不假装认识）；cls 是呈现样式，与文案分开维护
+  return [hasKey(T.lang, key) ? T(key) : code, VERDICT_CLS[code] || ''];
+}
 
 // ---------------------------------------------------------------- 页面骨架
 
-function layout(title, body, extraHead = '') {
+function layout(T, title, body, extraHead = '') {
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${esc(T('layout.htmlLang'))}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -93,59 +102,63 @@ ${extraHead}
 <body>
 <header class="topbar">
   <div class="topbar-inner">
-    <span class="brand">流程审计报告</span>
+    <span class="brand">${T('layout.brand')}</span>
     <nav class="nav">
-      <a href="index.html">总览</a>
-      <a href="final.html">终审与收尾</a>
-      <a href="index.html#glossary">名词表</a>
+      <a href="index.html">${T('layout.nav.overview')}</a>
+      <a href="final.html">${T('layout.nav.final')}</a>
+      <a href="index.html#glossary">${T('layout.nav.glossary')}</a>
     </nav>
   </div>
 </header>
 <main class="page">
 ${body}
 </main>
-<footer class="foot">由 pi-matt-implement-flow 审计工具生成 · 纯本地旁路取证 · 生成时间 ${esc(fmtTs(new Date().toISOString()))}</footer>
+<footer class="foot">${T('layout.footer', { ts: esc(fmtTs(new Date().toISOString())) })}</footer>
 </body>
 </html>`;
 }
 
 // ---------------------------------------------------------------- 首页
 
-function renderOverview(model) {
+function renderOverview(model, T) {
   const r = model.run;
   const init = r.init || {};
   const flags = init.reviewer != null || init.maxFixRounds != null || init.maxConcurrent != null
-    ? `逐票评审${init.reviewer === 'off' ? '关' : '开'} · 每票修复预算 ${init.maxFixRounds ?? 2} · 并发 ${init.maxConcurrent ?? 3}`
-    : '默认（评审开 · 修复预算 2 · 并发 3）';
+    ? T('ov.flowFlags', {
+      state: init.reviewer === 'off' ? T('ov.off') : T('ov.on'),
+      fix: init.maxFixRounds ?? 2,
+      conc: init.maxConcurrent ?? 3,
+    })
+    : T('ov.flowFlagsDefault');
   const pr = r.prs.length ? r.prs[r.prs.length - 1] : null;
 
   const cards = [
-    { label: '运行目录', value: `<code>${esc(model.slug)}</code>` },
-    { label: '仓库', value: `<code>${esc(model.repoPath)}</code>` },
-    { label: '功能分支', value: init.branch ? `<code>${esc(init.branch)}</code>（基线 ${sha(init.baselineSha)}）` : '—' },
+    { label: T('ov.dir'), value: `<code>${esc(model.slug)}</code>` },
+    { label: T('ov.repo'), value: `<code>${esc(model.repoPath)}</code>` },
+    { label: T('ov.branch'), value: init.branch ? `<code>${esc(init.branch)}</code>${T('ov.baseline', { sha: sha(init.baselineSha) })}` : '—' },
     { label: 'spec', value: init.spec ? `<code>${esc(init.spec)}</code>` : '—' },
-    { label: '测试门禁', value: init.testCommand ? `<code>${esc(init.testCommand)}</code>` : '—' },
-    { label: term('流程形态', 'flow shape'), value: flags },
-    { label: '票务', value: esc(init.tracker || '—') },
-    { label: '代码评审 PR', value: pr ? (pr.url ? `<a href="${esc(pr.url)}">${esc(pr.state)}（${esc(pr.url)}）</a>` : esc(pr.state)) : '无（本地分支）' },
-    { label: term('封账', 'seal'), value: r.sealed ? `<span class="pill ok">已封账</span> <span class="muted">${esc(fmtTs(r.close.ts))}</span>` : '<span class="pill bad">未封账</span>' },
+    { label: T('ov.gate'), value: init.testCommand ? `<code>${esc(init.testCommand)}</code>` : '—' },
+    { label: term(T, '流程形态', 'flow shape'), value: flags },
+    { label: T('ov.tracker'), value: esc(init.tracker || '—') },
+    { label: T('ov.pr'), value: pr ? (pr.url ? `<a href="${esc(pr.url)}">${esc(pr.state)}${T('ev.prUrl', { url: esc(pr.url) })}</a>` : esc(pr.state)) : T('ov.prNone') },
+    { label: term(T, '封账', 'seal'), value: r.sealed ? `<span class="pill ok">${T('ov.sealed')}</span> <span class="muted">${esc(fmtTs(r.close.ts))}</span>` : `<span class="pill bad">${T('ov.unsealed')}</span>` },
   ];
 
   const s = model.stats;
   const statCards = [
-    { label: '票数', value: model.tickets.length },
-    { label: '派发次数', value: model.runRefs.filter((x) => x.role === 'coder').length },
-    { label: '评审轮次', value: model.runRefs.filter((x) => x.role === 'reviewer').length },
-    { label: '修复轮次', value: model.runRefs.filter((x) => x.role === 'coder-resume').length },
-    { label: '终审', value: s.finalReviews || 0 },
-    { label: '子代理总成本', value: fmtCost(s.totalCost) },
-    { label: '子代理总 token', value: fmtTokens(s.totalTokens) },
+    { label: T('ov.stat.tickets'), value: model.tickets.length },
+    { label: T('ov.stat.dispatches'), value: model.runRefs.filter((x) => x.role === 'coder').length },
+    { label: T('ov.stat.reviews'), value: model.runRefs.filter((x) => x.role === 'reviewer').length },
+    { label: T('ov.stat.fixes'), value: model.runRefs.filter((x) => x.role === 'coder-resume').length },
+    { label: T('ov.stat.finals'), value: s.finalReviews || 0 },
+    { label: T('ov.stat.cost'), value: fmtCost(s.totalCost) },
+    { label: T('ov.stat.tokens'), value: fmtTokens(s.totalTokens) },
   ];
 
   return `
 <section class="hero">
-  <h1>流程运行总览 <span class="muted">· ${esc(model.slug)}</span></h1>
-  <p class="lede">本报告由已完成的流程运行目录离线取证生成：全部内容来自${term('事件流', 'event stream')}、平台留存的子代理证据与 git 事实，收集过程零大模型调用。</p>
+  <h1>${T('overview.title')} <span class="muted">· ${esc(model.slug)}</span></h1>
+  <p class="lede">${T('overview.lede', { eventStream: term(T, '事件流', 'event stream') })}</p>
   <div class="card-grid">
     ${cards.map((c) => `<div class="card"><div class="card-label">${c.label}</div><div class="card-value">${c.value}</div></div>`).join('')}
   </div>
@@ -155,11 +168,11 @@ function renderOverview(model) {
 </section>`;
 }
 
-function renderRisks(model, ai) {
+function renderRisks(model, ai, T) {
   const sevCls = { high: 'high', medium: 'medium', low: 'low' };
   const items = model.risks.map((r, i) => `
     <li class="risk risk-${sevCls[r.severity]}">
-      <div class="risk-head"><span class="pill ${sevCls[r.severity]}">${SEV_LABEL[r.severity]}</span> ${esc(r.title)}</div>
+      <div class="risk-head"><span class="pill ${sevCls[r.severity]}">${T(`sev.${r.severity}`)}</span> ${esc(r.title)}</div>
       <div class="risk-detail">${esc(r.detail)}</div>
       ${r.evidence.length ? `<div class="risk-refs">${r.evidence.map((e) => `<span class="ref">${esc(e.label)}：${e.ref.startsWith('ticket-') || e.ref.startsWith('index') ? `<a href="${esc(e.ref)}">${esc(e.ref)}</a>` : `<code>${esc(e.ref)}</code>`}</span>`).join(' ')}</div>` : ''}
     </li>`).join('');
@@ -167,47 +180,47 @@ function renderRisks(model, ai) {
   let aiHtml = '';
   if (ai) {
     const aiItems = (ai.findings || []).map((f) => {
-      const sev = SEV_LABEL[f.severity];
+      const sevKey = `sev.${f.severity}`;
+      const sev = hasKey(T.lang, sevKey) ? T(sevKey) : null;
       const pill = sev
-        ? `<span class="pill ${esc(f.severity)}">意见 · ${esc(sev)}</span>`
-        : '<span class="pill ai">意见</span>';
+        ? `<span class="pill ${esc(f.severity)}">${T('ai.pill', { sev: esc(sev) })}</span>`
+        : `<span class="pill ai">${T('ai.pillPlain')}</span>`;
       return `
       <li class="risk risk-ai">
         <div class="risk-head">${pill} ${esc(f.title)}</div></div>
         <div class="risk-detail">${esc(f.detail || '')}</div>
-        ${(f.evidenceRefs || []).length ? `<div class="risk-refs">引用证据：${f.evidenceRefs.map((e) => `<code>${esc(e)}</code>`).join('、')}</div>` : ''}
+        ${(f.evidenceRefs || []).length ? `<div class="risk-refs">${T('ai.refs')}${f.evidenceRefs.map((e) => `<code>${esc(e)}</code>`).join(T('risk.listSep'))}</div>` : ''}
       </li>`;
     }).join('');
     aiHtml = `
 <section class="section">
-  <h2>AI 分析意见 <span class="muted">· 非事实记录</span></h2>
-  <p class="muted">以下内容由大模型基于本报告的确定性证据生成（模型：${esc(ai.model || '未知')}，生成于 ${esc(fmtTs(ai.generatedAt))}）。
-  这是<b>观点层</b>，用于提示可能的交叉矛盾与未建模风险；请对照证据核实，勿作为事实采信。</p>
-  <ul class="risk-list">${aiItems || '<li class="muted">（无意见）</li>'}</ul>
+  <h2>${T('ai.title')} <span class="muted">· ${T('ai.subtitle')}</span></h2>
+  <p class="muted">${T('ai.intro', { model: esc(ai.model || '—'), ts: esc(fmtTs(ai.generatedAt)) })}</p>
+  <ul class="risk-list">${aiItems || `<li class="muted">${T('ai.empty')}</li>`}</ul>
 </section>`;
   }
 
   return `
 <section class="section" id="risks">
-  <h2>异常与风险 <span class="muted">· 确定性检出</span></h2>
-  <p class="muted">以下条目全部由脚本从事件流、平台证据与 git 事实中机械检出，每条可回溯到出处，不含任何模型推断。</p>
-  <ul class="risk-list">${items || '<li class="muted">未检出确定性异常。</li>'}</ul>
+  <h2>${T('risk.title')} <span class="muted">· ${T('risk.subtitle')}</span></h2>
+  <p class="muted">${T('risk.intro')}</p>
+  <ul class="risk-list">${items || `<li class="muted">${T('risk.empty')}</li>`}</ul>
 </section>
 ${aiHtml}`;
 }
 
-function renderTicketTable(model) {
+function renderTicketTable(model, T) {
   const rows = model.tickets.map((t) => {
-    const status = t.merges.length ? `<span class="pill ok">已合并</span>`
-      : model.run.escalates.some((e) => e.ticket === t.id) ? '<span class="pill bad">已升级</span>'
-      : '<span class="pill warn">未合并</span>';
+    const status = t.merges.length ? `<span class="pill ok">${T('table.merged')}</span>`
+      : model.run.escalates.some((e) => e.ticket === t.id) ? `<span class="pill bad">${T('table.escalated')}</span>`
+        : `<span class="pill warn">${T('table.unmerged')}</span>`;
     const rounds = t.verdicts.map((v) => {
-      const [label, cls] = VERDICT_LABEL[v.verdict] || [v.verdict, ''];
+      const [label, cls] = verdictLabel(T, v.verdict);
       return `<span class="pill ${cls}">R${v.round} ${label}</span>`;
-    }).join(' ') || '<span class="muted">未评审</span>';
+    }).join(' ') || `<span class="muted">${T('table.noReviews')}</span>`;
     return `<tr>
-      <td><a href="ticket-${esc(t.id)}.html">票 ${esc(t.id)}</a></td>
-      <td>${esc(t.title || '（票面缺失）')}</td>
+      <td><a href="ticket-${esc(t.id)}.html">${T('ev.ticket')} ${esc(t.id)}</a></td>
+      <td>${esc(t.title || T('table.noTitle'))}</td>
       <td>${status}</td>
       <td>${rounds}</td>
       <td>${t.fixes.length || '—'}</td>
@@ -216,204 +229,232 @@ function renderTicketTable(model) {
   }).join('');
   return `
 <section class="section" id="tickets">
-  <h2>票目总表</h2>
+  <h2>${T('table.title')}</h2>
   <table class="table">
-    <thead><tr><th>票</th><th>标题</th><th>状态</th><th>${term('评审裁决', 'verdict')}</th><th>修复轮</th><th>合并提交</th></tr></thead>
+    <thead><tr><th>${T('table.ticket')}</th><th>${T('table.heading')}</th><th>${T('table.status')}</th><th>${term(T, '评审裁决', 'verdict')}</th><th>${T('table.fixes')}</th><th>${T('table.mergeSha')}</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
 </section>`;
 }
 
-function narrateEvent(e) {
+function narrateEvent(e, T) {
   const p = e.payload || {};
-  const t = (zh, en) => term(zh, en);
+  const t = (zh, en) => term(T, zh, en);
   switch (e.type) {
-    case 'init': return `${t('记账', 'record')} <b>运行初始化</b>：分支 <code>${esc(p.branch)}</code>（基线 ${sha(p.baselineSha)}），测试门禁 <code>${esc(p.testCommand)}</code>，票务 ${esc(p.tracker)}。`;
-    case 'pr': return `代码评审 PR：${esc(p.state)}${p.url ? `（<a href="${esc(p.url)}">${esc(p.url)}</a>）` : ''}。`;
-    case 'dispatch': return `${t('派发', 'dispatch')} 票 ${esc(p.ticket)}（key <code>${esc(p.key)}</code>，运行 <code>${esc((p.runId || '').slice(0, 8))}</code>${p.worktree === 'true' ? '，独立工作树' : ''}）。`;
-    case 'settled': return `票 ${esc(p.ticket)} ${t('实现结算', 'settled')}：提交 ${sha(p.headSha)}${p.gate ? `，门禁：${esc(p.gate)}` : ''}。`;
+    case 'init': return T('ev.init', {
+      record: t('记账', 'record'), branch: esc(p.branch), base: sha(p.baselineSha),
+      gate: esc(p.testCommand), tracker: esc(p.tracker),
+    });
+    case 'pr': return T('ev.pr', {
+      state: esc(p.state),
+      urlPart: p.url ? T('ev.prUrl', { url: `<a href="${esc(p.url)}">${esc(p.url)}</a>` }) : '',
+    });
+    case 'dispatch': return T('ev.dispatch', {
+      dispatch: t('派发', 'dispatch'), ticket: esc(p.ticket), key: esc(p.key),
+      run: esc((p.runId || '').slice(0, 8)), wt: p.worktree === 'true' ? T('ev.ownWorktree') : '',
+    });
+    case 'settled': return T('ev.settled', {
+      ticket: esc(p.ticket), settled: t('实现结算', 'settled'), sha: sha(p.headSha),
+      gate: p.gate ? T('ev.gateSuffix', { gate: esc(p.gate) }) : '',
+    });
     case 'verdict': {
-      const [label] = VERDICT_LABEL[p.verdict] || [p.verdict];
-      return `票 ${esc(p.ticket)} ${t('评审裁决', 'verdict')}（第 ${esc(p.round)} 轮）：<b>${esc(label)}</b>${p.findings ? `，问题清单 <code>${esc(path.basename(p.findings))}</code>` : ''}。`;
+      const [label] = verdictLabel(T, p.verdict);
+      return T('ev.verdict', {
+        ticket: esc(p.ticket), verdict: t('评审裁决', 'verdict'), round: esc(p.round), label: esc(label),
+        findings: p.findings ? T('ev.findingsSuffix', { file: esc(path.basename(p.findings)) }) : '',
+      });
     }
-    case 'fix': return `票 ${esc(p.ticket)} ${t('修复轮', 'fix round')} ${esc(p.fixNo)}：${t('续跑', 'resume')}同一实现者（key <code>${esc(p.key)}</code>）${p.note ? `——${esc(p.note)}` : ''}。`;
-    case 'merge': return `票 ${esc(p.ticket)} <b>合并</b>：merge ${sha(p.mergeSha)}${p.note ? `，${esc(p.note)}` : ''}。`;
+    case 'fix': return T('ev.fix', {
+      ticket: esc(p.ticket), fix: t('修复轮', 'fix round'), fixNo: esc(p.fixNo),
+      resume: t('续跑', 'resume'), key: esc(p.key),
+      note: p.note ? T('ev.noteSuffix', { note: esc(p.note) }) : '',
+    });
+    case 'merge': return T('ev.merge', {
+      ticket: esc(p.ticket), sha: sha(p.mergeSha),
+      note: p.note ? T('ev.noteComma', { note: esc(p.note) }) : '',
+    });
     case 'final': {
-      const [label] = VERDICT_LABEL[p.finalVerdict] || [p.finalVerdict];
-      return `${t('终审', 'final review')}裁决：<b>${esc(label)}</b>（运行 <code>${esc((p.runId || '').slice(0, 8))}</code>）${p.findings ? `，问题清单 <code>${esc(path.basename(p.findings))}</code>` : ''}。`;
+      const [label] = verdictLabel(T, p.finalVerdict);
+      return T('ev.final', {
+        final: t('终审', 'final review'), label: esc(label), run: esc((p.runId || '').slice(0, 8)),
+        findings: p.findings ? T('ev.findingsSuffix', { file: esc(path.basename(p.findings)) }) : '',
+      });
     }
-    case 'escalate': return `票 ${esc(p.ticket)} <b class="bad-text">${t('升级', 'escalate')}</b>：${esc(p.note || '预算耗尽，移交维护者。')}`;
-    case 'anomaly': return `<b class="bad-text">${t('异常记录', 'anomaly')}</b>：${esc(p.note)}`;
-    case 'close': return `<b>${t('封账', 'close')}</b>：运行终结。${esc(p.note || '')}`;
-    default: return `<b>${esc(e.type)}</b>：<code>${esc(JSON.stringify(p)).slice(0, 300)}</code>`;
+    case 'escalate': return T('ev.escalate', {
+      ticket: esc(p.ticket), escalate: t('升级', 'escalate'),
+      note: esc(p.note || T('ev.escalateDefault')),
+    });
+    case 'anomaly': return T('ev.anomaly', { anomaly: t('异常记录', 'anomaly'), note: esc(p.note) });
+    case 'close': return T('ev.close', { close: t('封账', 'close'), note: esc(p.note || '') });
+    default: return T('ev.unknown', { type: esc(e.type), payload: esc(JSON.stringify(p)).slice(0, 300) });
   }
 }
 
-function renderTimeline(model) {
+function renderTimeline(model, T) {
   const items = model.events.map((e) => `
     <li class="tl-item">
       <div class="tl-meta">#${esc(e.seq)} · ${esc(fmtTs(e.ts))}</div>
-      <div class="tl-text">${narrateEvent(e)}</div>
+      <div class="tl-text">${narrateEvent(e, T)}</div>
     </li>`).join('');
   return `
 <section class="section" id="timeline">
-  <h2>事件时间线 <span class="muted">· 叙述化</span></h2>
-  <p class="muted">由${term('事件流', 'event stream')}逐条渲染：每条${term('记账', 'record')}都带权威序号与时间戳，可回到运行目录 <code>events.jsonl</code> 对账。</p>
+  <h2>${T('tl.title')} <span class="muted">· ${T('tl.subtitle')}</span></h2>
+  <p class="muted">${T('tl.intro', { eventStream: term(T, '事件流', 'event stream'), record: term(T, '记账', 'record') })}</p>
   <ol class="timeline">${items}</ol>
 </section>`;
 }
 
-function renderCost(model) {
+function renderCost(model, T) {
   const rows = Object.entries(model.stats.byRole).map(([role, v]) => `
-    <tr><td>${esc(ROLE_LABEL[role] || role)}</td><td>${v.runs}</td><td>${fmtCost(v.cost)}</td><td>${fmtTokens(v.tokens)}</td></tr>`).join('');
+    <tr><td>${esc(roleLabel(model.lang, role))}</td><td>${v.runs}</td><td>${fmtCost(v.cost)}</td><td>${fmtTokens(v.tokens)}</td></tr>`).join('');
   return `
 <section class="section" id="cost">
-  <h2>用量与成本</h2>
+  <h2>${T('cost.title')}</h2>
   <table class="table">
-    <thead><tr><th>环节</th><th>运行次数</th><th>成本</th><th>token</th></tr></thead>
-    <tbody>${rows}<tr class="total"><td>合计</td><td>—</td><td>${fmtCost(model.stats.totalCost)}</td><td>${fmtTokens(model.stats.totalTokens)}</td></tr></tbody>
+    <thead><tr><th>${T('cost.role')}</th><th>${T('cost.runs')}</th><th>${T('cost.cost')}</th><th>${T('cost.tokens')}</th></tr></thead>
+    <tbody>${rows}<tr class="total"><td>${T('cost.total')}</td><td>—</td><td>${fmtCost(model.stats.totalCost)}</td><td>${fmtTokens(model.stats.totalTokens)}</td></tr></tbody>
   </table>
-  <p class="muted">口径：事件流中有运行 ID 记录的子代理（含 run 级终审——其运行 ID 由 final 事件承载）；旧账无 final 事件时终审运行降级为平台证据目录扫描汇集，见 <a href="final.html">终审与收尾</a>。</p>
+  <p class="muted">${T('cost.note', { link: `<a href="final.html">${T('layout.nav.final')}</a>` })}</p>
 </section>`;
 }
 
-function renderGlossary() {
+function renderGlossary(model, T) {
   const groups = [
-    ['域词汇', TERMS.filter((t) => ['ledger', 'event-stream', 'notes', 'record', 'close', 'reconcile', 'flow-shape'].includes(t.id))],
-    ['流程环节', TERMS.filter((t) => ['frontier', 'dispatch', 'settled', 'verdict', 'two-axis', 'fix-round', 'escalate', 'integration-gate', 'final-review', 'anomaly'].includes(t.id))],
-    ['平台与证据', TERMS.filter((t) => ['acceptance-contract', 'structured-output', 'worktree', 'gate', 'run', 'resume'].includes(t.id))],
+    [T('gl.group.domain'), TERMS.filter((t) => ['ledger', 'event-stream', 'notes', 'record', 'close', 'reconcile', 'flow-shape'].includes(t.id))],
+    [T('gl.group.flow'), TERMS.filter((t) => ['frontier', 'dispatch', 'settled', 'verdict', 'two-axis', 'fix-round', 'escalate', 'integration-gate', 'final-review', 'anomaly'].includes(t.id))],
+    [T('gl.group.platform'), TERMS.filter((t) => ['acceptance-contract', 'structured-output', 'worktree', 'gate', 'run', 'resume'].includes(t.id))],
   ];
   return `
 <section class="section" id="glossary">
-  <h2>名词表</h2>
-  <p class="muted">正文中的术语都链接到这里。域词汇与包内 <code>CONTEXT.md</code> 保持一致。</p>
+  <h2>${T('gl.title')}</h2>
+  <p class="muted">${T('gl.intro')}</p>
   ${groups.map(([title, terms]) => `
     <h3>${esc(title)}</h3>
     <dl class="glossary">
-      ${terms.map((t) => `<dt id="g-${esc(t.id)}">${esc(t.zh)}（${esc(t.en)}）</dt><dd>${esc(t.def)}</dd>`).join('')}
+      ${terms.map((t) => `<dt id="g-${esc(t.id)}">${esc(t.zh)}（${esc(t.en)}）</dt><dd>${esc(t.def[T.lang] || t.def.zh)}</dd>`).join('')}
     </dl>`).join('')}
 </section>`;
 }
 
-function renderIndex(model, ai) {
+function renderIndex(model, ai, T) {
   const body = `
-${renderOverview(model)}
-${renderRisks(model, ai)}
-${renderTicketTable(model)}
-${renderTimeline(model)}
-${renderCost(model)}
-${renderGlossary()}`;
-  return layout(`总览 · ${model.slug}`, body);
+${renderOverview(model, T)}
+${renderRisks(model, ai, T)}
+${renderTicketTable(model, T)}
+${renderTimeline(model, T)}
+${renderCost(model, T)}
+${renderGlossary(model, T)}`;
+  return layout(T, `${T('layout.nav.overview')} · ${model.slug}`, body);
 }
 
 // ---------------------------------------------------------------- 票页
 
-function runSummaryCard(model, ref) {
+function runSummaryCard(model, ref, T) {
   const c = model.childRuns[ref.runId];
   if (!c || !c.found) {
-    return `<div class="card"><div class="card-label">运行证据</div><div class="card-value muted">证据缺失（可能已被平台清理）· 运行 <code>${esc(ref.runId.slice(0, 8))}</code></div></div>`;
+    return `<div class="card"><div class="card-label">${T('run.evidence')}</div><div class="card-value muted">${T('run.missing', { run: esc(ref.runId.slice(0, 8)) })}</div></div>`;
   }
   const u = c.usage || {};
-  const checks = (c.acceptance && c.acceptance.runtimeChecks || []).map((k) => `<li class="${k.status === 'passed' ? 'ok-text' : 'bad-text'}">${esc(k.id)}：${esc(k.status)}</li>`).join('');
+  const checks = (c.acceptance && c.acceptance.runtimeChecks || []).map((k) => `<li class="${k.status === 'passed' ? 'ok-text' : 'bad-text'}">${T('run.checkLine', { id: esc(k.id), status: esc(k.status) })}</li>`).join('');
   const verify = (c.acceptance && c.acceptance.verifyRuns || []).map((v) => `
-    <div class="verify"><b>${esc(v.id)}</b> <code>${esc(v.command)}</code> — <span class="${v.status === 'passed' ? 'ok-text' : 'bad-text'}">${esc(v.status)}</span>（${esc(String(v.durationMs || '—'))} ms）
-    ${v.stdout ? details('查看门禁输出', codeBlock(v.stdout)) : ''}</div>`).join('');
+    <div class="verify">${T('run.verifyLine', { id: esc(v.id), command: esc(v.command), statusPart: `<span class="${v.status === 'passed' ? 'ok-text' : 'bad-text'}">${esc(v.status)}</span>${T('run.verifyMs', { ms: esc(String(v.durationMs || '—')) })}` })}
+    ${v.stdout ? details(T('run.verifyDetails'), codeBlock(v.stdout)) : ''}</div>`).join('');
   return `
 <div class="card run-card">
-  <div class="card-label">${esc(ROLE_LABEL[ref.role] || ref.role)}运行 <code>${esc(c.runId.slice(0, 8))}</code></div>
+  <div class="card-label">${T('run.title', { role: esc(roleLabel(model.lang, ref.role)), run: esc(c.runId.slice(0, 8)) })}</div>
   <div class="card-value">
-    模型 <code>${esc(c.model || '—')}</code> · 退出码 <span class="${c.exitCode === 0 ? 'ok-text' : 'bad-text'}">${esc(String(c.exitCode ?? '—'))}</span>
-    · 成本 ${fmtCost(u.cost)} · token ${fmtTokens((u.input || 0) + (u.output || 0))}
-    ${c.acceptance ? `· 验收状态 <span class="${/reject/i.test(String(c.acceptance.status)) ? 'bad-text' : 'ok-text'}">${esc(c.acceptance.status || '—')}</span>` : ''}
+    ${T('run.modelWord')} <code>${esc(c.model || '—')}</code> · ${T('run.exitWord')} <span class="${c.exitCode === 0 ? 'ok-text' : 'bad-text'}">${esc(String(c.exitCode ?? '—'))}</span>
+    · ${T('run.costWord')} ${fmtCost(u.cost)} · ${T('run.tokenWord')} ${fmtTokens((u.input || 0) + (u.output || 0))}
+    ${c.acceptance ? `· ${T('run.acceptanceWord')} <span class="${/reject/i.test(String(c.acceptance.status)) ? 'bad-text' : 'ok-text'}">${esc(c.acceptance.status || '—')}</span>` : ''}
   </div>
-  ${verify ? `<div class="sub">门禁：</div>${verify}` : ''}
-  ${checks ? details('验收检查明细', `<ul class="plain">${checks}</ul>`) : ''}
-  ${c.childReport ? details('实现者结构化报告（原始字段）', codeBlock(JSON.stringify(c.childReport, null, 2))) : ''}
-  ${c.structuredValue ? details('结构化输出（原始字段）', codeBlock(JSON.stringify(c.structuredValue, null, 2))) : ''}
-  ${c.outputMd ? details('最终输出全文', codeBlock(c.outputMd)) : ''}
-  ${(c.nestedDispatches || []).length ? details(`内部派发（${c.nestedDispatches.length} 次，${term('双轴评审', 'two-axis')}轴代理等）`, c.nestedDispatches.map((n) => `<div class="nested"><div class="muted">${esc(fmtTs(n.ts))} → ${esc(n.agent)}</div>${codeBlock(n.excerpt)}</div>`).join('')) : ''}
-  ${c.transcriptPath ? `<div class="muted small">完整过程记录：<code>${esc(c.transcriptPath)}</code></div>` : ''}
+  ${verify ? `<div class="sub">${T('run.gateHead')}</div>${verify}` : ''}
+  ${checks ? details(T('run.checksDetails'), `<ul class="plain">${checks}</ul>`) : ''}
+  ${c.childReport ? details(T('run.childReport'), codeBlock(JSON.stringify(c.childReport, null, 2))) : ''}
+  ${c.structuredValue ? details(T('run.structuredValue'), codeBlock(JSON.stringify(c.structuredValue, null, 2))) : ''}
+  ${c.outputMd ? details(T('run.outputMd'), codeBlock(c.outputMd)) : ''}
+  ${(c.nestedDispatches || []).length ? details(T('run.nested', { count: c.nestedDispatches.length, twoAxis: term(T, '双轴评审', 'two-axis') }), c.nestedDispatches.map((n) => `<div class="nested"><div class="muted">${esc(fmtTs(n.ts))} → ${esc(n.agent)}</div>${codeBlock(n.excerpt)}</div>`).join('')) : ''}
+  ${c.transcriptPath ? `<div class="muted small">${T('run.transcript', { path: esc(c.transcriptPath) })}</div>` : ''}
 </div>`;
 }
 
-function renderTicket(model, t, idx, total) {
+function renderTicket(model, t, idx, total, T) {
   const rounds = new Map(); // round -> html parts
   const push = (k, html) => { if (!rounds.has(k)) rounds.set(k, []); rounds.get(k).push(html); };
 
   for (const d of t.dispatches) {
     const brief = findBriefForSafe(model, d.key, d.ts);
     push(Number(d.round || 1), `
-      <div class="step"><div class="step-title">${term('派发', 'dispatch')} <code>${esc(d.key)}</code> <span class="muted">· ${esc(fmtTs(d.ts))} · 序号 ${esc(d.seq)}</span></div>
-      ${runSummaryCard(model, { runId: d.runId, role: 'coder', ticket: t.id, key: d.key })}
+      <div class="step"><div class="step-title">${term(T, '派发', 'dispatch')} <code>${esc(d.key)}</code> <span class="muted">${T('tp.seqMeta', { ts: esc(fmtTs(d.ts)), seq: esc(d.seq) })}</span></div>
+      ${runSummaryCard(model, { runId: d.runId, role: 'coder', ticket: t.id, key: d.key }, T)}
       ${brief
-        ? details('派发任务书原文（从主会话恢复）', codeBlock(brief.text))
-        : '<div class="muted">派发任务书原文未能从主会话恢复。</div>'}
+        ? details(T('tp.brief'), codeBlock(brief.text))
+        : `<div class="muted">${T('tp.briefMissing')}</div>`}
       </div>`);
   }
   for (const s of t.settles) {
     push(Number(s.round || 1), `
-      <div class="step"><div class="step-title">${term('实现结算', 'settled')} <span class="muted">· ${esc(fmtTs(s.ts))}</span></div>
-      <div class="card">提交锚点 ${sha(s.headSha)}${s.gate ? ` · 门禁摘要：${esc(s.gate)}` : ''}${s.worktree ? ` · <span class="muted small">工作树 <code>${esc(s.worktree)}</code></span>` : ''}</div>
+      <div class="step"><div class="step-title">${term(T, '实现结算', 'settled')} <span class="muted">· ${esc(fmtTs(s.ts))}</span></div>
+      <div class="card">${T('tp.commitAnchor', { sha: sha(s.headSha) })}${s.gate ? T('tp.gateSummary', { gate: esc(s.gate) }) : ''}${s.worktree ? T('tp.worktreePart', { path: esc(s.worktree) }) : ''}</div>
       </div>`);
   }
   for (const v of t.verdicts) {
-    const [label, cls] = VERDICT_LABEL[v.verdict] || [v.verdict, ''];
+    const [label, cls] = verdictLabel(T, v.verdict);
     const findings = v.findings && model.findingsFiles[v.findings];
     const bundleKey = Object.keys(model.bundles).find((k) => k.includes(`/${String(t.id).padStart(2, '0')}-r${v.round || 1}.diff`));
     const bundle = bundleKey ? model.bundles[bundleKey] : null;
     push(Number(v.round || 1), `
-      <div class="step"><div class="step-title">${term('评审裁决', 'verdict')}（第 ${esc(v.round)} 轮）<span class="muted">· ${esc(fmtTs(v.ts))}</span></div>
-      ${runSummaryCard(model, { runId: v.revRunId, role: 'reviewer', ticket: t.id, key: `rev-${t.id}` })}
-      <div class="card">结论 <span class="pill ${cls}">${esc(label)}</span>${v.note ? ` · ${esc(v.note)}` : ''}</div>
+      <div class="step"><div class="step-title">${T('tp.verdictStep', { verdict: term(T, '评审裁决', 'verdict'), round: esc(v.round) })} <span class="muted">· ${esc(fmtTs(v.ts))}</span></div>
+      ${runSummaryCard(model, { runId: v.revRunId, role: 'reviewer', ticket: t.id, key: `rev-${t.id}` }, T)}
+      <div class="card">${T('tp.verdictResult', { pill: `<span class="pill ${cls}">${esc(label)}</span>`, note: v.note ? ` · ${esc(v.note)}` : '' })}</div>
       ${v.findings
         ? findings
-          ? details(`问题清单全文（${esc(path.basename(v.findings))}）`, codeBlock(findings.text))
-          : `<div class="card muted">问题清单文件缺失或不可读：<code>${esc(v.findings)}</code>（可能已被清理）</div>`
+          ? details(T('tp.findingsFull', { file: esc(path.basename(v.findings)) }), codeBlock(findings.text))
+          : `<div class="card muted">${T('tp.findingsMissing', { path: esc(v.findings) })}</div>`
         : ''}
       ${v.findings || bundle
         ? bundle
-          ? details(`评审材料包 diff（${fmtSize(bundle)}）`, bundle.truncated ? `${diffBlock(bundle.text)}<div class="muted">（原文 ${fmtSize(bundle)}，已截断展示）</div>` : diffBlock(bundle.text))
-          : `<div class="card muted">评审材料包缺失或不可读：<code>reviews/${esc(String(t.id).padStart(2, '0'))}-r${esc(v.round || 1)}.diff</code></div>`
+          ? details(T('tp.bundleDiff', { size: fmtSize(bundle) }), bundle.truncated ? `${diffBlock(bundle.text)}<div class="muted">${T('tp.truncatedFull', { size: fmtSize(bundle) })}</div>` : diffBlock(bundle.text))
+          : `<div class="card muted">${T('tp.bundleMissing', { id: esc(String(t.id).padStart(2, '0')), round: esc(v.round || 1) })}</div>`
         : ''}
       </div>`);
   }
   for (const f of t.fixes) {
     const brief = findBriefForSafe(model, f.key, f.ts);
     push(Number((f.fixNo || 1)) + 0.5, `
-      <div class="step"><div class="step-title">${term('修复轮', 'fix round')} ${esc(f.fixNo)} <span class="muted">· ${esc(fmtTs(f.ts))}</span></div>
-      ${f.note ? `<div class="card">问题摘要：${esc(f.note)}</div>` : ''}
-      ${runSummaryCard(model, { runId: f.resumeRunId, role: 'coder-resume', ticket: t.id, key: f.key })}
-      ${brief ? details('修复任务书原文（续跑指令，从主会话恢复）', codeBlock(brief.text)) : '<div class="muted">修复任务书原文未能恢复。</div>'}
+      <div class="step"><div class="step-title">${T('tp.fixRoundLabel', { n: esc(f.fixNo) })} <span class="muted">· ${esc(fmtTs(f.ts))}</span></div>
+      ${f.note ? `<div class="card">${T('tp.fixNote', { note: esc(f.note) })}</div>` : ''}
+      ${runSummaryCard(model, { runId: f.resumeRunId, role: 'coder-resume', ticket: t.id, key: f.key }, T)}
+      ${brief ? details(T('tp.fixBrief'), codeBlock(brief.text)) : `<div class="muted">${T('tp.fixBriefMissing')}</div>`}
       </div>`);
   }
   const mergeHtml = t.merges.map((m) => `
-    <div class="step"><div class="step-title">合并 <span class="muted">· ${esc(fmtTs(m.ts))}</span></div>
-    <div class="card">merge ${sha(m.mergeSha)} ← 票头 ${sha(m.headSha)}${m.note ? ` · ${esc(m.note)}` : ''}${model.git[m.mergeSha] ? `<div class="muted small">提交主题：${esc(model.git[m.mergeSha].subject)}</div>` : model.git[m.mergeSha] === undefined ? '' : '<div class="muted small">（合并提交已不在当前分支可达范围）</div>'}</div>
+    <div class="step"><div class="step-title">${T('tp.mergeStep')} <span class="muted">· ${esc(fmtTs(m.ts))}</span></div>
+    <div class="card">${T('tp.mergeCard', { mergeSha: sha(m.mergeSha), headSha: sha(m.headSha), note: m.note ? ` · ${esc(m.note)}` : '' })}${model.git[m.mergeSha] ? `<div class="muted small">${T('tp.mergeSubject', { subject: esc(model.git[m.mergeSha].subject) })}</div>` : model.git[m.mergeSha] === undefined ? '' : `<div class="muted small">${T('tp.mergeUnreachable')}</div>`}</div>
     </div>`).join('');
 
   const roundKeys = [...rounds.keys()].sort((a, b) => a - b);
   const roundsHtml = roundKeys.map((k) => {
-    const label = Number.isInteger(k) ? `第 ${k} 轮` : `修复轮 ${Math.floor(k)}`;
+    const label = Number.isInteger(k) ? T('tp.roundLabel', { n: k }) : T('tp.fixRoundLabel', { n: Math.floor(k) });
     return `<div class="round"><h3>${esc(label)}</h3>${rounds.get(k).join('')}</div>`;
   }).join('');
 
   const nav = `
   <div class="pager">
-    ${idx > 0 ? `<a href="ticket-${esc(model.tickets[idx - 1].id)}.html">← 票 ${esc(model.tickets[idx - 1].id)}</a>` : '<span></span>'}
-    <a href="index.html">返回总览</a>
-    ${idx < total - 1 ? `<a href="ticket-${esc(model.tickets[idx + 1].id)}.html">票 ${esc(model.tickets[idx + 1].id)} →</a>` : '<span></span>'}
+    ${idx > 0 ? `<a href="ticket-${esc(model.tickets[idx - 1].id)}.html">${T('tp.pagerPrev', { id: esc(model.tickets[idx - 1].id) })}</a>` : '<span></span>'}
+    <a href="index.html">${T('tp.pagerHome')}</a>
+    ${idx < total - 1 ? `<a href="ticket-${esc(model.tickets[idx + 1].id)}.html">${T('tp.pagerNext', { id: esc(model.tickets[idx + 1].id) })}</a>` : '<span></span>'}
   </div>`;
 
   const body = `
 <div class="page-head">
-  <h1>票 ${esc(t.id)}：${esc(t.title || '（票面缺失）')}</h1>
-  <p class="muted">${t.file ? `票面文件 <code>${esc(t.file)}</code>` : '票面文件未找到'}</p>
+  <h1>${T('tp.title', { id: esc(t.id), title: esc(t.title || T('table.noTitle')) })}</h1>
+  <p class="muted">${t.file ? T('tp.ticketFile', { path: esc(t.file) }) : T('tp.ticketFileMissing')}</p>
 </div>
-${t.body ? details('票面原文', codeBlock(t.body)) : ''}
-<div class="rounds">${roundsHtml || '<p class="muted">本票没有派发记录。</p>'}</div>
-${mergeHtml ? `<div class="round"><h3>合并</h3>${mergeHtml}</div>` : ''}
+${t.body ? details(T('tp.ticketBody'), codeBlock(t.body)) : ''}
+<div class="rounds">${roundsHtml || `<p class="muted">${T('tp.noDispatch')}</p>`}</div>
+${mergeHtml ? `<div class="round"><h3>${T('tp.mergeStep')}</h3>${mergeHtml}</div>` : ''}
 ${nav}`;
-  return layout(`票 ${t.id} · ${model.slug}`, body);
+  return layout(T, `${T('ev.ticket')} ${t.id} · ${model.slug}`, body);
 }
 
 function findBriefForSafe(model, key, ts) {
@@ -429,76 +470,77 @@ function fmtSize(o) {
 
 // ---------------------------------------------------------------- 终审与收尾页
 
-function renderFinal(model) {
+function renderFinal(model, T) {
   const fr = model.finalReviews;
   const parts = [];
-  parts.push(`<div class="page-head"><h1>终审与收尾</h1><p class="muted">终审运行由${term('事件流', 'event stream')}的 <code>final</code> 事件驱动汇集（runId 与裁决均取自事件）；旧账无 final 事件时降级为平台证据目录扫描。</p></div>`);
+  parts.push(`<div class="page-head"><h1>${T('fp.title')}</h1><p class="muted">${T('fp.intro', { eventStream: term(T, '事件流', 'event stream') })}</p></div>`);
 
   if (!fr.length) {
-    parts.push('<p class="muted">未找到终审（final-reviewer）运行证据。</p>');
+    parts.push(`<p class="muted">${T('fp.none')}</p>`);
   } else {
     const bundleKey = Object.keys(model.bundles).find((k) => k.endsWith('/final.diff'));
     const bundle = bundleKey ? model.bundles[bundleKey] : null;
     for (const c of fr) {
       const u = c.usage || {};
       const verdict = c.verdict || (c.structuredValue && c.structuredValue.verdict) || null;
-      const [label, cls] = verdict ? (VERDICT_LABEL[verdict] || [verdict, '']) : ['（结构化结论未提取，见全文）', ''];
+      const [label, cls] = verdict ? verdictLabel(T, verdict) : [T('fp.noVerdict'), ''];
       const findings = c.findings ? model.findingsFiles[c.findings] : null;
       parts.push(`
 <div class="step">
-  <div class="step-title">${term('终审', 'final review')} 运行 <code>${esc(c.runId.slice(0, 8))}</code> <span class="muted">· 模型 ${esc(c.model || '—')} · 成本 ${fmtCost(u.cost)}</span></div>
-  <div class="card">结论 <span class="pill ${cls}">${esc(label)}</span>${c.seq != null ? ` <span class="muted small">· 记账序号 ${esc(c.seq)} · ${esc(fmtTs(c.ts))}</span>` : ''}</div>
-  ${c.deadRunRef ? '<div class="card muted">该 final 事件的 runId 不是 UUID 形状——判定为记账污染的死数据：不探测平台证据；裁决仍以事件流为准（取证告警另见 run-ref-dead 留痕）。</div>' : ''}
+  <div class="step-title">${T('fp.stepTitle', { final: term(T, '终审', 'final review'), run: esc(c.runId.slice(0, 8)), model: esc(c.model || '—'), cost: fmtCost(u.cost) })}</div>
+  <div class="card">${T('tp.verdictResult', { pill: `<span class="pill ${cls}">${esc(label)}</span>`, note: c.seq != null ? T('fp.seqMeta', { seq: esc(c.seq), ts: esc(fmtTs(c.ts)) }) : '' })}</div>
+  ${c.deadRunRef ? `<div class="card muted">${T('fp.deadRef')}</div>` : ''}
   ${c.findings
     ? findings
-      ? details(`问题清单全文（${esc(path.basename(c.findings))}）`, codeBlock(findings.text))
-      : `<div class="card muted">问题清单文件缺失或不可读：<code>${esc(c.findings)}</code>（可能已被清理）</div>`
+      ? details(T('tp.findingsFull', { file: esc(path.basename(c.findings)) }), codeBlock(findings.text))
+      : `<div class="card muted">${T('tp.findingsMissing', { path: esc(c.findings) })}</div>`
     : ''}
-  ${c.structuredValue ? details('结构化结论（原始字段）', codeBlock(JSON.stringify(c.structuredValue, null, 2))) : ''}
-  ${c.outputMd ? details('终审报告全文', codeBlock(c.outputMd)) : ''}
-  ${bundle ? details(`整分支评审材料包（${fmtSize(bundle)}）`, bundle.truncated ? `${diffBlock(bundle.text)}<div class="muted">（已截断）</div>` : diffBlock(bundle.text)) : ''}
-  ${c.transcriptPath ? `<div class="muted small">完整过程记录：<code>${esc(c.transcriptPath)}</code></div>` : ''}
+  ${c.structuredValue ? details(T('fp.structured'), codeBlock(JSON.stringify(c.structuredValue, null, 2))) : ''}
+  ${c.outputMd ? details(T('fp.reportFull'), codeBlock(c.outputMd)) : ''}
+  ${bundle ? details(T('fp.finalBundle', { size: fmtSize(bundle) }), bundle.truncated ? `${diffBlock(bundle.text)}<div class="muted">${T('tp.truncatedShort')}</div>` : diffBlock(bundle.text)) : ''}
+  ${c.transcriptPath ? `<div class="muted small">${T('run.transcript', { path: esc(c.transcriptPath) })}</div>` : ''}
 </div>`);
     }
   }
 
   if (model.run.anomalies.length || model.run.escalates.length) {
     parts.push(`
-<section class="section"><h2>${term('异常记录', 'anomaly')}与${term('升级', 'escalate')}</h2>
+<section class="section"><h2>${T('fp.anomaliesTitle', { anomaly: term(T, '异常记录', 'anomaly'), escalate: term(T, '升级', 'escalate') })}</h2>
 <ol class="timeline">
 ${[...model.run.anomalies.map((a) => ({ ...a, kind: 'anomaly' })), ...model.run.escalates.map((e) => ({ ...e, kind: 'escalate' }))]
-  .sort((a, b) => a.seq - b.seq)
-  .map((x) => `<li class="tl-item"><div class="tl-meta">#${esc(x.seq)} · ${esc(fmtTs(x.ts))}</div><div class="tl-text">${x.kind === 'anomaly' ? `<b class="bad-text">异常记录</b>：${esc(x.note)}` : `<b class="bad-text">升级</b> 票 ${esc(x.ticket)}：${esc(x.note || '')}`}</div></li>`).join('')}
+      .sort((a, b) => a.seq - b.seq)
+      .map((x) => `<li class="tl-item"><div class="tl-meta">#${esc(x.seq)} · ${esc(fmtTs(x.ts))}</div><div class="tl-text">${x.kind === 'anomaly' ? T('fp.anomalyEntry', { note: esc(x.note) }) : T('fp.escalateEntry', { ticket: esc(x.ticket), note: esc(x.note || '') })}</div></li>`).join('')}
 </ol></section>`);
   }
 
   if (model.run.sealed) {
     parts.push(`
-<section class="section"><h2>${term('封账', 'close')}</h2>
-<div class="card">${esc(model.run.close.note || '运行终结。')} <span class="muted">· ${esc(fmtTs(model.run.close.ts))}</span></div>
+<section class="section"><h2>${term(T, '封账', 'close')}</h2>
+<div class="card">${esc(model.run.close.note || T('fp.sealNote'))} <span class="muted">· ${esc(fmtTs(model.run.close.ts))}</span></div>
 </section>`);
   } else {
-    parts.push('<section class="section"><div class="risk risk-medium"><div class="risk-head"><span class="pill medium">注意</span> 运行未封账</div><div class="risk-detail">事件流没有 close 记账，本报告可能不反映终局。</div></div></section>');
+    parts.push(`<section class="section"><div class="risk risk-medium"><div class="risk-head"><span class="pill medium">${T('sev.medium')}</span> ${T('fp.unsealedTitle')}</div><div class="risk-detail">${T('fp.unsealedDetail')}</div></div></section>`);
   }
 
   if (model.notes) {
     parts.push(`
-<section class="section"><h2>${term('编排笔记', 'orchestration notes')}（全文）</h2>
-${details('展开阅读 notes.md', codeBlock(model.notes))}
+<section class="section"><h2>${T('fp.notesTitle', { notes: term(T, '编排笔记', 'orchestration notes') })}</h2>
+${details(T('fp.notesFold'), codeBlock(model.notes))}
 </section>`);
   }
 
-  return layout(`终审与收尾 · ${model.slug}`, parts.join('\n'));
+  return layout(T, `${T('fp.title')} · ${model.slug}`, parts.join('\n'));
 }
 
 // ---------------------------------------------------------------- 输出
 
 function renderAll(model, outDir, ai) {
   fs.mkdirSync(path.join(outDir, 'assets'), { recursive: true });
+  const T = makeT(model.lang); // 全站点文案取用入口：只派生一次，向下传递
   const files = [
-    ['index.html', renderIndex(model, ai)],
-    ['final.html', renderFinal(model)],
-    ...model.tickets.map((t, i) => [`ticket-${t.id}.html`, renderTicket(model, t, i, model.tickets.length)]),
+    ['index.html', renderIndex(model, ai, T)],
+    ['final.html', renderFinal(model, T)],
+    ...model.tickets.map((t, i) => [`ticket-${t.id}.html`, renderTicket(model, t, i, model.tickets.length, T)]),
     ['assets/style.css', CSS],
   ];
   for (const [name, content] of files) {

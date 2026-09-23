@@ -6,7 +6,7 @@
 
 上游照旧：`/grill-with-docs` → `/to-spec` → `/to-tickets`。本包接手最后一步——按 ticket 依赖图实现，把实现、review、测试在一条命令里做完。
 
-English | [简体中文](./README.zh-CN.md)
+[English](./README.md) | 简体中文
 
 ## 核心能力
 
@@ -166,6 +166,10 @@ flowchart TD
 - 路径已写入 `.gitignore`，不会进版本库。这是运行数据，不是缓存——run 进行中或还打算续跑时，不要删。
 - `ledger.md` 和 `events.jsonl` 由流程维护，不要手工修改；想留备注写到 `notes.md`。
 - 跑完后如果只关心 feature 分支 / PR，目录可以留作记录，也可以自行清理。
+
+## 审计报告
+
+跑完可以做事后审计：[`audit-report/`](./audit-report/README.zh-CN.md) 把运行目录生成为可浏览的静态报告网站——零大模型调用，主流程零改动。
 
 ## 许可证
 
