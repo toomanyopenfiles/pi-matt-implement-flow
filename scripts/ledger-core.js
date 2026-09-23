@@ -475,7 +475,9 @@ function deriveRows({ events, truth, degraded }) {
   const nums = new Map(truth.tickets.map((t) => [t.num, t]));
   for (const num of idx.keys()) if (!nums.has(num)) nums.set(num, null);
   const rows = [];
-  for (const num of [...nums.keys()].sort()) {
+  // 票号数值排序（ADR-0004）：票号空间是 tracker 原生编号，混位数（02 / 205 / 1042）下
+  // 字典序会乱；表格行序即前沿取票顺序，按数值键排。
+  for (const num of [...nums.keys()].sort((a, b) => Number(a) - Number(b))) {
     const file = nums.get(num);
     const t = idx.get(num) ?? emptyIdx();
     const touched = t.dispatches.length || t.settles.length || t.verdicts.length || t.fixes.length;
