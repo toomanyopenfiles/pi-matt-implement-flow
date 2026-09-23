@@ -220,11 +220,60 @@ test('spec 转写：头部含 Source 行（tracker 原址，供同步收尾解�
     source: 'https://github.com/acme/repo/issues/1040',
   });
   const head = text.split('\n').slice(0, 5);
-  assert.equal(head[0], '# 1040: Spec: 大功能');
+  assert.equal(head[0], '# Spec: 大功能');
   assert.match(head[1] + '\n' + head[2], /Source: https:\/\/github\.com\/acme\/repo\/issues\/1040/, 'Source 行在文件头部');
   assert.match(text, /\*\*Status:\*\* needs-triage|\*\*Status:\*\* ready-for-agent/);
   assert.match(text, /\*\*Type:\*\* spec/);
   assert.match(text, /# Spec: 大功能\n\n正文/, 'spec 正文逐字保留');
+});
+
+// ====================================================================
+// integration-05 集成复验修复：快照 spec.md 与 local 形态同构
+// ====================================================================
+
+test('spec 转写：正文自带的 Status 行剔除——全文件恰好一行 Status（integration-05 缺陷 2）', (t) => {
+  // to-spec 发布惯例把 Status 行带进 issue 正文（local 文件头在 GitHub 上没有对应物，
+  // 正文首行即其落点）；原样保留会同文件两行 Status，parseTicketFile 取首行造成语义漂移。
+  // Status 的唯一来源是状态映射表——正文行不透传。
+  const text = sync.transcribeSpec({
+    issue: issue({
+      number: 1040,
+      title: 'Spec: 验证用规格',
+      state: 'OPEN',
+      labels: [],
+      body: '**Status:** ready-for-agent\n\n验证用的占位 spec 正文。',
+    }),
+    source: 'https://github.com/acme/repo/issues/1040',
+  });
+  assert.equal((text.match(/^\*\*\s*Status\s*:/gim) ?? []).length, 1, '全文件恰好一行 Status');
+  assert.match(text, /^\*\*Status:\*\* needs-triage$/m, '唯一 Status 行来自映射表（无 label 开放态兜底）');
+  assert.doesNotMatch(text, /ready-for-agent/, '正文 Status 行不进快照');
+  assert.match(text, /验证用的占位 spec 正文。\n$/, '其余正文逐字保留');
+});
+
+test('spec 转写：两种 Status 行写法都剔（**Status:** x 与 Status: x，与 parseTicketFile 同一宽容形态）', (t) => {
+  for (const body of ['Status: ready-for-agent\n\n正文', '正文前段\n\n**Status:** wontfix\n\n正文后段']) {
+    const text = sync.transcribeSpec({
+      issue: issue({ number: 1040, title: 'S', body }),
+      source: 'https://github.com/acme/repo/issues/1040',
+    });
+    assert.equal((text.match(/^\*\*\s*Status\s*:/gim) ?? []).length, 1, `恰一行 Status：${JSON.stringify(body)}`);
+  }
+});
+
+test('spec 转写：H1 为 # Spec: <题>——对齐 local spec.md 形态（integration-05 对齐项）', (t) => {
+  // issue 标题按 to-spec 发布惯例自带 "Spec: " 前缀——剥一次，避免 H1 双前缀；
+  // 无前缀的标题原样进入 H1（H1 永远是 local 的 # Spec: <题> 形态）。
+  const withPrefix = sync.transcribeSpec({
+    issue: issue({ number: 1040, title: 'Spec: 验证用规格' }),
+    source: 'https://github.com/acme/repo/issues/1040',
+  });
+  assert.equal(withPrefix.split('\n')[0], '# Spec: 验证用规格');
+  const withoutPrefix = sync.transcribeSpec({
+    issue: issue({ number: 1040, title: '验证用规格' }),
+    source: 'https://github.com/acme/repo/issues/1040',
+  });
+  assert.equal(withoutPrefix.split('\n')[0], '# Spec: 验证用规格');
 });
 
 test('spec 转写：closed 的 spec issue → Status: resolved（同一张状态表）', (t) => {

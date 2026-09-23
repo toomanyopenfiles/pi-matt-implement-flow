@@ -58,7 +58,8 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
 
 快照初始化 (snapshot-init，tracker=github):
   snapshot-init --spec <issue号|#号|owner/repo#号|issueURL> [--tickets 01,02,1042]
-              # init 阶段一条命令：拉取 spec 与全部工单，转写为 tracker 快照
+              # init 阶段一条命令：拉取 spec 与全部工单（含原生 sub-issues 与 blocked_by
+              # 依赖边），转写为 tracker 快照
               # （<runtime-dir>/tracker/spec.md 带 Source: 行 + tracker/issues/<号>-<slug>.md，
               # 与 local 票文件同构，账本零形态分叉）。票集来自票 04 的三层解析；
               # spec 母票带 Type: spec 豁免标记。快照已存在时拒绝执行（续跑保护：既有内容
@@ -483,6 +484,26 @@ function ghSubIssues(repo, specNum, issues, warnings) {
   }
 }
 
+// 票的原生依赖边（integration-05 缺陷 1）：转写纯函数 blockedByOf 早已支持 issue.blockedBy
+// 注入，但快照的 gh 收发此前没有拉取 dependencies——纯 IO 接线缺失，转写产物 Blocked by
+// 落占位 —。接线：票集边界先解析（纯函数，确定拉取对象、不给全仓发请求），逐票 REST 拉
+// blocked_by 解析为票号注入；best-effort：单票失败仅警告，该票退回正文 Blocked by 行/占位 —
+//（与 sub-issues 同一待遇，失败不产生半成品快照）。
+function ghBlockedBy(repo, nums, issues, warnings) {
+  for (const num of nums) {
+    try {
+      const raw = runGh(['api', `repos/${repo}/issues/${Number(num)}/dependencies/blocked_by`]);
+      const blockers = (JSON.parse(raw || '[]') ?? [])
+        .map((it) => schema.normalizeTicket(it?.number))
+        .filter(Boolean);
+      const tk = issues.find((it) => schema.normalizeTicket(it?.number) === num);
+      if (tk) tk.blockedBy = blockers;
+    } catch (e) {
+      warnings.push(`票 ${num} 的原生依赖边拉取失败（best-effort 跳过）：${ghDetail(e)}`);
+    }
+  }
+}
+
 // 落盘：先写 <tracker>.incoming 草稿目录，再整体改名——中断/失败不留半成品快照，
 // tracker/ 要么不存在、要么是完整快照（票 05：全部成功才落盘）。
 function writeSnapshot(snapshotRoot, plan) {
@@ -565,6 +586,8 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
 
   const warnings = [];
   const specNum = tset.parseSpecRef(flags.spec);
+  const initTickets =
+    'tickets' in flags ? flags.tickets.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
   let issues = [];
   if (specNum) {
     const repo = repoFromSpecRef(flags.spec) ?? ghRepoView(warnings);
@@ -580,13 +603,19 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
       );
       return 1;
     }
-    if (repo) ghSubIssues(repo, specNum, issues, warnings);
+    if (repo) {
+      ghSubIssues(repo, specNum, issues, warnings);
+      // 原生依赖边（integration-05 缺陷 1）：边界先解析（纯函数），仅对边界内的票拉
+      // blocked_by 注入——planSnapshot 的转写才吃得到 native 来源。
+      const boundary = tset.resolveTicketSet({ issues, specRef: flags.spec, initTickets });
+      if (boundary.ok) ghBlockedBy(repo, boundary.tickets, issues, warnings);
+    }
   }
 
   const plan = snapshot.planSnapshot({
     issues,
     specRef: flags.spec,
-    initTickets: 'tickets' in flags ? flags.tickets.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    initTickets,
   });
   if (!plan.ok) {
     out(`✗ 快照初始化失败：`, ...plan.errors.map((e) => `  - ${e}`));

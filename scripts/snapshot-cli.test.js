@@ -14,12 +14,25 @@ const path = require('node:path');
 
 const LEDGER = path.resolve(__dirname, 'ledger.js');
 
-// --- gh 桩：按首个参数分派（issue list / api sub_issues / repo view）---
+// --- gh 桩：按首个参数分派（issue list / api sub_issues / api dependencies/blocked_by / repo view）---
+// api 分支按路径二次分派：sub_issues 与 dependencies/blocked_by 两个 REST 端点（票 05 薄 IO 的全部收口）。
+// deps 桩默认返回空数组（无 native 边，既有用例行为不变）；GH_STUB_DEPS 给目录时按 issue 号读
+// <目录>/<号>.json，缺文件回退 []；GH_STUB_DEPS_FAIL 模拟端点失败。
 const GH_STUB = `#!/usr/bin/env bash
 if [[ -n "$GH_STUB_FAIL" ]]; then echo "gh: simulated failure (network down)" >&2; exit 1; fi
 case "$1" in
   issue) cat "$GH_STUB_ISSUES" ;;
-  api) if [[ -n "$GH_STUB_SUBS" ]]; then cat "$GH_STUB_SUBS"; else echo "gh: sub_issues fixture missing" >&2; exit 1; fi ;;
+  api)
+    case "$2" in
+      */sub_issues)
+        if [[ -n "$GH_STUB_SUBS" ]]; then cat "$GH_STUB_SUBS"; else echo "gh: sub_issues fixture missing" >&2; exit 1; fi ;;
+      */dependencies/blocked_by)
+        if [[ -n "$GH_STUB_DEPS_FAIL" ]]; then echo "gh: simulated deps failure" >&2; exit 1; fi
+        if [[ -z "$GH_STUB_DEPS" ]]; then echo "[]"; exit 0; fi
+        n=$(printf '%s' "$2" | sed -E 's|.*/issues/([0-9]+)/dependencies.*|\\1|')
+        if [[ -f "$GH_STUB_DEPS/$n.json" ]]; then cat "$GH_STUB_DEPS/$n.json"; else echo "[]"; fi ;;
+      *) echo "gh stub: unhandled api path: $2" >&2; exit 64 ;;
+    esac ;;
   repo) if [[ -n "$GH_STUB_REPO" ]]; then printf '{"nameWithOwner":"%s"}\\n' "$GH_STUB_REPO"; else echo "gh: repo fixture missing" >&2; exit 1; fi ;;
   *) echo "gh stub: unhandled invocation: $*" >&2; exit 64 ;;
 esac
@@ -175,6 +188,80 @@ test('--tickets 兜底：三层走到 init 票号清单——按清单落盘', (
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /票集边界=init-list/);
   assert.deepEqual(lsIssues(f), ['1043-issue-transcription-pure-fns.md', '1044-sync-command.md']);
+});
+
+// ====================================================================
+// native 依赖边：dependencies/blocked_by 拉取 → issue.blockedBy 注入（integration-05 缺陷 1）
+// ====================================================================
+
+test('native 依赖边进快照：REST blocked_by 注入 → 票文件 Blocked by 行带原生边（正文无行也照落）', (t) => {
+  const f = makeFixture(t);
+  // 正文不含 Blocked by 行——Blocked by 只能来自 native 边，证明不是正文行的功劳
+  fs.writeFileSync(
+    path.join(f.dir, 'issues.json'),
+    JSON.stringify([
+      {
+        number: 1042,
+        title: 'GitHub tracker 一等公民支持',
+        body: 'spec 正文',
+        state: 'OPEN',
+        labels: [],
+        url: 'https://github.com/o/r/issues/1042',
+      },
+      {
+        number: 1043,
+        title: 'blocker ticket',
+        body: '无阻塞',
+        state: 'OPEN',
+        labels: [],
+        url: 'https://github.com/o/r/issues/1043',
+      },
+      {
+        number: 1044,
+        title: 'blocked ticket',
+        body: '无正文阻塞边',
+        state: 'OPEN',
+        labels: [],
+        url: 'https://github.com/o/r/issues/1044',
+      },
+    ])
+  );
+  fs.writeFileSync(path.join(f.dir, 'subs.json'), JSON.stringify([{ number: 1043 }, { number: 1044 }]));
+  const deps = path.join(f.dir, 'deps');
+  fs.mkdirSync(deps);
+  fs.writeFileSync(path.join(deps, '1044.json'), JSON.stringify([{ number: 1043 }]));
+  fs.writeFileSync(path.join(deps, '1043.json'), JSON.stringify([]));
+  const r = snapshot(
+    f,
+    ['--runtime-dir', f.runtime, '--spec', 'https://github.com/o/r/issues/1042'],
+    { ...withGh(f), GH_STUB_DEPS: deps }
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const blocked = fs.readFileSync(path.join(f.tracker, 'issues', '1044-blocked-ticket.md'), 'utf8');
+  assert.match(blocked, /^\*\*Blocked by:\*\* 1043$/m, 'native blocked_by 边落 Blocked by 行');
+  const blocker = fs.readFileSync(path.join(f.tracker, 'issues', '1043-blocker-ticket.md'), 'utf8');
+  assert.match(blocker, /^\*\*Blocked by:\*\* —$/m, '无边票据仍落占位 —');
+  const specText = fs.readFileSync(path.join(f.tracker, 'spec.md'), 'utf8');
+  assert.equal(
+    (specText.match(/^\*\*\s*Status\s*:/gim) ?? []).length,
+    1,
+    'spec.md 恰好一行 Status（integration-05 缺陷 2，黑盒同验）'
+  );
+});
+
+test('native 依赖边拉取失败：best-effort 警告不拦快照，该票 Blocked by 落占位 —（与 sub-issues 同待遇）', (t) => {
+  const f = makeFixture(t);
+  writeStubData(f);
+  const r = snapshot(
+    f,
+    ['--runtime-dir', f.runtime, '--spec', 'https://github.com/o/r/issues/1042'],
+    { ...withGh(f), GH_STUB_DEPS_FAIL: '1' }
+  );
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /原生依赖边拉取失败/, '警告点名依赖边拉取失败');
+  const closed = fs.readFileSync(path.join(f.tracker, 'issues', '1044-sync-command.md'), 'utf8');
+  assert.match(closed, /^\*\*Blocked by:\*\* 1043$/m, '正文 Blocked by 行仍在（兜底层不因 native 失败丢失）');
+  assert.equal(fs.existsSync(`${f.tracker}.incoming`), false, '无落盘草稿残留');
 });
 
 // ====================================================================

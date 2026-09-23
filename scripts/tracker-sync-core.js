@@ -129,15 +129,26 @@ function transcribeTicket(issue) {
 
 // spec 母票票文件文本：Source 行在文件头部（供同步收尾解析 tracker 原址——ADR-0005），
 // Type: spec 是封账门豁免的识别标记，状态与正文走同一张转写口径。
+// 与 local spec.md 的形态同构：H1 为 `# Spec: <题>`（integration-05 对齐项）——issue 标题
+// 按 to-spec 发布惯例自带 "Spec: " 前缀，剥一次避免双前缀；票号合法性仍过 ticketNum
+//（票号空间单一转换点），但 spec.md 文件名固定、H1 不再携带号前缀。
+// 正文里的 Status 行剔除（integration-05 缺陷 2）：to-spec 发布惯例把 Status 行带进 issue
+// 正文（local 文件头在 GitHub 上没有对应物，正文首行即其落点），原样保留会同文件两行
+// Status，parseTicketFile 取首行造成语义漂移——Status 的唯一来源是状态映射表，正文行
+// 不透传（行形态与 parseTicketFile 的 grab 同一宽容口径；剔行残留的空行不重排）。
+const SPEC_TITLE_PREFIX = /^Spec\s*[:：]\s*/i;
+const STATUS_META_LINE = /^\**\s*Status\s*:\**/;
+
 function transcribeSpec({ issue, source }) {
   if (!issue) throw new Error('缺少 spec 母票——转写需要 tracker 的 spec issue 表示');
   const src = source ?? issue.url ?? issue.html_url ?? null;
   if (!src) {
     throw new Error('spec 转写缺少 Source（tracker 原址）——同步收尾依赖该行解析收尾对象，未提供不得落盘');
   }
-  const num = ticketNum(issue);
+  ticketNum(issue); // 票号合法性（单一转换点）；号本身不再进 spec.md 的 H1
+  const title = String(issue.title ?? '').trim().replace(SPEC_TITLE_PREFIX, '');
   const lines = [
-    `# ${num}: ${String(issue.title ?? '').trim()}`,
+    `# Spec: ${title}`,
     '',
     `Source: ${src}`,
     '',
@@ -145,7 +156,11 @@ function transcribeSpec({ issue, source }) {
     '',
     '**Type:** spec',
   ];
-  const body = transcribeBody(issue);
+  const body = transcribeBody(issue)
+    .split('\n')
+    .filter((line) => !STATUS_META_LINE.test(line))
+    .join('\n')
+    .trim();
   if (body) lines.push('', body);
   return lines.join('\n') + '\n';
 }

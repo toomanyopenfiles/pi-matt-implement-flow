@@ -12,13 +12,14 @@ const { slugify, planSnapshot, checkOverwrite } = require('./snapshot-core.js');
 
 // --- fixture：tracker 的 issue 集合表示（gh issue list --json 的手工等价物）---
 
-const issue = (number, { title = '', body = '', state = 'OPEN', labels = [], subIssues, url } = {}) => ({
+const issue = (number, { title = '', body = '', state = 'OPEN', labels = [], subIssues, blockedBy, url } = {}) => ({
   number,
   title,
   body,
   state,
   labels,
   ...(subIssues === undefined ? {} : { subIssues }),
+  ...(blockedBy === undefined ? {} : { blockedBy }),
   ...(url === undefined ? {} : { url }),
 });
 
@@ -75,7 +76,7 @@ test('planSnapshot：## Parent 反查定界——spec.md 带 Source 行与 Type:
   // spec 母票：文件名固定 spec.md，头部带 Source: 行（tracker 原址）与 Type: spec（封账门豁免标记）
   assert.equal(plan.spec.rel, 'spec.md');
   assert.equal(plan.spec.source, 'https://github.com/o/r/issues/1042');
-  assert.match(plan.spec.text, /^# 1042: GitHub tracker 一等公民支持$/m);
+  assert.match(plan.spec.text, /^# Spec: GitHub tracker 一等公民支持$/m, 'H1 对齐 local spec.md 形态（integration-05 对齐项）');
   assert.match(plan.spec.text, /^Source: https:\/\/github\.com\/o\/r\/issues\/1042$/m);
   assert.match(plan.spec.text, /^\*\*Type:\*\* spec$/m, 'spec 母票豁免标记');
   assert.match(plan.spec.text, /^\*\*Status:\*\* ready-for-agent$/m, '状态走 02 的 label 映射口径');
@@ -102,6 +103,20 @@ test('planSnapshot：## Parent 反查定界——spec.md 带 Source 行与 Type:
     '正文 Blocked by 行过 02 的阻塞映射表'
   );
   assert.ok(!plan.tickets.some((tk) => tk.rel.includes('9000')), '票集边界外的票不进快照');
+});
+
+test('planSnapshot：native 依赖边（issue.blockedBy 注入）透传进票文件 Blocked by 行（integration-05 缺陷 1）', () => {
+  // gh 薄 IO 把 dependencies/blocked_by 拉取产物注入 issue.blockedBy——纯布局层只验证
+  // 注入后的字段原样流进 02 的阻塞映射表，不问注入从何而来。
+  const issues = [
+    issue(1042, { title: 'spec', body: 'spec 正文', url: 'https://github.com/o/r/issues/1042' }),
+    issue(1043, { title: 'blocker', body: '## Parent\n\n#1042' }),
+    issue(1044, { title: 'blocked ticket', body: '## Parent\n\n#1042', blockedBy: ['1043'] }),
+  ];
+  const plan = planSnapshot({ issues, specRef: '#1042' });
+  assert.equal(plan.ok, true, plan.errors.join(';'));
+  const text = plan.tickets.find((tk) => tk.num === '1044').text;
+  assert.match(text, /^\*\*Blocked by:\*\* 1043$/m, 'native 边落 Blocked by 行（正文行缺席也不落占位 —）');
 });
 
 test('planSnapshot：sub-issues 层优先定界——正文无 Parent 边的票也入集，spec 母票不进集合', () => {
