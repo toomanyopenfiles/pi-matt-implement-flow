@@ -18,9 +18,14 @@ const os = require('node:os');
 const path = require('node:path');
 const schema = require('./ledger-schema');
 const core = require('./ledger-core');
+const snapshot = require('./snapshot-core');
+const tset = require('./tracker-set-core');
 
 const EVENTS_FILE = 'events.jsonl';
 const LEDGER_FILE = 'ledger.md';
+// tracker 快照（票 05，ADR-0003）：snapshot-init 的落盘根——与 local tracker 的
+// spec 同目录 issues/ 枚举约定同构（dirname(spec)/issues/），账本枚举零形态分叉。
+const SNAPSHOT_DIR = 'tracker';
 
 const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事件流 / 派生台账三层，LLM 永不手写台账）
 
@@ -50,6 +55,15 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
               # 且该序号的事件已入账；违规拒绝（无绕过旗标）。指不到对应事件时去掉 --ref-seq 重记。
   pr          --state(opened-draft|ready) [--url] [--note]
   close       [--note]
+
+快照初始化 (snapshot-init，tracker=github):
+  snapshot-init --spec <issue号|#号|owner/repo#号|issueURL> [--tickets 01,02,1042]
+              # init 阶段一条命令：拉取 spec 与全部工单，转写为 tracker 快照
+              # （<runtime-dir>/tracker/spec.md 带 Source: 行 + tracker/issues/<号>-<slug>.md，
+              # 与 local 票文件同构，账本零形态分叉）。票集来自票 04 的三层解析；
+              # spec 母票带 Type: spec 豁免标记。快照已存在时拒绝执行（续跑保护：既有内容
+              # 零覆盖，续跑绝不重拉）；gh 收发为 best-effort 薄 IO——失败报错清晰、
+              # 不产生半成品（临时目录整体改名，全部成功才落盘）。
 
 说明:
   add      记账：脚本盖权威时间戳/单调序号/版本/git HEAD 锚点，append 后自动再生台账
@@ -414,6 +428,199 @@ function cmdCheck({ runtimeDir }) {
   return 0;
 }
 
+// --- 快照初始化（票 05）：gh 收发 best-effort 薄 IO + 布局纯函数（snapshot-core）---
+
+// spec 引用 → owner/repo（供 gh -R 与 sub_issues REST 路径）：与 parseSpecRef 同源的两种
+// 带前缀形态；纯 issue 号 / #号不携带 repo（gh 按 cwd 的 git remote 解析，不猜）。
+function repoFromSpecRef(specRef) {
+  const s = String(specRef ?? '').trim();
+  let m = /^([\w.-]+)\/([\w.-]+)#\d{1,6}$/.exec(s);
+  if (m) return `${m[1]}/${m[2]}`;
+  m = /github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/\d{1,6}/.exec(s);
+  if (m) return `${m[1]}/${m[2]}`;
+  return null;
+}
+
+const ghDetail = (e) =>
+  (String(e?.stderr ?? '').trim() || String(e?.message ?? '').trim()).split('\n')[0] ||
+  `退出码 ${e?.status ?? '未知'}`;
+
+function runGh(args) {
+  return execFileSync('gh', args, {
+    encoding: 'utf8',
+    timeout: 120000,
+    // 大仓的 issue list（--limit 1000 含正文）远超默认 1MB buffer——ENOBUFS 是真实
+    // 失败面（手工验证 golang/go 时撞过），按薄 IO 的量级给足。
+    maxBuffer: 256 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+// cwd 仓库的 owner/repo（best-effort）：仅用于 sub_issues 拉取；失败不拦快照——
+// 票集边界还有 ## Parent 反查与 --tickets 两层兜底。
+function ghRepoView(warnings) {
+  try {
+    const name = JSON.parse(runGh(['repo', 'view', '--json', 'nameWithOwner']) || '{}')?.nameWithOwner;
+    return name ? String(name) : null;
+  } catch (e) {
+    warnings.push(`gh repo view 失败（best-effort 跳过）：${ghDetail(e)}——sub-issues 拉取跳过，票集边界走 ## Parent 反查或 --tickets`);
+    return null;
+  }
+}
+
+// spec issue 的原生 sub-issues（票 04 层 ① 的数据源，best-effort）：REST 端点一次拉取，
+// 失败仅警告不拦快照——三层兜底链的设计初衷就是层 ① 可缺席。
+function ghSubIssues(repo, specNum, issues, warnings) {
+  try {
+    const raw = runGh(['api', `repos/${repo}/issues/${Number(specNum)}/sub_issues`]);
+    const subs = (JSON.parse(raw || '[]') ?? [])
+      .map((it) => schema.normalizeTicket(it?.number))
+      .filter(Boolean);
+    const specIssue = issues.find((it) => schema.normalizeTicket(it?.number) === specNum);
+    if (specIssue) specIssue.subIssues = subs;
+  } catch (e) {
+    warnings.push(`spec ${specNum} 的 sub-issues 拉取失败（best-effort 跳过）：${ghDetail(e)}`);
+  }
+}
+
+// 落盘：先写 <tracker>.incoming 草稿目录，再整体改名——中断/失败不留半成品快照，
+// tracker/ 要么不存在、要么是完整快照（票 05：全部成功才落盘）。
+function writeSnapshot(snapshotRoot, plan) {
+  const incoming = `${snapshotRoot}.incoming`;
+  fs.rmSync(incoming, { recursive: true, force: true }); // 上次中断残留的自家草稿，清掉重写
+  fs.mkdirSync(incoming, { recursive: true });
+  fs.writeFileSync(path.join(incoming, plan.spec.rel), plan.spec.text);
+  for (const tk of plan.tickets) {
+    fs.mkdirSync(path.dirname(path.join(incoming, tk.rel)), { recursive: true });
+    fs.writeFileSync(path.join(incoming, tk.rel), tk.text);
+  }
+  try {
+    fs.renameSync(incoming, snapshotRoot);
+  } catch (e) {
+    fs.rmSync(incoming, { recursive: true, force: true });
+    if (fs.existsSync(snapshotRoot)) {
+      throw new Error(`快照已存在：${snapshotRoot}——写入窗口内被并发创建，拒绝覆盖`);
+    }
+    throw e;
+  }
+}
+
+function cmdSnapshotInit({ runtimeDir, rest }) {
+  const errors = [];
+  const flags = {};
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (!tok.startsWith('--')) {
+      errors.push(`意外位置参数「${tok}」——参数一律用 --flag value 形式`);
+      continue;
+    }
+    let flag = tok.slice(2);
+    let value = null;
+    const eq = flag.indexOf('=');
+    if (eq !== -1) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else if (i + 1 < rest.length && !rest[i + 1].startsWith('--')) {
+      value = rest[++i];
+    } else {
+      errors.push(`旗标 --${flag} 缺少值`);
+      continue;
+    }
+    if (!['spec', 'tickets'].includes(flag)) {
+      errors.push(`未知旗标 --${flag}（snapshot-init 的参数集见 --help）；本脚本无任何绕过校验的旗标`);
+      continue;
+    }
+    if (flag in flags) {
+      errors.push(`旗标 --${flag} 重复给出`);
+      continue;
+    }
+    if (!String(value).trim()) {
+      errors.push(`旗标 --${flag} 的值为空`);
+      continue;
+    }
+    flags[flag] = value;
+  }
+  if (!('spec' in flags)) {
+    errors.push('缺少必选参数 --spec <spec 引用>（GitHub：issue 号 / #号 / owner/repo#号 / issue URL）');
+  }
+  if (errors.length) {
+    out(`✗ 拒绝：`, ...errors.map((e) => `  - ${e}`));
+    return 2;
+  }
+
+  // 续跑保护先于一切网络动作：快照已存在即拒绝，既有内容零覆盖（票 05）。
+  const snapshotRoot = path.join(runtimeDir, SNAPSHOT_DIR);
+  const overwrite = snapshot.checkOverwrite({
+    snapshotDir: snapshotRoot,
+    fileExists: (p) => fs.existsSync(p),
+  });
+  if (!overwrite.ok) {
+    out(
+      `✗ 拒绝：快照已存在——${overwrite.conflicts[0]}`,
+      '  续跑保护：快照是拉取一次的整体，已存在时拒绝重新拉取（既有内容零覆盖）；',
+      '  续跑经 ledger build + check 由事件流与快照重建状态，绝不重新拉取（ADR-0003）。'
+    );
+    return 1;
+  }
+
+  const warnings = [];
+  const specNum = tset.parseSpecRef(flags.spec);
+  let issues = [];
+  if (specNum) {
+    const repo = repoFromSpecRef(flags.spec) ?? ghRepoView(warnings);
+    try {
+      const args = ['issue', 'list', '--state', 'all', '--limit', '1000', '--json', 'number,title,body,state,labels,url'];
+      if (repo) args.push('-R', repo);
+      issues = JSON.parse(runGh(args) || '[]') ?? [];
+    } catch (e) {
+      out(
+        `✗ 快照初始化失败：gh issue list 拉取失败——${ghDetail(e)}`,
+        '  快照未落盘（tracker/ 未创建）——gh 收发为 best-effort 薄 IO：失败不产生半成品，',
+        '  排查 gh 登录/网络/引用后重跑（幂等：快照不存在时重跑即全新拉取）。'
+      );
+      return 1;
+    }
+    if (repo) ghSubIssues(repo, specNum, issues, warnings);
+  }
+
+  const plan = snapshot.planSnapshot({
+    issues,
+    specRef: flags.spec,
+    initTickets: 'tickets' in flags ? flags.tickets.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+  });
+  if (!plan.ok) {
+    out(`✗ 快照初始化失败：`, ...plan.errors.map((e) => `  - ${e}`));
+    // 提示只在「引用本身解析不出」（local 路径 / 散文）且形态像文件路径时给——
+    // 引用可解析但不在集合（拉取不全）的场景贴 tracker=local 提示会误导。
+    if (!specNum && /[\\/]|\.md$/.test(String(flags.spec).trim())) {
+      out('  提示：tracker=local 无需快照——本地票文件即真相层，不经此命令');
+    }
+    return 1;
+  }
+
+  try {
+    writeSnapshot(snapshotRoot, plan);
+  } catch (e) {
+    out(
+      `✗ 快照初始化失败：快照落盘失败——${e.message}`,
+      '  快照未落盘或仅存草稿（tracker/ 整体改名前不可见）——排除磁盘问题后重跑。'
+    );
+    return 1;
+  }
+
+  const display = (p) => {
+    const rel = path.relative(process.cwd(), p);
+    return rel && !rel.startsWith('..') ? rel : p;
+  };
+  out(
+    `✓ 快照落盘：${display(snapshotRoot)}（spec 1 + 票 ${plan.tickets.length}，票集边界=${plan.source}）`,
+    `  spec.md（Source: ${plan.spec.source}）`,
+    ...plan.tickets.map((tk) => `  ${tk.rel}`),
+    ...[...warnings, ...plan.warnings].map((w) => `⚠ ${w}`)
+  );
+  return 0;
+}
+
 // --- 入口 ---
 
 function main(argv) {
@@ -426,7 +633,7 @@ function main(argv) {
     return 0;
   }
   const command = argv[0];
-  if (!['add', 'build', 'check'].includes(command)) {
+  if (!['add', 'build', 'check', 'snapshot-init'].includes(command)) {
     out(`未知子命令：${command}`, USAGE);
     return 2;
   }
@@ -449,6 +656,7 @@ function main(argv) {
   runtimeDir = path.resolve(runtimeDir);
   if (command === 'add') return cmdAdd({ runtimeDir, rest });
   if (command === 'build') return cmdBuild({ runtimeDir });
+  if (command === 'snapshot-init') return cmdSnapshotInit({ runtimeDir, rest });
   return cmdCheck({ runtimeDir });
 }
 
