@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// ledger CLI — 机械台账的三个子命令（唯一写面）。
-// 分层：薄 IO 壳（git/gh/票文件读取 + 原子写）+ 纯判定核心（ledger-schema / ledger-core）。
+// ledger CLI — 机械台账的子命令（唯一写面）。
+// 分层：薄 IO 壳（git/gh/票文件读取 + 原子写）+ 纯判定核心（ledger-schema / ledger-core /
+// snapshot-core / sync-read-core / sync-planning-core）。
 //
 //   add <type>   校验 → 盖时间戳/序号/HEAD 锚点 → append 事件流 → 自动再生台账
 //   build        由事件流 + 真相层全量再生台账（全文打到 stdout，供 compaction 恢复读取）
@@ -20,6 +21,8 @@ const schema = require('./ledger-schema');
 const core = require('./ledger-core');
 const snapshot = require('./snapshot-core');
 const tset = require('./tracker-set-core');
+const syncread = require('./sync-read-core');
+const syncplan = require('./sync-planning-core');
 
 const EVENTS_FILE = 'events.jsonl';
 const LEDGER_FILE = 'ledger.md';
@@ -66,11 +69,25 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
               # 零覆盖，续跑绝不重拉）；gh 收发为 best-effort 薄 IO——失败报错清晰、
               # 不产生半成品（临时目录整体改名，全部成功才落盘）。
 
+同步 (sync，tracker=github，时点固定在封账之前、pr --state ready 之前):
+  sync [--mode seal|abandon] [--claimant <login>] [--reason <放弃说明>]
+              # 把 tracker/ 快照的待推送状态幂等推送到 tracker 本体（票 06；执行 03 的
+              # 同步规划）。seal（缺省）：合并票关票附 merge SHA、escalate 票留评保持开放、
+              # spec 母票收尾关闭；abandon：撤占坑（--claimant）+ 留评说明（--reason）。
+              # 快照事实来自票文件 ## Comments 节：merge SHA: <sha>、escalate: <原因>；
+              # spec.md 的 Comments 节里 closing: <交付指引>（票 07 对齐措辞）。
+              # gh 收发为 best-effort 薄 IO：先拉状态再规划、规划通过后才写入——
+              # 拉取失败即整体中止（无半成品推送）；部分失败逐动作报告已完成/未完成，
+              # 重跑安全（幂等规划只补未完成的动作）。同步成功后输出传输件清理指引。
+              # run 已封账时拒绝执行（封账后事件流拒写，同步失败将无从记账）。
+
 说明:
   add      记账：脚本盖权威时间戳/单调序号/版本/git HEAD 锚点，append 后自动再生台账
   build    台账再生：四段 markdown（头部/表格/时间线/对账结论），确定性重建
   check    对账：账实差异核验，非零退出码 = 有差异；派发与合并前、compaction 后必跑；
            并对 final 事件的 runId 做 best-effort 平台证据核验（不可核验仅警告，不影响退出码）
+  sync     封账前单点同步：快照事实 → 03 规划 → gh 幂等执行（ticket 06，tracker=github）；
+           成功后打印清理指引（快照与 review bundle 清理、findings 与账本三件套留存）
   时间不由 LLM 提供；自由文本统一 --note；校验拒绝时给出原因，修正后重试；
   与校验器分歧 → add anomaly --note "..." 并停下上报（无任何绕过旗标）。
 `;
@@ -650,6 +667,222 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
   return 0;
 }
 
+// --- 同步（票 06）：快照事实读取（sync-read-core）+ 同步规划（票 03）+ gh 薄 IO 执行 ---
+//
+// 时序即幂等保障：先拉 tracker 状态（拉取失败即整体中止）→ 纯规划（拒绝面全拦在此，
+// 零写入）→ 逐动作顺序执行。执行属票 03 动作集的一一对应：
+//   close    → gh issue close <num> [--comment <body>]
+//   comment  → gh issue comment <num> --body <body>
+//   unassign → gh issue edit <num> --remove-assignee <login>
+// 部分失败即停：报告已完成/未完成逐动作清单；重跑从拉取重新开始，规划器按 tracker
+// 已有痕迹只补未完成的动作——已关不重关、已评论不重复。
+
+function describeSyncAction(action) {
+  if (action.kind === 'close') return `close ${action.num}${action.body ? '（附评论）' : ''}`;
+  if (action.kind === 'comment') return `comment ${action.num}`;
+  return `unassign ${action.num}（${action.login}）`;
+}
+
+function executeSyncAction(action, repo) {
+  const num = String(Number(action.num)); // gh 的原生号：去归一化补零（'07' → '7'）
+  if (action.kind === 'close') {
+    runGh(action.body ? ['-R', repo, 'issue', 'close', num, '--comment', action.body] : ['-R', repo, 'issue', 'close', num]);
+  } else if (action.kind === 'comment') {
+    runGh(['-R', repo, 'issue', 'comment', num, '--body', action.body]);
+  } else if (action.kind === 'unassign') {
+    runGh(['-R', repo, 'issue', 'edit', num, '--remove-assignee', action.login]);
+  } else {
+    throw new Error(`未知同步动作 kind：${JSON.stringify(action.kind)}`);
+  }
+}
+
+// 同步成功后的传输件清理指引（ADR-0003：快照是传输件，用后即弃；findings 留存因事件流
+// 引用其路径；账本三件套长存）。只指引不代删——清理动作属编排流程（票 07 的清理清单）。
+function syncCleanupLines(mode, runtimeDir) {
+  const display = (p) => {
+    const rel = path.relative(process.cwd(), p);
+    return rel && !rel.startsWith('..') ? rel : p;
+  };
+  const runtime = display(runtimeDir);
+  return [
+    '传输件清理指引（同步成功后执行；快照与 bundle 用后即弃，账本三件套长存）：',
+    `  - 清理 tracker 快照：rm -rf ${runtime}/tracker`,
+    `  - 清理 review bundle：${runtime}/reviews/（若存在）`,
+    `  - 留存 findings：${runtime}/findings/（事件流引用其路径，不可删）`,
+    `  - 留存账本三件套：${runtime}/events.jsonl、ledger.md、notes.md（长存）`,
+    mode === 'abandon'
+      ? '  随后：封账（add close）——放弃路径已撤占坑留评，tracker 不留假占坑。'
+      : '  随后：PR 标 ready（add pr --state ready）→ 封账（add close）——同步已先行，PR closing keywords 不会抢关已关的票。',
+  ];
+}
+
+function parseSyncFlags(rest) {
+  const errors = [];
+  const flags = {};
+  const allowed = ['mode', 'claimant', 'reason'];
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (!tok.startsWith('--')) {
+      errors.push(`意外位置参数「${tok}」——参数一律用 --flag value 形式`);
+      continue;
+    }
+    let flag = tok.slice(2);
+    let value = null;
+    const eq = flag.indexOf('=');
+    if (eq !== -1) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else if (i + 1 < rest.length && !rest[i + 1].startsWith('--')) {
+      value = rest[++i];
+    } else {
+      errors.push(`旗标 --${flag} 缺少值`);
+      continue;
+    }
+    if (!allowed.includes(flag)) {
+      errors.push(`未知旗标 --${flag}（sync 的参数集见 --help）；本脚本无任何绕过校验的旗标`);
+      continue;
+    }
+    if (flag in flags) {
+      errors.push(`旗标 --${flag} 重复给出`);
+      continue;
+    }
+    flags[flag] = value;
+  }
+  return { flags, errors };
+}
+
+function cmdSync({ runtimeDir, rest }) {
+  const { flags, errors } = parseSyncFlags(rest);
+  const mode = flags.mode ?? 'seal';
+  if (mode !== 'seal' && mode !== 'abandon') {
+    errors.push(`--mode 非法：${JSON.stringify(flags.mode ?? '')}——应为 seal | abandon（缺省 seal）`);
+  }
+  if (mode === 'abandon') {
+    if (!String(flags.claimant ?? '').trim()) errors.push('abandon 需要 --claimant <占坑的 tracker 用户名>');
+    if (!String(flags.reason ?? '').trim()) errors.push('abandon 需要 --reason <放弃说明，用于留评>');
+  }
+  if (errors.length) {
+    out(`✗ 拒绝：`, ...errors.map((e) => `  - ${e}`));
+    return 2;
+  }
+
+  // 时点约束先于一切网络动作：同步须发生在封账之前（ADR-0003——封账后事件流拒写，
+  // 同步失败将无从记账，账实静默裂开）。
+  const { events, loadError } = loadEvents(path.join(runtimeDir, EVENTS_FILE));
+  if (loadError) {
+    out(`✗ 拒绝：${loadError}`);
+    return 1;
+  }
+  if (events.some((e) => e?.type === 'close')) {
+    out(
+      '✗ 拒绝：run 已封账——同步须发生在封账之前、pr --state ready 之前；',
+      '  封账后事件流拒写，此时同步失败将无从记账。确有未推送状态：向用户上报后人工处理。',
+    );
+    return 1;
+  }
+
+  // 快照读取（纯函数，fs 谓词注入）：快照缺失 → tracker=local 无需同步 / github 先拉取
+  const snapshotRoot = path.join(runtimeDir, SNAPSHOT_DIR);
+  const read = syncread.readSnapshot({
+    trackerDir: snapshotRoot,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    listDir: (p) => fs.readdirSync(p),
+    exists: (p) => fs.existsSync(p),
+  });
+  if (!read.ok) {
+    if (read.errors[0]?.startsWith('快照不存在')) {
+      out(
+        `✗ 拒绝：tracker/ 快照不存在——${snapshotRoot}`,
+        '  tracker=local 无需同步（本地票文件即真相层，不经此命令）；',
+        '  tracker=github 的 run 先跑 snapshot-init 拉取快照。',
+      );
+    } else {
+      out(`✗ 拒绝：快照形态不合格——`, ...read.errors.map((e) => `  - ${e}`));
+    }
+    return 1;
+  }
+  for (const w of read.warnings) out(`⚠ ${w}`);
+
+  // 拉取规划所需 tracker 状态：只拉同步对象（合并/升级事实票 + spec 母票；abandon 仅母票）。
+  // 在途票（claimed/ready）不是同步对象，不发请求。
+  const nums =
+    mode === 'abandon'
+      ? [read.spec.num]
+      : [
+          ...new Set([
+            ...read.tickets.filter((t) => t.mergeSha || t.escalateReason).map((t) => t.num),
+            read.spec.num,
+          ]),
+        ].sort((a, b) => Number(a) - Number(b));
+  const views = [];
+  for (const num of nums) {
+    try {
+      const raw = runGh([
+        '-R',
+        read.source.repo,
+        'issue',
+        'view',
+        String(Number(num)),
+        '--json',
+        'number,state,assignees,comments',
+      ]);
+      views.push(JSON.parse(raw || 'null'));
+    } catch (e) {
+      out(
+        `✗ 同步未执行任何动作：gh issue view ${num} 拉取失败——${ghDetail(e)}`,
+        '  同步先拉状态再规划、规划通过后才写入：拉取失败即整体中止（无半成品推送）；',
+        '  排查 gh 登录/网络（或确认该 issue 未被删除）后重跑——已推送的部分不受影响。',
+      );
+      return 1;
+    }
+  }
+
+  // 纯规划（拒绝面在此拦截，零写入）：非法事实/缺失状态都在这里拒绝，不猜。
+  let actions;
+  try {
+    actions = syncplan.planTrackerSync(
+      { tickets: read.tickets, spec: read.spec },
+      { issues: syncread.toTrackerIssues(views) },
+      mode === 'abandon' ? { mode, claimant: flags.claimant, reason: flags.reason } : { mode },
+    );
+  } catch (e) {
+    out(`✗ ${e.message}`, '  同步规划拒绝即零推送——修正快照事实后重跑。');
+    return 1;
+  }
+
+  if (!actions.length) {
+    out('✓ 已同步：无待推送动作（幂等重入，零副作用）——close 0 / comment 0 / unassign 0');
+    out(...syncCleanupLines(mode, runtimeDir));
+    return 0;
+  }
+
+  // 逐动作顺序执行：部分失败即停，逐动作报告已完成/未完成（重跑只补未完成的动作）。
+  const done = [];
+  for (const action of actions) {
+    try {
+      executeSyncAction(action, read.source.repo);
+      out(`  ✓ ${describeSyncAction(action)}`);
+      done.push(action);
+    } catch (e) {
+      out(
+        `✗ 同步失败：${describeSyncAction(action)} 失败——${ghDetail(e)}`,
+        `  已完成（${done.length}/${actions.length}）：`,
+        ...done.map((a) => `    ✓ ${describeSyncAction(a)}`),
+        `  未完成（${actions.length - done.length}）：`,
+        ...actions.slice(done.length).map((a) => `    - ${describeSyncAction(a)}`),
+        '  重跑安全：幂等规划只补未完成的动作（已推送的痕迹——已关票/已有评论——不再产生动作）。',
+      );
+      return 1;
+    }
+  }
+  const tally = ['close', 'comment', 'unassign']
+    .map((k) => `${k} ${actions.filter((a) => a.kind === k).length}`)
+    .join(' / ');
+  out(`✓ 同步完成：${actions.length} 个动作全部推送（${tally}）`);
+  out(...syncCleanupLines(mode, runtimeDir));
+  return 0;
+}
+
 // --- 入口 ---
 
 function main(argv) {
@@ -662,7 +895,7 @@ function main(argv) {
     return 0;
   }
   const command = argv[0];
-  if (!['add', 'build', 'check', 'snapshot-init'].includes(command)) {
+  if (!['add', 'build', 'check', 'snapshot-init', 'sync'].includes(command)) {
     out(`未知子命令：${command}`, USAGE);
     return 2;
   }
@@ -686,6 +919,7 @@ function main(argv) {
   if (command === 'add') return cmdAdd({ runtimeDir, rest });
   if (command === 'build') return cmdBuild({ runtimeDir });
   if (command === 'snapshot-init') return cmdSnapshotInit({ runtimeDir, rest });
+  if (command === 'sync') return cmdSync({ runtimeDir, rest });
   return cmdCheck({ runtimeDir });
 }
 
