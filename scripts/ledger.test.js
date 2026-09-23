@@ -85,8 +85,8 @@ function readLedger(f) {
 }
 
 // --- 标准运行铺底：init + dispatch/settled/verdict（票 01）---
-
-function initRun(f) {
+// extra：追加 init 旗标（如票集边界 --tickets，票 04）；不传则维持零旗标的旧形态
+function initRun(f, extra = {}) {
   f.git('checkout -q -b feat/demo');
   const r = addAll(f, 'init', {
     branch: 'feat/demo',
@@ -95,6 +95,7 @@ function initRun(f) {
     spec: '.scratch/demo/spec.md',
     'test-command': 'npm test',
     tracker: 'local',
+    ...extra,
   });
   assert.equal(r.status, 0, r.stdout);
   return r;
@@ -1542,4 +1543,119 @@ test('票号空间：未入账合并扫描对多位号提取正确（ticket-205 
   const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
   assert.equal(r.status, 1);
   assert.match(r.stdout, /git 有票 205 的合并提交/, '四位以下的多位号同样被扫描提取并点名');
+});
+
+// ====================================================================
+// 票集边界旗标（票 04）：init --tickets 可选票号清单——三层兜底的兜底层，
+// init 时冻结 run 的票集边界防中途偷加票。接缝①：旗标形态用例直喂 parseFlags
+// 纯函数；接受/冻结/对账行为走 CLI 黑盒（既有缝，fixture 仓）。
+// ====================================================================
+
+test('票集边界：--tickets 接受并归一化入账（去重 + 数值排序），台账头部与时间线如实渲染', (t) => {
+  const f = makeFixture(t);
+  const r = initRun(f, { tickets: '02, 01,1' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.equal(readEvents(f)[0].payload.tickets, '01,02', 'payload 存归一形态的逗号串');
+  const md = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(md.status, 0, md.stdout);
+  assert.match(md.stdout, /tickets: 01,02/, '头部有 tickets 行（冻结边界可见）');
+  assert.match(md.stdout, /tickets=01,02/, '时间线 init 行如实渲染旗标');
+});
+
+test('票集边界：旗标可选——旧形态（无 --tickets）零行为变化，台账无 tickets 行', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const md = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(md.status, 0, md.stdout);
+  assert.doesNotMatch(md.stdout, /tickets:/, '无旗标不渲染 tickets 行');
+  assert.doesNotMatch(md.stdout, /tickets=/, '时间线无旗标键');
+});
+
+test('票集边界：旗标形态非法一律拒绝——非数字 / 超 6 位 / 全空段 / 混入非法项，init 不入账', (t) => {
+  const f = makeFixture(t);
+  for (const bad of ['abc', '1234567', ',,', '01,x']) {
+    const r = addAll(f, 'init', {
+      branch: 'feat/demo',
+      'branch-base': 'main',
+      'baseline-sha': f.baseline(),
+      spec: '.scratch/demo/spec.md',
+      'test-command': 'npm test',
+      tracker: 'local',
+      tickets: bad,
+    });
+    assert.equal(r.status, 1, `--tickets ${bad} 必须被拒`);
+    assert.match(r.stdout, /票号列表/);
+  }
+  assert.ok(!fs.existsSync(f.eventsPath), 'init 全部被拒——事件流从未产生');
+});
+
+test('票集边界：冻结执法——边界外的票 dispatch / escalate 被拒（中途偷加票被拒），边界内照常', (t) => {
+  const f = makeFixture(t);
+  initRun(f, { tickets: '01,02' });
+  const ok = addAll(f, 'dispatch', { ticket: '02', key: 't-02', 'run-id': 'bbbbbbbb' });
+  assert.equal(ok.status, 0, ok.stdout);
+  const bad = addAll(f, 'dispatch', { ticket: '03', key: 't-03', 'run-id': 'cccccccc' });
+  assert.equal(bad.status, 1, '边界外的票不得派发');
+  assert.match(bad.stdout, /票集边界/);
+  assert.match(bad.stdout, /01,02/);
+  const esc = addAll(f, 'escalate', { ticket: '1042' });
+  assert.equal(esc.status, 1, '边界外的票同样不得升级');
+  assert.match(esc.stdout, /票集边界/);
+  assert.equal(readEvents(f).filter((e) => e.type !== 'init').length, 1, '被拒载荷全部不入账');
+});
+
+test('票集边界：对账盯住票文件——冻结后新出现的票文件报边界差异；无冻结的旧形态不报', (t) => {
+  const f = makeFixture(t);
+  initRun(f, { tickets: '01,02' });
+  writeTicketFile(f.dir, '03', '偷加票');
+  const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /票集边界外/);
+  const f2 = makeFixture(t);
+  initRun(f2);
+  writeTicketFile(f2.dir, '03', '普通新票');
+  const r2 = ledger(['check', '--runtime-dir', f2.runtime], { cwd: f2.dir });
+  assert.equal(r2.status, 0, r2.stdout, '无旗标 = 无冻结边界，票文件照旧枚举');
+});
+
+test('票集边界：对账兼住事件流——冻结后账上出现边界外票报差异；无冻结时只报既有缺文件差异', (t) => {
+  const f = makeFixture(t);
+  initRun(f, { tickets: '01,02' });
+  const head = f.baseline();
+  fs.appendFileSync(
+    f.eventsPath,
+    JSON.stringify({ v: 3, seq: 2, ts: new Date().toISOString(), head, type: 'dispatch', payload: { ticket: '03', key: 't-03', runId: 'aaaaaaaa' } }) + '\n'
+  );
+  const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /票集边界内/);
+  const f2 = makeFixture(t);
+  initRun(f2);
+  fs.appendFileSync(
+    f2.eventsPath,
+    JSON.stringify({ v: 3, seq: 2, ts: new Date().toISOString(), head: f2.baseline(), type: 'dispatch', payload: { ticket: '03', key: 't-03', runId: 'aaaaaaaa' } }) + '\n'
+  );
+  const r2 = ledger(['check', '--runtime-dir', f2.runtime], { cwd: f2.dir });
+  assert.equal(r2.status, 1);
+  assert.match(r2.stdout, /票文件缺失/, '无冻结时维持既有对账口径');
+  assert.doesNotMatch(r2.stdout, /票集边界/);
+});
+
+test('票集边界：旗标形态纯函数档——parseFlags 对 tickets 的接受 / 归一 / 拒绝三档', (t) => {
+  const { parseFlags } = require('./ledger-schema.js');
+  const ok = parseFlags(['--tickets', '02, 01,1'], 'init');
+  assert.ok(
+    ok.errors.every((e) => /缺少必选参数/.test(e)),
+    `tickets 本身不产生错误（其余为缺必选参数档）：${ok.errors.join('; ')}`
+  );
+  assert.equal(ok.payload.tickets, '01,02', '归一 + 去重 + 数值排序的规范逗号串');
+  const rejected = parseFlags(['--tickets', '01,x'], 'init');
+  assert.ok(
+    rejected.errors.some((e) => /票号列表/.test(e)),
+    `非法形态被拒：${rejected.errors.join('; ')}`
+  );
+  // 旗标不属于其他事件类型：dispatch 上给 --tickets 照样被拒
+  const stray = parseFlags(['--ticket', '01', '--key', 'k', '--run-id', 'aaaaaaaa', '--tickets', '01'], 'dispatch');
+  assert.equal(stray.errors.length, 1);
+  assert.match(stray.errors[0], /不属于事件 dispatch/);
 });

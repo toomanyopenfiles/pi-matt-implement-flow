@@ -20,8 +20,9 @@
 //     ticketsWarning: 'string|null',                                   // 枚举不可用的原因
 //   }
 
-// schema 是纯模块（不碰 IO）：refSeq 的数值形态共用它的单一转换点，避免 core 里再写一份
-const { refSeqNumber } = require('./ledger-schema');
+// schema 是纯模块（不碰 IO）：refSeq 的数值形态与票号清单旗标的集合形态共用它的单一转换点，
+// 避免 core 里再写一份
+const { refSeqNumber, ticketSetList } = require('./ledger-schema');
 
 const TICKET_BRANCH = (num) => `ticket-${num}`;
 const short = (sha) => (sha ? String(sha).slice(0, 7) : 'unknown');
@@ -84,6 +85,13 @@ function flowShape(events) {
     maxFixRounds: p.maxFixRounds === undefined ? 2 : Number(p.maxFixRounds),
     maxConcurrent: p.maxConcurrent === undefined ? 3 : Number(p.maxConcurrent),
   };
+}
+
+// 本 run 冻结的票集边界（init 票号清单，票 04）。展开经 schema 的单一转换点（兼容手改
+// 事件流后的未归一形态）；init 无旗标 → null = 无冻结边界（旧形态，不执法）。
+function frozenTicketSet(events) {
+  const p = events.find((e) => e.type === 'init')?.payload ?? {};
+  return p.tickets === undefined ? null : ticketSetList(p.tickets);
 }
 
 // 最新终审裁决（run 级事实）：多轮终审一律以最新为准，头部 final: 行与封账门共用同一判定
@@ -155,6 +163,17 @@ function gateAdd({ events, type, payload, truth }) {
   const t = num ? (idx.get(num) ?? emptyIdx()) : null;
   const lastVerdict = t ? t.verdicts.at(-1) : null;
   const fixCount = t ? t.fixes.length : 0;
+
+  // 票集边界（票 04）：init 冻结了票号清单后，边界外的票号一律拒绝——中途偷加票在此执法。
+  // 边界于 init 冻结后不可变；确需扩票集时停下向用户上报（无绕过旗标）。
+  const frozenTickets = frozenTicketSet(events);
+  if (num && frozenTickets && !frozenTickets.includes(num)) {
+    reasons.push(
+      `票 ${num} 不在本 run 的票集边界内（init 冻结的票号清单：${frozenTickets.join(',')}）——` +
+        '票集边界于 init 冻结，中途加票被拒；确需扩票集时停下向用户上报'
+    );
+    return { ok: false, reasons, warnings };
+  }
 
   switch (type) {
     case 'dispatch': {
@@ -421,6 +440,25 @@ function reconcile({ events, truth }) {
     }
   }
 
+  // 7) 票集边界（票 04）：init 冻结了票号清单后，事件流与票枚举里出现的边界外票都是
+  // 中途偷加票。写点已执法（gateAdd），此处兼住手改事件流与 tracker 侧新增；
+  // 无冻结边界的旧账零行为变化。票文件项仅在枚举可用时判（同点 2 的口径）。
+  const frozen = frozenTicketSet(events);
+  if (frozen) {
+    for (const num of idx.keys()) {
+      if (!frozen.includes(num)) {
+        diffs.push(`票 ${num} 在事件流中出现，但不在 init 冻结的票集边界内（${frozen.join(',')}）——中途加票？`);
+      }
+    }
+    if (trackerOk) {
+      for (const [num, file] of files) {
+        if (!frozen.includes(num)) {
+          diffs.push(`票文件 ${file.file}（票 ${num}）在 init 冻结的票集边界外（${frozen.join(',')}）——中途偷加票`);
+        }
+      }
+    }
+  }
+
   return { diffs, warnings };
 }
 
@@ -555,6 +593,9 @@ function renderHeader({ events, truth }) {
   lines.push(`spec: ${p.spec}`);
   lines.push(`testCommand: \`${p.testCommand}\``);
   lines.push(`tracker: ${p.tracker}`);
+  // 票集边界（票 04）：init 冻结的票号清单（可选旗标）——与 flow: 同为 init 快照形态，
+  // 冻结边界如实展示（无旗标的旧账自然无此行）。
+  if (p.tickets !== undefined) lines.push(`tickets: ${p.tickets}`);
   const flow = flowShape(events);
   lines.push(
     `flow: reviewer=${flow.reviewer ? 'on' : 'off'}, maxFixRounds=${flow.maxFixRounds}, maxConcurrent=${flow.maxConcurrent}`
@@ -588,6 +629,7 @@ function renderEvent(e) {
         `testCommand=\`${p.testCommand}\``,
         `tracker=${p.tracker}`
       );
+      if (p.tickets !== undefined) parts.push(`tickets=${p.tickets}`);
       if (p.reviewer !== undefined) parts.push(`reviewer=${p.reviewer}`);
       if (p.maxFixRounds !== undefined) parts.push(`maxFixRounds=${p.maxFixRounds}`);
       if (p.maxConcurrent !== undefined) parts.push(`maxConcurrent=${p.maxConcurrent}`);
@@ -684,6 +726,7 @@ module.exports = {
   countTickets,
   finalEvidenceWarnings,
   flowShape,
+  frozenTicketSet,
   gateAdd,
   indexByTicket,
   latestFinal,

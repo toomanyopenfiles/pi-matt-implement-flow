@@ -31,9 +31,11 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
 
 事件类型与参数集 (add):
   init        --branch --branch-base --baseline-sha --spec --test-command --tracker(local|github|gitlab)
-              [--reviewer on|off] [--max-fix-rounds N] [--max-concurrent N]
+              [--reviewer on|off] [--max-fix-rounds N] [--max-concurrent N] [--tickets 01,02,1042]
               # 流程形态快照（flow shape）：本 run 是否逐票评审 / 每票修复预算 / 并发 coder 数；
               # 省略 = 默认形态 on / 2 / 3。快照冻结后，verdict/fix/merge 校验均按它执行。
+              # --tickets（票集边界，票 04）：本 run 的票号清单（票集解析三层兜底的兜底层）；
+              # init 时冻结——此后边界外的票号记账被拒（中途偷加票被拒）。省略 = 无冻结边界。
   dispatch    --ticket --key --run-id [--worktree] [--note]
   settled     --ticket --round --head-sha [--worktree] [--gate] [--note]
   verdict     --ticket --round --verdict(approved|changes_requested) [--findings] [--rev-run-id] [--note]

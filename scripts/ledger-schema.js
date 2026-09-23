@@ -31,6 +31,7 @@ const FLAG_TO_KEY = {
   spec: 'spec',
   'test-command': 'testCommand',
   tracker: 'tracker',
+  tickets: 'tickets',
   reviewer: 'reviewer',
   'max-fix-rounds': 'maxFixRounds',
   'max-concurrent': 'maxConcurrent',
@@ -59,7 +60,9 @@ const EVENT_TYPES = {
     required: ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand', 'tracker'],
     // 可选流程形态快照：reviewer=on|off、maxFixRounds、maxConcurrent。
     // 省略 = 默认形态（on / 2 / 3）——旧账本自然兼容。
-    optional: ['reviewer', 'maxFixRounds', 'maxConcurrent'],
+    // 可选票集边界（票 04）：init 票号清单——三层兜底的兜底层，init 时冻结 run 的票集边界
+    // （此后边界外的票号记账被拒，中途偷加票被拒）。省略 = 无冻结边界（旧形态零变化）。
+    optional: ['reviewer', 'maxFixRounds', 'maxConcurrent', 'tickets'],
   },
   dispatch: { required: ['ticket', 'key', 'runId'], optional: ['worktree', 'note'] },
   settled: { required: ['ticket', 'round', 'headSha'], optional: ['worktree', 'gate', 'note'] },
@@ -88,6 +91,21 @@ const EVENT_TYPES = {
 function normalizeTicket(v) {
   if (!/^\d{1,6}$/.test(String(v))) return null;
   return String(Number(v)).padStart(2, '0');
+}
+
+// 票号清单旗标（票集边界，票 04）的单一转换点：逗号分隔的票号列表 → 归一化、去重、
+// 数值排序后的规范数组。任一 token 非法（非数字 / 小数 / 负数 / 超 6 位 / 空段）或整体
+// 为空时返回 null——调用方按「旗标不可用」处理。写入（parseFlags 的形态档）与读取
+//（gateAdd 冻结执法、reconcile 边界对账）共用本函数，两侧得到同一集合。
+function ticketSetList(value) {
+  if (value == null || !String(value).trim()) return null;
+  const seen = new Set();
+  for (const tok of String(value).split(',')) {
+    const n = normalizeTicket(tok.trim());
+    if (!n) return null;
+    seen.add(n);
+  }
+  return [...seen].sort((a, b) => Number(a) - Number(b));
 }
 
 // refSeq（anomaly 的补正链指针，票 03）的数值形态：旗标值按原文入账（字符串，与 round 同惯例），
@@ -160,6 +178,18 @@ function parseFlags(tokens, typeName) {
       errors.push(`${key} 必须是正整数（>=1），得到：${payload[key]}`);
     }
   }
+  // 票号清单旗标（票 04）：形态档——逗号分隔的票号列表；非法形态 / 空集合拒绝。
+  // 规范形态（归一 + 去重 + 数值排序的逗号串）经 ticketSetList 写入，读取侧同用它展开。
+  if ('tickets' in payload) {
+    const list = ticketSetList(payload.tickets);
+    if (!list) {
+      errors.push(
+        `tickets 必须是逗号分隔的票号列表（如 01,02,1042），得到：${payload.tickets}`
+      );
+    } else {
+      payload.tickets = list.join(',');
+    }
+  }
   for (const key of ['headSha', 'mergeSha', 'baselineSha']) {
     if (key in payload && !/^[0-9a-f]{7,40}$/i.test(String(payload[key]))) {
       errors.push(`${key} 必须是 git SHA（7-40 位十六进制），得到：${payload[key]}`);
@@ -188,6 +218,7 @@ module.exports = {
   KEY_TO_FLAG,
   normalizeTicket,
   refSeqNumber,
+  ticketSetList,
   parseFlags,
   makeEnvelope,
 };
