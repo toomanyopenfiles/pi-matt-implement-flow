@@ -80,9 +80,13 @@ const EVENT_TYPES = {
   close: { required: [], optional: ['note'] },
 };
 
-// 票号归一：'1' → '01'（与票文件名、merge 令牌 ticket-NN 对齐）
+// 票号归一（单一转换点，ADR-0004）：票号一律采用 tracker 原生编号——local 是 feature 局部
+// 两位序号（'1' → '01'，与票文件名、merge 令牌 ticket-01 对齐），github 是 issue number，
+// 可达四位以上。1–9 号补零显示为 '01'–'09'；写入（parseFlags、Blocked by 行）与核验
+// （merge 令牌提取）共用本函数，两侧得到同一表示。位数上限放宽到 6 位：覆盖现实的
+// issue number 量级，再长按非法形态拒绝（也防超长数字串在 Number() 下失真）。
 function normalizeTicket(v) {
-  if (!/^\d{1,3}$/.test(String(v))) return null;
+  if (!/^\d{1,6}$/.test(String(v))) return null;
   return String(Number(v)).padStart(2, '0');
 }
 
@@ -148,7 +152,7 @@ function parseFlags(tokens, typeName) {
   }
   if ('ticket' in payload) {
     const n = normalizeTicket(payload.ticket);
-    if (!n) errors.push(`ticket 必须是票号数字（如 01），得到：${payload.ticket}`);
+    if (!n) errors.push(`ticket 必须是票号数字（如 01 或 1042），得到：${payload.ticket}`);
     else payload.ticket = n;
   }
   for (const key of ['round', 'fixNo', 'maxFixRounds', 'maxConcurrent', 'refSeq']) {

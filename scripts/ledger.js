@@ -156,7 +156,9 @@ function collectTruth({ runtimeDir, events }) {
     ticketsWarning: null,
   };
 
-  // 未入账合并扫描：依赖硬规则「merge 提交信息必须含 ticket-NN 令牌」；无 init 基线 → null（降级）
+  // 未入账合并扫描：依赖硬规则「merge 提交信息必须含 ticket-NN 令牌」（NN 位数不限，ADR-0004：
+  // tracker 原生编号）；提取后经 normalizeTicket 归一，与事件侧票号同过单一转换点。
+  // 无 init 基线 → null（降级）
   const init = events.find((e) => e.type === 'init');
   if (init?.payload?.baselineSha && head) {
     const out = git(['log', `${init.payload.baselineSha}..HEAD`, '--merges', '--format=%H%x09%s']) ?? '';
@@ -235,6 +237,9 @@ function collectTruth({ runtimeDir, events }) {
       const parsed = parseTicketFile(fs.readFileSync(path.join(issuesDir, name), 'utf8'));
       truth.tickets.push({ num, file: name, ...parsed });
     }
+    // 票号数值排序（ADR-0004）：混位数下文件名字典序会乱（'1042-…' 排在 '02-…' 前面），
+    // 真相层枚举统一按数值序供给下游（票表、对账差异、封账阻塞清单）。
+    truth.tickets.sort((a, b) => Number(a.num) - Number(b.num));
   };
 
   if (!init) {

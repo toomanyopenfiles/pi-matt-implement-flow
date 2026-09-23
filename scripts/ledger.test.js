@@ -1429,3 +1429,117 @@ test('旧账兼容：v=2 信封（含 final 事件、无 refSeq）的完整旧�
   );
   assert.doesNotMatch(build.stdout, /↩/, '旧账不得凭空长出补正链指针');
 });
+
+// ====================================================================
+// 票号空间：tracker 原生编号（ADR-0004，ticket 01）
+// 归一化唯一转换点（normalizeTicket）：写入（--ticket / Blocked by 行）与核验（merge 令牌
+// 提取）共用；四位以上 issue number 正常入账，1–9 号补零显示为 01–09，混位数按数值排序。
+// ====================================================================
+
+test('票号空间：四位以上的 tracker 原生票号正常归一化入账（payload 存归一形态）', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '1042', '大号票');
+  initRun(f);
+  const r = addAll(f, 'dispatch', { ticket: '1042', key: 't-1042', 'run-id': 'aaaaaaaa' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.equal(readEvents(f).at(-1).payload.ticket, '1042', '写入侧：1042 经单一转换点入账为 1042');
+  assert.match(r.stdout, /ticket=1042/);
+});
+
+test('票号空间：仍拒绝非数字与非法形态（非数字 / 小数 / 负数 / 超位数上限），拒绝不入账', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  for (const bad of ['abc', '1.5', '-1', '1234567']) {
+    const r = addAll(f, 'dispatch', { ticket: bad, key: 't-bad', 'run-id': 'aaaaaaaa' });
+    assert.equal(r.status, 1, `非法票号 ${bad} 必须被拒`);
+    assert.match(r.stdout, /票号数字/);
+  }
+  assert.equal(readEvents(f).length, 1, '只有 init 一条——被拒载荷全部不入账');
+});
+
+test('票号空间：1–9 号补零为 07 形态，读写同过一个转换点自洽（令牌 7 核验归一为票 07）', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '7', '单号票');
+  initRun(f);
+  const r = addAll(f, 'dispatch', { ticket: '7', key: 't-7', 'run-id': 'aaaaaaaa' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.equal(readEvents(f).at(-1).payload.ticket, '07', '写入侧：--ticket 7 归一为 07');
+  // 核验侧同一转换点：git 历史里未补零的 ticket-7 令牌经归一化后与账上的 07 对上
+  mergeTicket(f, '7'); // 故意不记 merge 事件 → 对账必须报这条未入账合并
+  const r2 = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r2.status, 1);
+  assert.match(r2.stdout, /git 有票 07 的合并提交/, '令牌 7 与事件 ticket=07 同经归一化对上');
+  const md = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(md.status, 0, md.stdout);
+  assert.match(md.stdout, /\| 07 \| 单号票 \|/, '补零显示：表格行 ticket 列为 07');
+});
+
+test('票号空间：票表与前沿按数值排序——混位数（01 / 02 / 205 / 1042）顺序正确、Blocked by 多位号原样显示', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '1042', '大号票', { blockedBy: '205' });
+  writeTicketFile(f.dir, '205', '中号票', { blockedBy: '02' });
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '1042', key: 'k1', 'run-id': 'aaaaaaaa' });
+  addAll(f, 'dispatch', { ticket: '02', key: 'k2', 'run-id': 'bbbbbbbb' });
+  addAll(f, 'dispatch', { ticket: '205', key: 'k3', 'run-id': 'cccccccc' });
+  const r = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 0, r.stdout);
+  const rows = r.stdout
+    .split('\n')
+    .filter((l) => /^\| \d+ \|/.test(l))
+    .map((l) => /^\| (\d+) \|/.exec(l)[1]);
+  assert.deepEqual(rows, ['01', '02', '205', '1042'], '数值序——字典序会把 1042 排在 02 与 205 之间');
+  assert.match(r.stdout, /\| 1042 \| 大号票 \| claimed \| 205 \|/, 'blockedBy 的多位号引用原样显示');
+});
+
+test('票号空间：多位号 merge 全生命周期——令牌核验通过、check 扫描同归一（账实一致）', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '1042', '大号票');
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '1042', key: 'k1', 'run-id': 'aaaaaaaa' });
+  f.git('checkout -q -b ticket-1042');
+  const head = step(f, 'work 1042');
+  f.git('checkout -q feat/demo');
+  f.git('merge --no-ff -q -m "Merge ticket-1042: 大号票" ticket-1042');
+  const merge = f.git('rev-parse HEAD');
+  addAll(f, 'settled', { ticket: '1042', round: '1', 'head-sha': head });
+  addAll(f, 'verdict', { ticket: '1042', round: '1', verdict: 'approved' });
+  const ok = addAll(f, 'merge', { ticket: '1042', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(ok.status, 0, ok.stdout);
+  // 按协议收尾（关票 + 删分支）后：check 对 ticket-1042 令牌扫描归一为票 1042，账实一致
+  writeTicketFile(f.dir, '1042', '大号票', { status: 'resolved' });
+  f.git('branch -D ticket-1042');
+  const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 0, r.stdout);
+});
+
+test('票号空间：merge 门对多位号照旧执法——信息令牌缺失（ticket-104 ≠ 票 1042）→ 矛盾拒绝', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '1042', '大号票');
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '1042', key: 'k1', 'run-id': 'aaaaaaaa' });
+  f.git('checkout -q -b ticket-1042');
+  const head = step(f, 'work 1042');
+  f.git('checkout -q feat/demo');
+  f.git('merge --no-ff -q -m "Merge ticket-104: 少一位" ticket-1042');
+  const merge = f.git('rev-parse HEAD');
+  addAll(f, 'settled', { ticket: '1042', round: '1', 'head-sha': head });
+  addAll(f, 'verdict', { ticket: '1042', round: '1', verdict: 'approved' });
+  const bad = addAll(f, 'merge', { ticket: '1042', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stdout, /ticket-1042 令牌/);
+  assert.equal(readEvents(f).filter((e) => e.type === 'merge').length, 0);
+});
+
+test('票号空间：未入账合并扫描对多位号提取正确（ticket-205 历史提交 → 差异点名票 205）', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '205', '中号票');
+  initRun(f);
+  f.git('checkout -q -b ticket-205');
+  step(f, 'work 205');
+  f.git('checkout -q feat/demo');
+  f.git('merge --no-ff -q -m "Merge ticket-205: 中号票" ticket-205');
+  const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /git 有票 205 的合并提交/, '四位以下的多位号同样被扫描提取并点名');
+});
