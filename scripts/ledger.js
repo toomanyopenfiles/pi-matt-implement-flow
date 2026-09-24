@@ -3,7 +3,7 @@
 
 // ledger CLI — 机械台账的子命令（唯一写面）。
 // 分层：薄 IO 壳（git/gh/票文件读取 + 原子写）+ 纯判定核心（ledger-schema / ledger-core /
-// snapshot-core / sync-read-core / sync-planning-core）。
+// tracker-set-core / snapshot-core / sync-read-core / sync-planning-core）。
 //
 //   add <type>   校验 → 盖时间戳/序号/HEAD 锚点 → append 事件流 → 自动再生台账
 //   build        由事件流 + 真相层全量再生台账（全文打到 stdout，供 compaction 恢复读取）
@@ -78,7 +78,7 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
               # spec.md 的 Comments 节里 closing: <交付指引>（票 07 对齐措辞）。
               # gh 收发为 best-effort 薄 IO：先拉状态再规划、规划通过后才写入——
               # 拉取失败即整体中止（无半成品推送）；部分失败逐动作报告已完成/未完成，
-              # 重跑安全（幂等规划只补未完成的动作）。同步成功后输出传输件清理指引。
+              # 重跑安全（幂等规划只补未完成的动作）。同步成功后输出清理指引。
               # run 已封账或 PR 已标 ready 时拒绝执行（同步须在两时点之前）。
 
 说明:
@@ -621,6 +621,11 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
       const args = ['issue', 'list', '--state', 'all', '--limit', '1000', '--json', 'number,title,body,state,labels,url'];
       if (repo) args.push('-R', repo);
       issues = JSON.parse(runGh(args) || '[]') ?? [];
+      // 单拉无分页（真分页 defer 到 hardening 票）：行数恰达上限即如实警告——已达上限，
+      // 拉取可能不全；不在拉取处硬拒，缺口由票集解析的缺票诊断点名后重跑。
+      if (issues.length >= 1000) {
+        warnings.push('gh issue list 拉取行数恰达 --limit 1000 上限——已达上限，拉取可能不全；票集若缺票，核对 tracker 状态后重跑');
+      }
     } catch (e) {
       out(
         `✗ 快照初始化失败：gh issue list 拉取失败——${ghDetail(e)}`,
@@ -705,8 +710,9 @@ function executeSyncAction(action, repo) {
   }
 }
 
-// 同步成功后的传输件清理指引（ADR-0003：快照是传输件，用后即弃；findings 留存因事件流
-// 引用其路径；账本三件套长存）。只指引不代删——清理动作属编排流程（票 07 的清理清单）。
+// 同步成功后的清理指引（CONTEXT.md 运行时三分：tracker 快照是第三类而非传输件，同步成功
+// 后清理；review bundle 用后即弃；findings 留存因事件流引用其路径；账本三件套长存）。
+// 只指引不代删——清理动作属编排流程（票 07 的清理清单）。
 function syncCleanupLines(mode, runtimeDir) {
   const display = (p) => {
     const rel = path.relative(process.cwd(), p);
@@ -714,7 +720,7 @@ function syncCleanupLines(mode, runtimeDir) {
   };
   const runtime = display(runtimeDir);
   return [
-    '传输件清理指引（同步成功后执行；快照与 bundle 用后即弃，账本三件套长存）：',
+    '清理指引（同步成功后执行；tracker 快照是第三类而非传输件，与用后即弃的 review bundle 同步成功后清理；findings 与账本三件套长存）：',
     `  - 清理 tracker 快照：rm -rf ${runtime}/tracker`,
     `  - 清理 review bundle：${runtime}/reviews/（若存在）`,
     `  - 留存 findings：${runtime}/findings/（事件流引用其路径，不可删）`,

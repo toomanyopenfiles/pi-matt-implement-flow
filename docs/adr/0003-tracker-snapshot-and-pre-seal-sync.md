@@ -35,8 +35,9 @@ review 现拉快照、init 全量拉取三条路；写侧有逐票实时同步�
    （同步），幂等可重入（已关→补评论；未关→close+评论）。
 4. **同步发生在封账之前**，且在 `pr --state ready` 之前——既避开封账拒写的硬伤，
    又消解 PR closing keywords 抢先关票的竞态（同步时票已关，keywords 全部 no-op）。
-5. **传输件用后即弃**：tracker 快照在同步成功后清理（先同步后删），review bundle
-   随之清理；findings 留存（事件流引用其路径）；账本三件套长存。
+5. **运行时文件三分、清理各归其类**：tracker 快照是第三类而非传输件，同步成功后
+   清理（先同步后删）；review bundle 用后即弃，随之清理；findings 留存（事件流引用
+   其路径）；账本三件套长存。
 
 ## Considered Options
 

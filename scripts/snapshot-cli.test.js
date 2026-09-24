@@ -230,6 +230,33 @@ test('--tickets 笔误/越界票号 → 如实诊断（用户输入/拉取不全
   assert.equal(fs.existsSync(f.tracker), false, '无半成品快照');
 });
 
+test('--limit 1000 cap-hit：拉取行数恰达上限 → 警告已达上限、拉取可能不全（快照照常落盘，真分页 defer 到 hardening 票）', (t) => {
+  const f = makeFixture(t);
+  // 拉取集合凑满 1000 行：真实边界（spec + sub-issues 两票）不动，余下全是边界外填料
+  const base = JSON.parse(ISSUES);
+  const filler = Array.from({ length: 1000 - base.length }, (_, i) => ({
+    number: 2000 + i,
+    title: `填料票 ${i}`,
+    body: '别的 spec 的票，不在本 run 票集',
+    state: 'OPEN',
+    labels: [],
+    url: `https://github.com/o/r/issues/${2000 + i}`,
+  }));
+  writeStubData(f, { issues: JSON.stringify([...base, ...filler]) });
+  const r = snapshot(f, ['--runtime-dir', f.runtime, '--spec', '#1042'], withGh(f));
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /已达上限/);
+  assert.match(r.stdout, /拉取可能不全/);
+  assert.equal(lsIssues(f).length, 2, '警告不改布局：快照仍只落票集边界内的票');
+
+  // 未达上限的普通拉取不得误报同一警告（避免半边警告变噪音）
+  const f2 = makeFixture(t);
+  writeStubData(f2);
+  const ok = snapshot(f2, ['--runtime-dir', f2.runtime, '--spec', '#1042'], withGh(f2));
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.doesNotMatch(ok.stdout, /已达上限/);
+});
+
 // ====================================================================
 // native 依赖边：dependencies/blocked_by 拉取 → issue.blockedBy 注入（integration-05 缺陷 1）
 // ====================================================================
