@@ -33,8 +33,9 @@ Check all of these before dispatching; on a failure, stop and tell the user what
 - **Clean tree**: `git status --porcelain` must be empty (pi rejects worktree dispatch on a dirty tree — untracked files count). If it is dirty, classify first: tracker/ledger runtime files → fix the ignore rules (below); your own pending status writes → commit them as `chore(tickets): ...`; anything else → stop and ask. Never stash on your own.
 - **Ignore rules for runtime state**: ensure `.gitignore` covers `.pi/matt-implement/` (append a marked block if missing; mention it once to the user). If the tracker is local markdown and `.scratch/` is not ignored, plan to commit ticket-status writes separately (see the loop).
 - **Git repo with at least one commit** (worktrees cannot be created from an unborn HEAD).
-- **Tracker**: read `docs/agents/issue-tracker.md` and follow it. If it is missing, fall back to local markdown under `.scratch/<feature-slug>/issues/`; if no ticket directory exists either, stop and ask the user where the tickets are.
-- **Spec**: locate it (tracker doc convention, or the user's argument). Every review needs it.
+- **Tracker**: read `docs/agents/issue-tracker.md` and follow it. If it is missing, fall back to local markdown under `.scratch/<feature-slug>/issues/`; if no ticket directory exists either, stop and ask the user where the tickets are. The tracker form (`--tracker local|github`) decides the two GitHub-only steps below — the Round-0 snapshot pull and the pre-seal sync; local markdown runs have neither (zero change).
+- **Spec 引用 (spec reference)**: the identifier that locates this run's spec (tracker doc convention, or the user's argument) — local markdown: the spec file path; GitHub: the spec issue's number or URL (`42` / `#42` / `owner/repo#42` / an issue URL). Every review needs it; the `init` event pins the local spec file it resolves to.
+- **占坑 (claim the spec，tracker=github)** — the run's first write action, before any pull: assign the spec issue to yourself (`gh issue edit <spec-ref> --add-assignee @me`) so the tracker shows the feature as in-flight. If the spec issue is already claimed by someone else, stop and ask before any further write — change target, take over, or coordinate. The claim is released at the end: the pre-seal sync closes the spec issue, or the abandon sync (`sync --mode abandon`) unassigns it. Local markdown runs have no claim step (zero change).
 - **Test command**: determine the project's full-suite command (`package.json` `scripts.test`, Makefile, …). If ambiguous, ask once and pass it to the `init` event.
 - **Graph**: every ticket has a `Blocked by` line (or native blocking links) and the initial frontier is non-empty. An empty frontier with open tickets means a cycle — stop and report.
 
@@ -66,7 +67,7 @@ Your memory has three layers, each with exactly one owner. Terms (per `CONTEXT.m
 Three command disciplines:
 
 1. **Record on every state transition**: dispatch, settle, verdict, fix dispatch, merge, escalation, the final review's verdict (终审裁决 — one run-level `final` event per round), PR transitions; `close` (封账) seals the run — the ledger flips to `state: complete` and every further record is rejected.
-2. **Reconcile (对账) before every dispatch and every merge**: `node <this-package>/scripts/ledger.js check --runtime-dir ...` — non-zero exit means ledger-truth drift, listed item by item. Fix the world to match truth or truth to match the world; never the ledger by hand.
+2. **Reconcile (对账) before every dispatch and every merge**: `node <this-package>/scripts/ledger.js check --runtime-dir ...` — non-zero exit means ledger-truth drift, listed item by item. Fix the world to match truth or truth to match the world; never the ledger by hand. With tracker=github, the ticket files this reads are the tracker snapshot's copies — the tracker body is a delayed mirror outside the truth layer; fix `Status:` on the snapshot, never on GitHub.
 3. **Regenerate after compaction**: `node <this-package>/scripts/ledger.js build --runtime-dir ...` prints the full four-section ledger; continue from its output plus the orchestration notes, never from memory.
 
 Review bundles go to `.pi/matt-implement/<feature-slug>/reviews/<NN>-r<k>.diff`, findings to `.../findings/<NN>-r<k>.md` — pass the findings path to the `verdict` event via `--findings`.
@@ -75,9 +76,21 @@ Review bundles go to `.pi/matt-implement/<feature-slug>/reviews/<NN>-r<k>.diff`,
 
 Restate the plan to the user in at most ten lines (branch, ticket count, first frontier, N), then proceed without waiting.
 
+### Cold resume (续跑) — the same command, an unfinished run
+
+Before Round 0, check whether this run already exists: if `.pi/matt-implement/<slug>/events.jsonl` exists and the ledger header reads `state: running` (not sealed), the same command is a **continuation (续跑)**, not a new run — skip ahead and keep going:
+
+1. **Skip init and the pull — both.** Never re-record `init` (the script rejects a second one), and never re-run `snapshot-init`: an existing snapshot is refused, never overwritten or re-pulled — a re-pull would let the tracker's lagging state overwrite the local truth (ADR-0003). The refusal is the continuation guard, not an error to work around.
+2. **Rebuild, then reconcile**: `node <this-package>/scripts/ledger.js build --runtime-dir .pi/matt-implement/<slug>` (台账再生) followed by `check` (对账); read their output — the regenerated ledger carries the full state and any ledger-truth drift item by item — then read the orchestration notes.
+3. **Continue from the frontier** the ledger reports: remaining tickets, the fix loop, merges, and the final gate all pick up where the event stream left off.
+
+(续跑 is a run-level action. A subagent's retained-context resume inside the loop is a platform mechanism — the glossary keeps the two apart.)
+
 ### Round 0 — graph, branch, baseline
 
-1. Read the spec and every ticket, resolve the flow configuration (above), then record `init`（记账）— `--branch --branch-base --baseline-sha --spec --test-command --tracker [--reviewer on|off --max-fix-rounds N --max-concurrent N]` — as the ledger's first event. The flow flags freeze this run's shape; everything downstream is derived from it; the baseline the init pins is what later failures are attributable against.
+1. Read the spec and every ticket, resolve the flow configuration (above), then record `init`（记账）— `--branch --branch-base --baseline-sha --spec --test-command --tracker [--reviewer on|off --max-fix-rounds N --max-concurrent N]` — as the ledger's first event. The flow flags freeze this run's shape; everything downstream is derived from it; the baseline the init pins is what later failures are attributable against. `--spec` is the spec file the run actually reads:
+   - **tracker=github** — pull first, read after: `node <this-package>/scripts/ledger.js snapshot-init --runtime-dir .pi/matt-implement/<slug> --spec <spec 引用>`（issue 号 / `#号` / `owner/repo#号` / issue URL；add `--tickets 01,02,1042` only when the ticket-set resolution needs the fallback list）materializes the whole tracker into the **tracker snapshot** under `.pi/matt-implement/<slug>/tracker/` — the spec with a `Source:` line for its tracker origin, one local-shaped file per ticket. The snapshot is the pending-push truth; the tracker body is its delayed mirror, not written to mid-run. From here on the orchestrator, the coder briefs, the ledger, and both reviewers read and write those local paths with zero form fork, and `init`'s `--spec` is the snapshot's `spec.md`. A refusal because a snapshot already exists is the continuation guard — the run already started; go to Cold resume (above).
+   - **local markdown** — nothing to pull: the spec and tickets under `.scratch/<slug>/` are already the local files every brief has always pointed at (zero change).
 2. **Environment survey**: read `.gitignore` and enumerate every runtime path a coder worktree will not contain (`.scratch/`, `.pi/`, `data/`, …). Write the survey into a **环境事实 (environment facts)** section of the orchestration notes with exactly three elements: the gitignored path list, where real data actually lives, and the validation discipline (validate against real data through the scratch directory). Every coder brief's Worktree-reality parenthetical and its data paths are picked per ticket from this section — filtering is your job; coordination prose (routing decisions, user rulings, process narrative) never enters a brief, and coders never read the notes file whole. The survey is prose: it lands only in the orchestration notes, never in the event stream (no new event type).
 3. On the default branch, create `feat/<feature-slug>` from HEAD; on any other branch, stay on it and record it.
 4. Run the full test suite once; record the baseline (green or the failing list) in the orchestration notes.
@@ -87,7 +100,7 @@ Optionally, when a survey finding is a durable repo-level lesson (e.g. a CLI syn
 
 ### Each round — dispatch the frontier
 
-Count running coders; while below N and the frontier is non-empty, claim the next tickets (per the tracker doc: write `Status: claimed` locally, or add-assignee on GitHub) and dispatch one wave — **exactly one** top-level subagent workflow call with `async: true`:
+Count running coders; while below N and the frontier is non-empty, claim the next tickets（认领）— write `Status: claimed` on the ticket's local file (the tracker snapshot's copy when tracker=github, the ticket file itself for local markdown; never a GitHub write — tracker-side progress happens only at the pre-seal sync) — and dispatch one wave — **exactly one** top-level subagent workflow call with `async: true`:
 
 ```js
 const results = await runs.all([
@@ -168,7 +181,7 @@ const results = await runs.all([
 On a verdict, record it: `verdict`（记账：`--ticket --round --verdict --findings <path> --rev-run-id`）— reviewer dispatches are not recorded as separate events; `--rev-run-id` carries them. Judged from git truth plus the structured verdict:
 
 - **approved** → merge (below).
-- **changes_requested** → fix loop (below); if the script rejects the fix because two rounds are already dispatched, record **`escalate`** and a tracker comment instead, leave the ticket claimed, continue the frontier, and tell the user at the end.
+- **changes_requested** → fix loop (below); if the script rejects the fix because two rounds are already dispatched, record **`escalate`** and write the escalation into the ticket's `## Comments` instead — `escalate: <原因>` on the tracker snapshot's copy for tracker=github (the pre-seal sync posts it and the issue stays open), a tracker-doc comment on the ticket file for local markdown. Leave the ticket claimed, continue the frontier, and tell the user at the end.
 
 ### Fix loop — send it back to the same coder (reviewer=on runs only)
 
@@ -193,7 +206,7 @@ Serially, in the main checkout on the feature branch — merges never run in par
 
 1. `git merge --no-ff -m "Merge ticket-<NN>: <title>" ticket-<NN>` — the message **must** contain the `ticket-<NN>` token (hard rule below; the ledger script cross-checks merges by it). On a conflict, follow the `resolving-merge-conflicts` skill.
 2. Run the full suite. Red means an integration problem no ticket-level review could see: save the failing output to `findings/integration-<NN>.md` and dispatch **one** coder **without isolation** (omit `worktree`) on the feature branch. Only one such fixer at a time.
-3. Record `merge`（记账：`--ticket --head-sha --merge-sha`）— the script verifies the merge commit exists, sits on the feature branch, and carries the token. Then close the ticket per the tracker doc, with the merge commit SHA in the closing comment.
+3. Record `merge`（记账：`--ticket --head-sha --merge-sha`）— the script verifies the merge commit exists, sits on the feature branch, and carries the token. Then close the ticket by writing the tracker's local file: `Status: resolved` with the merge commit SHA in the closing comment — for tracker=github that file is the snapshot copy (append `merge SHA: <merge-sha>` under `## Comments`; the pre-seal sync turns it into the closing comment), for local markdown the ticket file itself per the tracker doc.
 4. Recommit or ignore any tracker dirt (see Preconditions), then remove the reviewer worktree if one exists (`reviewer=off` runs have none) and `git branch -D ticket-<NN>`; after the ticket is closed the coder's retained worktree goes too (its resume value is spent).
 
 Recompute the frontier. While tickets remain: top the dispatch back up to N. Done when every ticket is closed or escalated.
@@ -202,10 +215,12 @@ Recompute the frontier. While tickets remain: top the dispatch back up to N. Don
 
 1. Write the whole-branch bundle `git diff <feature-base>...HEAD` and dispatch `pi-matt-implement-flow.final-reviewer` with `worktree: true, baseRef: "refs/heads/feat/<slug>", acceptance: false` and a verdict schema of `ready | ready_with_fixes | not_ready`.
 2. **Record the verdict**（记账 `final`）: write the findings to `.pi/matt-implement/<feature-slug>/findings/final-r<k>.md` (`<k>` = final-review round), then record — `node <this-package>/scripts/ledger.js add final --runtime-dir .pi/matt-implement/<feature-slug> --final-verdict <ready|ready_with_fixes|not_ready> --run-id <runId> [--findings .pi/matt-implement/<feature-slug>/findings/final-r<k>.md]`. It is a run-level event (no `--ticket`); the final-reviewer's dispatch is not recorded separately — `--run-id` carries it, the same shape as a ticket reviewer's `--rev-run-id`. Every round of final review is one `final` event, and the **latest** verdict is the branch's readiness — never an earlier round's.
-3. **With fixes**: one coder without isolation fixes every finding, commit; re-run the final review only if the changes are substantial — a re-run is a new round, so it gets its own `final` event. **Not ready**: escalate to the user with the review pointers. If the user calls the run off, record `close` (封账) as usual — the seal gate (封账门) lets a user's give-up through at warning level, and its enforcement belongs to the script, not to this file.
-4. Push. Mark the PR ready for review, or report the branch name when there is no remote; record `pr --state ready` if a PR exists.
-5. Remove every remaining worktree and ticket branch.
-6. **封账**: record `close` — the ledger flips to `state: complete`, and a sealed run can never be mistaken for an active one by the next session.
+3. **With fixes**: one coder without isolation fixes every finding, commit; re-run the final review only if the changes are substantial — a re-run is a new round, so it gets its own `final` event. **Not ready**: escalate to the user with the review pointers. If the user calls the run off, record `close` (封账) as usual — the seal gate (封账门) lets a user's give-up through at warning level, and its enforcement belongs to the script, not to this file. With tracker=github, before that `close` run the give-up path of the sync — `node <this-package>/scripts/ledger.js sync --runtime-dir .pi/matt-implement/<slug> --mode abandon --claimant <login> --reason <放弃说明>` — so the claim (占坑) is unassigned and the tracker is left an explanatory comment, not a phantom claim; the login is the one the claim used.
+4. **Pre-seal sync (tracker=github)** — after the last `final` verdict is in, and before the PR is ever marked ready: write the run's closing into the snapshot's `spec.md` (`closing: <交付指引>` under `## Comments` — the delivery note the closing comment will carry), then `node <this-package>/scripts/ledger.js sync --runtime-dir .pi/matt-implement/<slug>`: merged tickets close with their merge SHAs, escalated tickets get their comments and stay open, the spec issue closes with the delivery note. The sync is idempotent — after a partial failure, re-running plans only the still-missing actions. **A failed sync must not seal the run**: record `anomaly --note "sync failed: ..."` and stop to report — after `close` the event stream rejects every write, so a tracker failure can only be accounted for while the run is still open. The script itself refuses to sync a sealed run or one whose PR is already `ready`; the sync always precedes `pr --state ready`, so the PR's closing keywords can never race-close an issue the sync hasn't handled yet. Local markdown has no sync step: the local ticket files are the tracker already (zero change).
+5. **Clean the transfer artifacts (tracker=github, after a green sync)**: the snapshot and the review bundles are spent once the sync lands — remove `.pi/matt-implement/<slug>/tracker/` and `.pi/matt-implement/<slug>/reviews/`. Keep `findings/` (the event stream references those paths) and the ledger三件套 (`events.jsonl` / `ledger.md` / `notes.md`) for good. The sync command prints this checklist — execute it as printed.
+6. Push. Mark the PR ready for review, or report the branch name when there is no remote; record `pr --state ready` if a PR exists.
+7. Remove every remaining worktree and ticket branch.
+8. **封账**: record `close` — the ledger flips to `state: complete`, and a sealed run can never be mistaken for an active one by the next session.
 
 Report: tickets closed with their merge SHAs, the PR link or branch, and every escalated ticket with its review pointer.
 
@@ -213,7 +228,7 @@ Report: tickets closed with their merge SHAs, the PR link or branch, and every e
 
 Fill the angle brackets; send nothing else.
 
-**Path rule for all briefs**: any path that does not physically exist inside the recipient's worktree (everything gitignored — `.scratch/`, `.pi/`, `data/`, …) is given as an absolute main-repo path and marked read-only. The rule covers all four brief templates below; there are no special cases for isolation shape.
+**Path rule for all briefs**: any path that does not physically exist inside the recipient's worktree (everything gitignored — `.scratch/`, `.pi/`, `data/`, …) is given as an absolute main-repo path and marked read-only. The rule covers all four brief templates below; there are no special cases for isolation shape. With tracker=github, the ticket and spec paths in every brief are the tracker snapshot's copies under `.pi/matt-implement/<slug>/tracker/` — same rule, same read-only marking.
 
 ### Coder brief
 
@@ -283,4 +298,4 @@ You are on the feature branch in the main checkout; this is an integration probl
 
 ## Compaction
 
-If context was compacted mid-run: re-read this file, then regenerate and reconcile — `node <this-package>/scripts/ledger.js build --runtime-dir .pi/matt-implement/<slug>` followed by `check` — and read their output: the printed ledger carries the full state (header, table, timeline, reconciliation) plus any ledger-truth drift item by item. Then read the orchestration notes (`.pi/matt-implement/<slug>/notes.md`). Continue from that output, not from memory.
+If context was compacted mid-run: re-read this file, then follow Cold resume (above) — regenerate and reconcile with `node <this-package>/scripts/ledger.js build --runtime-dir .pi/matt-implement/<slug>` followed by `check`, read their output (the printed ledger carries the full state — header, table, timeline, reconciliation — plus any ledger-truth drift item by item) and the orchestration notes (`.pi/matt-implement/<slug>/notes.md`). Continue from that output, not from memory. A fresh session restarting the same command takes the same path: unsealed event stream → skip init and the pull → rebuilt state → frontier.
