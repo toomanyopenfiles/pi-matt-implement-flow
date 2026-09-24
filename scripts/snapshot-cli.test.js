@@ -190,6 +190,46 @@ test('--tickets 兜底：三层走到 init 票号清单——按清单落盘', (
   assert.deepEqual(lsIssues(f), ['1043-issue-transcription-pure-fns.md', '1044-sync-command.md']);
 });
 
+test('--tickets 与 add init 同名旗标过同一转换点（schema.ticketSetList）：空段/非法项在旗标层拒绝', (t) => {
+  const f = makeFixture(t);
+  writeStubData(f, { issues: ISSUES_NO_EDGES, subs: null });
+  for (const bad of ['1043,,1044', '1043,x']) {
+    const r = snapshot(
+      f,
+      ['--runtime-dir', f.runtime, '--spec', '#1042', '--tickets', bad],
+      withGh(f, { GH_STUB_SUBS: '' })
+    );
+    assert.equal(r.status, 2, `--tickets ${JSON.stringify(bad)} 必须被拒（与 add init 同一转换点）`);
+    assert.match(r.stdout, /票号列表/);
+    assert.doesNotMatch(r.stdout, /init 票号清单 含非法票号/, '不走 resolveTicketSet 的双轨校验口径');
+    assert.equal(fs.existsSync(f.tracker), false, '拒绝即零落盘');
+  }
+  // 归一化 + 去重同轨：add init 接受的形态这里也接受
+  const ok = snapshot(
+    f,
+    ['--runtime-dir', f.runtime, '--spec', '#1042', '--tickets', ' 1044, 1044,1043 '],
+    withGh(f, { GH_STUB_SUBS: '' })
+  );
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  assert.match(ok.stdout, /票集边界=init-list/);
+});
+
+test('--tickets 笔误/越界票号 → 如实诊断（用户输入/拉取不全 + --limit 1000 提示），非内部不变量', (t) => {
+  const f = makeFixture(t);
+  writeStubData(f, { issues: ISSUES_NO_EDGES, subs: null });
+  const r = snapshot(
+    f,
+    ['--runtime-dir', f.runtime, '--spec', '#1042', '--tickets', '1049'],
+    withGh(f, { GH_STUB_SUBS: '' })
+  );
+  assert.equal(r.status, 1, '拉取成功但边界票号不在集合中 → 拒绝落盘');
+  assert.match(r.stdout, /1049/);
+  assert.match(r.stdout, /拉取不全/);
+  assert.match(r.stdout, /limit 1000/, '--limit 1000 截断提示一并给出');
+  assert.doesNotMatch(r.stdout, /内部不变量/, '不得伪装成内部不变量被破坏');
+  assert.equal(fs.existsSync(f.tracker), false, '无半成品快照');
+});
+
 // ====================================================================
 // native 依赖边：dependencies/blocked_by 拉取 → issue.blockedBy 注入（integration-05 缺陷 1）
 // ====================================================================

@@ -1659,3 +1659,72 @@ test('票集边界：旗标形态纯函数档——parseFlags 对 tickets 的接
   assert.equal(stray.errors.length, 1);
   assert.match(stray.errors[0], /不属于事件 dispatch/);
 });
+
+// ====================================================================
+// tracker 快照（tracker=github）：真相层枚举零形态分叉
+// ——快照票文件即"票文件"（spec 明文），dirname(spec)/issues/ 枚举对快照同样生效
+// ====================================================================
+
+function writeSnapshotLayout(dir, runtimeSlug = 'demo') {
+  const tracker = path.join(dir, '.pi/matt-implement', runtimeSlug, 'tracker');
+  fs.mkdirSync(path.join(tracker, 'issues'), { recursive: true });
+  fs.writeFileSync(
+    path.join(tracker, 'spec.md'),
+    '# Spec: github 一等公民\n\nSource: https://github.com/o/r/issues/1040\n\n**Status:** ready-for-agent\n\n**Type:** spec\n'
+  );
+  fs.writeFileSync(
+    path.join(tracker, 'issues', '1042-snapshot-a.md'),
+    '# 1042: 快照票甲\n\n**Status:** ready-for-agent\n\n**Blocked by:** —\n'
+  );
+  fs.writeFileSync(
+    path.join(tracker, 'issues', '1043-snapshot-b.md'),
+    '# 1043: 快照票乙\n\n**Status:** resolved\n\n**Blocked by:** 1042\n'
+  );
+  return tracker;
+}
+
+function initGithubRun(f, extra = {}) {
+  f.git('checkout -q -b feat/demo');
+  const r = addAll(f, 'init', {
+    branch: 'feat/demo',
+    'branch-base': 'main',
+    'baseline-sha': f.baseline(),
+    spec: '.pi/matt-implement/demo/tracker/spec.md',
+    'test-command': 'npm test',
+    tracker: 'github',
+    ...extra,
+  });
+  assert.equal(r.status, 0, r.stdout);
+  return r;
+}
+
+test('tracker=github 快照：init --spec 指向快照 spec.md → 票表按快照票文件再生，枚举不降级', (t) => {
+  const f = makeFixture(t, { tickets: false });
+  writeSnapshotLayout(f.dir);
+  const r = initGithubRun(f);
+  assert.doesNotMatch(r.stdout, /仅支持本地/, '记账时刻不得出现失实降级警告');
+
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(build.status, 0, build.stdout);
+  assert.match(build.stdout, /tracker: github/);
+  assert.match(build.stdout, /\| 1042 \| 快照票甲 \|/, '快照票文件进票表——对账强度与 local 等价');
+  assert.match(build.stdout, /\| 1043 \| 快照票乙 \|/, '多位号快照票同样进票表');
+  assert.match(build.stdout, /^spec: \.pi\/matt-implement\/demo\/tracker\/spec\.md$/m, 'init --spec 如实展示（即快照的 spec.md）');
+  assert.doesNotMatch(build.stdout, /仅支持本地 markdown tracker 枚举/, '失实文案已修——快照不再是枚举死角');
+
+  // 对账走同一真相层：快照票文件的 Status 漂移逐条可见（账上无 merge 的 resolved 票）
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(check.status, 1);
+  assert.match(check.stdout, /票 1043 文件 Status 为 resolved，账上无 merge\/escalate 事件/);
+  assert.doesNotMatch(check.stdout, /仅支持本地/);
+});
+
+test('tracker=github 快照：封账门同样吃快照票文件——未闭环快照票阻塞封账，spec 母票豁免', (t) => {
+  const f = makeFixture(t, { tickets: false });
+  writeSnapshotLayout(f.dir);
+  initGithubRun(f);
+  const close = addAll(f, 'close', {});
+  assert.equal(close.status, 1, '未闭环的快照票必须阻塞封账');
+  assert.match(close.stdout, /票 1042/, '快照票文件即票文件——封账门逐票列出');
+  assert.match(close.stdout, /票 1043/);
+});

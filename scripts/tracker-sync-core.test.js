@@ -37,7 +37,24 @@ test('状态映射：wontfix label → Status: wontfix，优先于 closed（关�
   assert.equal(
     sync.statusOf(issue({ state: 'CLOSED', labels: ['ready-for-agent', 'wontfix'] })),
     'wontfix',
-    'wontfix 与其他 triage label 并存时仍优先'
+    'wontfix 与其他 triage label 并存时仍优先（spec 明文唯一的 closed 豁免）'
+  );
+});
+
+test('状态映射：closed 压过其余一切 triage label（spec 只豁免 wontfix）——closed + 陈旧可派发 label 不得转写成开放态', (t) => {
+  // closed 票若因残留 label（如 ready-for-agent）被转写成可派发开放态，会污染前沿；
+  // 状态映射的优先序是 wontfix → closed → 其余 label（词表序）→ 兜底。
+  assert.equal(
+    sync.statusOf(issue({ state: 'CLOSED', labels: ['ready-for-agent'] })),
+    'resolved',
+    'closed + 陈旧的 ready-for-agent label → resolved'
+  );
+  assert.equal(sync.statusOf(issue({ state: 'CLOSED', labels: ['needs-triage'] })), 'resolved');
+  assert.equal(sync.statusOf(issue({ state: 'CLOSED', labels: ['bug', 'p2'] })), 'resolved');
+  assert.equal(
+    sync.statusOf(issue({ state: 'CLOSED', labels: ['ready-for-agent', 'needs-info'] })),
+    'resolved',
+    '多 label 并存同样压不过 closed'
   );
 });
 
@@ -47,9 +64,10 @@ test('状态映射：triage 词表五项逐项映射，按词表序取优先（�
   assert.equal(sync.statusOf(issue({ labels: ['ready-for-agent'] })), 'ready-for-agent');
   assert.equal(sync.statusOf(issue({ labels: ['ready-for-human'] })), 'ready-for-human');
   assert.equal(sync.statusOf(issue({ labels: ['wontfix'] })), 'wontfix');
-  // 多 label 并存是输入异常，转写按词表序（wontfix → needs-triage → needs-info →
-  // ready-for-agent → ready-for-human）取第一个命中：保守侧优先，不把待评估的票
-  // 抬成可派发；映射因此与 labels 数组序无关，同一数据任何时刻转写一致。
+  // 多 label 并存是输入异常，转写按映射优先序（wontfix → closed → 其余词表序：
+  // needs-triage → needs-info → ready-for-agent → ready-for-human → 兜底）取第一个命中：
+  // 保守侧优先，不把待评估的票抬成可派发；映射因此与 labels 数组序无关，
+  // 同一数据任何时刻转写一致。
   assert.equal(
     sync.statusOf(issue({ labels: ['ready-for-agent', 'needs-info'] })),
     'needs-info'
@@ -295,40 +313,26 @@ test('spec 转写：source 缺省时回退 issue.url / issue.html_url；两者�
 });
 
 // ====================================================================
-// 整批转写与确定性
+// 转写确定性
 // ====================================================================
 
-test('整批转写：spec + 工单列表 → spec 文本与数值排序的票文件文本', (t) => {
-  const snap = sync.transcribeSnapshot({
-    specIssue: issue({ number: 1040, title: 'Spec: 大功能' }),
-    source: 'https://github.com/acme/repo/issues/1040',
-    issues: [issue({ number: 1042, title: 'B 票' }), issue({ number: 205, title: 'A 票' })],
-  });
-  assert.match(snap.spec, /\*\*Type:\*\* spec/);
-  assert.deepEqual(
-    snap.tickets.map((x) => x.num),
-    ['205', '1042'],
-    '票按数值序供给落盘层（ADR-0004 同一口径）'
-  );
-  assert.match(snap.tickets[0].text, /^# 205: A 票$/m);
-});
-
 test('转写确定性：同一批 issue 数据任何时刻重复转写 → 逐字节一致', (t) => {
-  const batch = () =>
-    sync.transcribeSnapshot({
-      specIssue: issue({
+  const batch = () => ({
+    spec: sync.transcribeSpec({
+      issue: issue({
         number: 1040,
         title: 'Spec: 大功能',
         labels: ['ready-for-agent'],
         body: '# Spec: 大功能\n\n正文\r\n',
       }),
       source: 'https://github.com/acme/repo/issues/1040',
-      issues: [
-        issue({ number: 7, title: '一票', labels: ['wayfinder:research'], body: '研究题' }),
-        issue({ number: 1042, title: '二票', labels: ['ready-for-agent'], body: '**Blocked by:** 7' }),
-        issue({ number: 205, title: '三票', state: 'CLOSED', labels: ['wontfix'] }),
-      ],
-    });
+    }),
+    tickets: [
+      sync.transcribeTicket(issue({ number: 7, title: '一票', labels: ['wayfinder:research'], body: '研究题' })),
+      sync.transcribeTicket(issue({ number: 1042, title: '二票', labels: ['ready-for-agent'], body: '**Blocked by:** 7' })),
+      sync.transcribeTicket(issue({ number: 205, title: '三票', state: 'CLOSED', labels: ['wontfix'] })),
+    ],
+  });
   const a = batch();
   const b = batch();
   assert.equal(a.spec, b.spec);
@@ -342,16 +346,7 @@ test('转写确定性：同一批 issue 数据任何时刻重复转写 → 逐�
 // 拒绝面（校验档：拒绝）
 // ====================================================================
 
-test('拒绝面：缺 spec 母票 / 票号非法 / 批内票号重复', (t) => {
+test('拒绝面：缺 spec 母票 / 票号非法', (t) => {
   assert.throws(() => sync.transcribeSpec({ issue: null, source: 'https://x' }), /spec/);
   assert.throws(() => sync.transcribeTicket(issue({ number: 'abc' })), /票号/);
-  assert.throws(
-    () =>
-      sync.transcribeSnapshot({
-        specIssue: issue({ number: 1040 }),
-        source: 'https://x',
-        issues: [issue({ number: 1042 }), issue({ number: '1042' })],
-      }),
-    /重复/
-  );
 });

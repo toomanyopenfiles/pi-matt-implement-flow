@@ -1,17 +1,18 @@
 'use strict';
 
-// tracker 同步核心（纯逻辑模块，无 IO）——spec 约定的两组纯函数：
-//   转写（票 02，本文件现有部分）：tracker issue 表示 → local 同构票文件文本
-//   同步规划（票 03，后续落在本模块）：（快照状态, tracker 状态）→ 幂等动作列表
+// tracker 同步核心（纯逻辑模块，无 IO）——spec 约定的两组纯函数，分居两个模块：
+//   转写（本文件，票 02）：tracker issue 表示 → local 同构票文件文本
+//   同步规划（sync-planning-core.js，票 03）：（快照状态, tracker 状态）→ 幂等动作列表
 //
-// 转写由四部分构成：
-//   - statusOf      状态映射表：closed → resolved；wontfix label → wontfix；
-//                   其余按 triage label 词表（docs/agents/triage-labels.md）映射 Status: 行
+// 转写由三部分构成：
+//   - statusOf      状态映射表：wontfix label → wontfix（spec 明文唯一的 closed 豁免）；
+//                   closed → resolved；其余按 triage label 词表（docs/agents/triage-labels.md）
+//                   映射 Status: 行
 //   - typeOf        类型映射表：wayfinder:<type> label → Type: 行；spec 母票 → Type: spec
 //                   （封账门豁免的识别标记，ledger-core 的 closeBlockers 读它）
 //   - blockedByOf   阻塞映射表：native dependencies 或正文 Blocked by 行 → Blocked by: 行，
 //                   编号一律过 ledger-schema.normalizeTicket（票号空间的单一转换点，ADR-0004）
-//   - transcribeTicket / transcribeSpec / transcribeSnapshot
+//   - transcribeTicket / transcribeSpec
 //                   票文件文本编排：H1 首题 + Status/Type/Blocked by 行（与 ledger.js 的
 //                   parseTicketFile 宽容格式同构）+ 正文逐字保留；spec 母票头部含 Source: 行
 //
@@ -34,7 +35,8 @@
 const schema = require('./ledger-schema');
 
 // triage label 词表（docs/agents/triage-labels.md 的五个 canonical 角色）。
-// 映射优先序即本表顺序：多个 label 并存时取最先命中者——映射因此与 labels 数组序无关。
+// statusOf 的映射优先序（spec 只豁免 wontfix）：wontfix → closed → 其余 label 按本表序
+// 取最先命中——映射因此与 labels 数组序无关。
 const TRIAGE_LABELS = ['wontfix', 'needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human'];
 
 // 开放票且无任何 triage label 时的兜底：tracker 上未被评估的票，其如实的本地状态就是
@@ -57,12 +59,17 @@ const isClosed = (issue) => String(issue.state ?? '').trim().toLowerCase() === '
 // 状态映射表
 // ------------------------------------------------------------------
 
+// 优先序即 spec 状态映射的明文面：wontfix 是唯一获得 closed 豁免的 label（关成
+// not_planned 的票仍显 wontfix）；closed 压过其余一切 label——closed + 陈旧可派发
+// label（如 ready-for-agent）不得转写成开放态，否则会污染前沿；其后的 triage label
+// 按词表序保守取先，兜底见 UNTRIAGED_FALLBACK。
 function statusOf(issue) {
   const labels = labelNames(issue);
-  for (const role of TRIAGE_LABELS) {
-    if (labels.includes(role)) return role;
-  }
+  if (labels.includes('wontfix')) return 'wontfix';
   if (isClosed(issue)) return 'resolved';
+  for (const role of TRIAGE_LABELS) {
+    if (role !== 'wontfix' && labels.includes(role)) return role;
+  }
   return UNTRIAGED_FALLBACK;
 }
 
@@ -165,22 +172,8 @@ function transcribeSpec({ issue, source }) {
   return lines.join('\n') + '\n';
 }
 
-// 整批转写：spec 母票 + 工单列表 → { spec, tickets: [{num, text}] }。
-// tickets 按数值序供给落盘层（与账本票表同一排序口径）；批内票号重复 = 输入自相矛盾，拒绝。
-function transcribeSnapshot({ specIssue, source, issues }) {
-  const spec = transcribeSpec({ issue: specIssue, source });
-  const seen = new Map();
-  const tickets = (issues ?? []).map((i) => {
-    const num = ticketNum(i);
-    if (seen.has(num)) {
-      throw new Error(`批内票号重复：${num}——同一票号出现两次，输入不自洽，拒绝转写`);
-    }
-    seen.set(num, true);
-    return { num, text: transcribeTicket(i) };
-  });
-  tickets.sort((a, b) => Number(a.num) - Number(b.num));
-  return { spec, tickets };
-}
+// 快照布局层（snapshot-core.planSnapshot）直接编排 transcribeSpec + transcribeTicket：
+// 票集解析与批内去重（重号取首个）归票集边界口径，不在转写面另立一套契约。
 
 module.exports = {
   statusOf,
@@ -188,5 +181,4 @@ module.exports = {
   blockedByOf,
   transcribeTicket,
   transcribeSpec,
-  transcribeSnapshot,
 };

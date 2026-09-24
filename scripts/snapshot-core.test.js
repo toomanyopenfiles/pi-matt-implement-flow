@@ -190,6 +190,34 @@ test('planSnapshot：init 票号清单含非法票号（票号空间外）→ �
   assert.match(plan.errors.join('\n'), /非法票号/);
 });
 
+test('planSnapshot：init 票号清单指向拉取集合外的票 → 如实诊断（用户输入或拉取不全），不借内部不变量之名拒绝', () => {
+  // 笔误/越界票号与 --limit 1000 截断都让边界票号落在拉取集合之外：这是用户可见事实，
+  // 诊断必须点名两种可能成因，不得伪装成内部不变量被破坏。
+  const issues = [
+    issue(100, { title: 'spec', body: 'spec 正文', url: 'https://github.com/o/r/issues/100' }),
+    issue(1042, { title: 'real ticket', body: '无边票据' }),
+  ];
+  const plan = planSnapshot({ issues, specRef: '#100', initTickets: ['1049'] });
+  assert.equal(plan.ok, false);
+  assert.match(plan.errors.join('\n'), /1049/);
+  assert.match(plan.errors.join('\n'), /拉取不全/);
+  assert.match(plan.errors.join('\n'), /limit 1000/);
+  assert.doesNotMatch(plan.errors.join('\n'), /内部不变量/);
+  assert.equal(plan.tickets.length, 0, '拒绝即零文件，不落半成品');
+});
+
+test('planSnapshot：sub-issues 边界指向未拉到的票 → 同样如实诊断（拉取不全）', () => {
+  const issues = [
+    issue(100, { title: 'spec', body: 'spec 正文', url: 'https://github.com/o/r/issues/100', subIssues: [1043, 9999] }),
+    issue(1043, { title: 'pulled ticket', body: '## Parent\n\n#100' }),
+  ];
+  const plan = planSnapshot({ issues, specRef: '#100' });
+  assert.equal(plan.ok, false);
+  assert.match(plan.errors.join('\n'), /9999/);
+  assert.match(plan.errors.join('\n'), /拉取不全/);
+  assert.doesNotMatch(plan.errors.join('\n'), /内部不变量/);
+});
+
 // ====================================================================
 // checkOverwrite：快照已存在的拒绝判定（续跑保护）
 // ====================================================================

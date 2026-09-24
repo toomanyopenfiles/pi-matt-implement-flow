@@ -257,7 +257,9 @@ function collectTruth({ runtimeDir, events }) {
     }
   };
 
-  // 本地 tracker 票集枚举（spec 同目录 issues/；GitHub/GitLab tracker 优雅降级）
+  // 票文件枚举（spec 同目录 issues/）：local 票文件与 tracker 快照（tracker=github 的
+  // snapshot-init 产物）同一约定——dirname(spec)/issues/，账本零形态分叉；快照票文件
+  // 即"票文件"（spec 明文，ADR-0003），对账与封账门吃同一真相层。
   const enumerateIssues = (specAbsPath) => {
     const issuesDir = path.join(path.dirname(specAbsPath), 'issues');
     if (!fs.existsSync(issuesDir)) {
@@ -276,6 +278,8 @@ function collectTruth({ runtimeDir, events }) {
     truth.tickets.sort((a, b) => Number(a.num) - Number(b.num));
   };
 
+  // 无 init 事件的降级再生与有 init 的枚举共用同一约定：spec 引用定位到
+  // dirname(spec)/issues/（local 与快照同构，tracker 形态不改变枚举——零形态分叉）。
   if (!init) {
     // 事件流丢失的降级再生：按 tracker 约定从运行时目录 slug 反查 .scratch/<slug>/spec.md
     const slug = path.basename(runtimeDir);
@@ -285,8 +289,6 @@ function collectTruth({ runtimeDir, events }) {
     } else {
       truth.ticketsWarning = '无 init 事件且按约定找不到 .scratch/<slug>/spec.md——票集降级为空';
     }
-  } else if (init.payload.tracker !== 'local') {
-    truth.ticketsWarning = `tracker=${init.payload.tracker}——v1 仅支持本地 markdown tracker 枚举，票集降级为事件流票集`;
   } else if (!truth.fileExists(init.payload.spec)) {
     truth.ticketsWarning = `spec 文件不存在：${init.payload.spec}——票集枚举降级`;
   } else {
@@ -581,6 +583,15 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
   if (!('spec' in flags)) {
     errors.push('缺少必选参数 --spec <spec 引用>（GitHub：issue 号 / #号 / owner/repo#号 / issue URL）');
   }
+  // --tickets 与 add init 同名旗标共用 schema.ticketSetList 单一转换点：归一 + 去重 +
+  // 数值排序，非法形态（空段/非数字/越界）在旗标层拒绝——不与 add init 双轨校验。
+  let initTickets;
+  if ('tickets' in flags) {
+    initTickets = schema.ticketSetList(flags.tickets);
+    if (initTickets === null) {
+      errors.push(`tickets 必须是逗号分隔的票号列表（如 01,02,1042），得到：${flags.tickets}`);
+    }
+  }
   if (errors.length) {
     out(`✗ 拒绝：`, ...errors.map((e) => `  - ${e}`));
     return 2;
@@ -603,8 +614,6 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
 
   const warnings = [];
   const specNum = tset.parseSpecRef(flags.spec);
-  const initTickets =
-    'tickets' in flags ? flags.tickets.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
   let issues = [];
   if (specNum) {
     const repo = repoFromSpecRef(flags.spec) ?? ghRepoView(warnings);

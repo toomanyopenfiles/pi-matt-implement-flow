@@ -71,6 +71,29 @@ function planSnapshot({ issues, specRef, initTickets } = {}) {
     if (n && !byNum.has(n)) byNum.set(n, it);
   }
 
+  // 边界票号不在拉取集合中是用户可见事实，不是内部不变量：--tickets 清单笔误/越界
+  //（用户输入）与 gh issue list --limit 1000 截断（拉取不全）都会造成缺口——诊断点名
+  // 两种成因与重跑前置，不伪装成程序错误。
+  const missing = set.tickets.filter((num) => !byNum.has(num));
+  if (missing.length) {
+    errors.push(
+      `票集边界内的票 ${missing.join('、')} 不在拉取的 issue 集合中——` +
+        (set.source === 'init-list'
+          ? '--tickets 清单笔误或越界（用户输入），'
+          : '票集边界指向了未被拉到的票，') +
+        '或 gh issue list --limit 1000 截断导致拉取不全；核对票号与 tracker 状态后重跑'
+    );
+    return {
+      ok: false,
+      specNum: set.specNum,
+      source: null,
+      spec: null,
+      tickets: [],
+      errors,
+      warnings,
+    };
+  }
+
   try {
     const specIssue = byNum.get(set.specNum);
     const spec = transcribeSpec({ issue: specIssue });
@@ -78,10 +101,6 @@ function planSnapshot({ issues, specRef, initTickets } = {}) {
     const sourceUrl = specIssue.url ?? specIssue.html_url ?? null;
     const tickets = set.tickets.map((num) => {
       const issue = byNum.get(num);
-      if (!issue) {
-        // 解析与转写同一集合，理论上不可达；守住这个不变量而不是静默跳号
-        throw new Error(`票集解析产物 ${num} 不在 issue 集合中——内部不变量被破坏，拒绝落盘`);
-      }
       return { num, rel: ticketFileRel(num, issue.title), text: transcribeTicket(issue) };
     });
     return {
