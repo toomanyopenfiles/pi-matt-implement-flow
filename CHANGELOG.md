@@ -9,11 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- GitHub Issues as a first-class tracker (`--tracker github`): the run keeps local-markdown
+  strength end to end. At init, `ledger snapshot-init` pulls the spec and every ticket into a
+  local tracker snapshot (`.pi/matt-implement/<slug>/tracker/`, same shape as local ticket files)
+  that dispatch, review, the ledger and reconciliation all read and write; the spec issue is
+  claimed up front as a concurrency lock, so two sessions cannot silently race the same feature;
+  all tracker progress lands in one idempotent pre-seal push (`ledger sync`) — merged tickets
+  close with their merge SHAs, escalated tickets get a comment and stay open, the spec issue
+  closes with the delivery note, and a give-up run releases the claim (`sync --mode abandon`).
+  After a green sync the tracker snapshot and review bundles are cleaned up (findings and the
+  ledger trio stay). Local-markdown runs behave exactly as before.
+- `ledger snapshot-init` — materializes the tracker into the snapshot: the spec with a `Source:`
+  line for its tracker origin, one local-shaped file per ticket with native ticket numbers. An
+  existing snapshot is refused, never overwritten (the continuation guard); a failed `gh` fetch
+  leaves zero half-products.
+- `ledger sync` — the pre-seal idempotent push described above; it refuses to sync a sealed run
+  or one whose PR is already marked ready, so PR closing keywords can never race it. A failed
+  sync must be recorded as `anomaly` before the run seals.
+- `init --tickets` freezes the run's ticket-set boundary — out-of-boundary dispatches are refused
+  mid-run (the fallback layer of the three-step ticket-set resolution: sub-issues → `## Parent`
+  back-reference → the init list).
 - Audit report output is bilingual: `--lang zh|en` (default `zh`) selects the language of the
   report site — page chrome, deterministic risk texts, forensics warnings, timeline narration,
   glossary definitions — and of every by-product (AI analysis brief, CLI output). All copy lives
   in `audit-report/i18n.js` as paired zh/en catalogs (key parity is test-guarded); facts,
   evidence and risk findings are language-independent.
+
+### Changed
+
+- Ticket number space modernization (ADR-0004): ticket numbers now follow the tracker's native
+  numbering — normalization accepts 1–6 digits (issue numbers above 999 used to be rejected),
+  ticket tables sort numerically, and merge-token verification handles multi-digit numbers.
+  Local two-digit numbering is unchanged.
+- The issue tracker is now strictly a provided, per-repo artifact: the flow follows the target
+  repo's `docs/agents/issue-tracker.md` (written by `/setup-matt-pocock-skills`) and, when it is
+  missing, tells the user to run that skill — the implicit `.scratch/` local-markdown fallback
+  is gone.
+- `docs/agents/issue-tracker.md` is no longer shipped in the npm package: it is target-repo
+  configuration produced by `/setup-matt-pocock-skills`, not a package resource.
+- `audit-report/` now ships in the npm package (its test files stay out of the tarball), so npm
+  users can generate audit reports from their run directories.
 
 ## [0.2.0] - 2026-09-22
 ### Added

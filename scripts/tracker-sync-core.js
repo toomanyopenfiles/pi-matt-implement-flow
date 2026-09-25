@@ -6,7 +6,8 @@
 //
 // 转写由三部分构成：
 //   - statusOf      状态映射表：wontfix label → wontfix（spec 明文唯一的 closed 豁免）；
-//                   closed → resolved；其余按 triage label 词表（docs/agents/triage-labels.md）
+//                   closed → resolved；其余按 triage label 词表（目标仓库的
+//                   docs/agents/triage-labels.md；词表契约与解析方案见 ADR-0006）
 //                   映射 Status: 行
 //   - typeOf        类型映射表：wayfinder:<type> label → Type: 行；spec 母票 → Type: spec
 //                   （封账门豁免的识别标记，ledger-core 的 closeBlockers 读它）
@@ -34,7 +35,9 @@
 
 const schema = require('./ledger-schema');
 
-// triage label 词表（docs/agents/triage-labels.md 的五个 canonical 角色）。
+// triage label 词表（上游 setup-matt-pocock-skills 的 triage-labels.md 范本所列五个
+// canonical 角色；目标仓库可经其 docs/agents/triage-labels.md 自定义实际 label 串，
+// 本表暂按 canonical 名硬编码——解析方案见 ADR-0006）。
 // statusOf 的映射优先序（spec 只豁免 wontfix）：wontfix → closed → 其余 label 按本表序
 // 取最先命中——映射因此与 labels 数组序无关。
 const TRIAGE_LABELS = ['wontfix', 'needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human'];
@@ -44,7 +47,8 @@ const TRIAGE_LABELS = ['wontfix', 'needs-triage', 'needs-info', 'ready-for-agent
 // （前沿扫描、封账门）面对一个非词表状态。
 const UNTRIAGED_FALLBACK = 'needs-triage';
 
-// wayfinder 类型词表（docs/agents/issue-tracker.md 的 Type 值）。仅用于文档；
+// wayfinder 类型词表（目标仓库 docs/agents/issue-tracker.md 的 Type 值——上游
+// issue-tracker 范本的 wayfinder 约定）。仅用于文档；
 // 未知后缀逐字透传（转写是忠实拷贝层，词表校验是读取侧/账本侧的职责）。
 
 const labelNames = (issue) =>

@@ -15,7 +15,8 @@ surface latent problems.
   main-flow files and the target repo's source are read-only. The report is written to `report/`
   under the run directory by default (the run directory as a whole is gitignored, so git status
   stays clean); to leave the target repo completely untouched, point `--out` outside it. This
-  directory is not in the npm publish surface (not in the `package.json` `files` allowlist).
+  directory ships with the npm package (inside the `package.json` `files` allowlist), so npm
+  users can audit their runs too; the test files stay out of the tarball.
 - **Facts and opinions are layered**: the report body is deterministic fact (every item traces
   back to its source); AI analysis is an explicit two-step backfill flow (below), rendered and
   labelled as non-fact.

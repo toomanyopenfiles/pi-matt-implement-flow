@@ -63,8 +63,9 @@ gh PR 状态 best-effort）与台账记录对照，发现漂移则逐条列出�
 
 ### tracker
 
-spec 与工单的落点系统，形态由 `docs/agents/issue-tracker.md` 定义：local markdown
-（`.scratch/<feature>/`）或 GitHub Issues。票号一律采用 tracker 原生编号（local 为文件序号
+spec 与工单的落点系统，形态由**目标仓库**的 `docs/agents/issue-tracker.md`
+（`/setup-matt-pocock-skills` 落盘的产物，上游 github / gitlab / local 三范本之一）
+定义：local markdown（`.scratch/<feature>/`）或 GitHub Issues。票号一律采用 tracker 原生编号（local 为文件序号
 补零两位，GitHub 为 issue number）；定位一次 run 的 spec 的标识是 spec 引用——local 传
 spec 文件路径，GitHub 传 issue 号/URL。
 
