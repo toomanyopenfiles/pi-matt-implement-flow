@@ -61,6 +61,54 @@ gh PR 状态 best-effort）与台账记录对照，发现漂移则逐条列出�
 按入账顺序排列，一律以最新裁决为准。裁决属状态转换级事实，记账 `final` 事件入事件流；
 派发终审这个动作本身不记事件（与票级 reviewer 派发同一先例，runId 由裁决事件承载）。
 
+### tracker
+
+spec 与工单的落点系统，形态由 `docs/agents/issue-tracker.md` 定义：local markdown
+（`.scratch/<feature>/`）或 GitHub Issues。票号一律采用 tracker 原生编号（local 为文件序号
+补零两位，GitHub 为 issue number）；定位一次 run 的 spec 的标识是 spec 引用——local 传
+spec 文件路径，GitHub 传 issue 号/URL。
+
+### tracker 快照（tracker snapshot）
+
+run 初始化时把 tracker 上的 spec 与全部工单拉取到运行时目录
+（`.pi/matt-implement/<slug>/tracker/`）的工作副本，与 local tracker 票文件同构
+（含 `Status:` / `Type:` / `Blocked by:` 行）。快照是本地全链路（派发、评审、对账、记账）
+的唯一读写对象，是**待推送的真相**；tracker 本体是它的延迟镜像，不再是真相层——
+对账所核验的"票文件 Status"即快照票文件。与流程形态里的"旗标快照"无关。
+
+### 同步（sync）
+
+封账前把 tracker 快照的状态差异批量推送到 tracker 本体的单点动作：合并的票关票并附
+merge SHA、升级的票留评保持开放、spec 收尾关闭。同步必须发生在封账**之前**（封账后
+事件流拒写，同步失败将无从记账），并设计为幂等可重入。
+
+### 占坑（claim the spec）
+
+以在 tracker 上认领 spec 为形式的并发锁，声明某个 feature 已被本 run 占用，防止多
+会话/多人同时开跑。占坑是 run 在 tracker 上的第一个写动作，先于快照拉取；锁语义实时
+生效，与进度同步分离（同步延迟不影响锁）。封账同步或放弃时释放。
+
+### 认领（claim a ticket）
+
+把单张工单标记为在途的进度信号：在 tracker 快照上写 `Status: claimed`。认领不是锁
+（feature 级互斥由占坑负责），也不上 tracker 本体——tracker 侧的进度痕迹只有同步时
+的关票评论。
+
+### 续跑（run continuation）
+
+以同一命令重启一次未封账的 run：检测到既有事件流即跳过初始化与拉取，经台账再生
+（`build`）与对账（`check`）重建状态后从前沿继续。与子代理的上下文续用（resume）
+无关——那是平台机制，不是 run 级动作。
+
+### 传输件（transfer artifact）
+
+为只读子代理准备的运行时输入文件（review bundle、findings），性质是
+"递给不能读网络的审查者的快照"：不是文档，也不是真相源——不入 git、不进检索面。
+传输件并非一律用后即弃：review bundle 用后即弃，findings 因事件流引用其路径而
+**留存（长存，不可删）**。运行时文件三分：机器状态（账本三件套，长存）、传输件
+（review bundle 用后即弃；findings 留存）、tracker 快照（第三类而非传输件——
+同步成功后清理）。
+
 ## 退役词
 
 ### ~~事件日志~~（retired）

@@ -202,12 +202,12 @@ test('parseEvents 解析并按序号排序，坏行跳过并告警', () => {
     'not-json',
     JSON.stringify({ v: 1, seq: 1, ts: 't1', type: 'init', payload: {} }),
   ].join('\n'));
-  const warnings = [];
-  const events = parseEvents(dir, warnings);
+  const ctx = { lang: 'zh', warnings: [] };
+  const events = parseEvents(dir, ctx);
   assert.equal(events.length, 2);
   assert.equal(events[0].type, 'init');
   assert.equal(events[1].type, 'close');
-  assert.ok(warnings.some((w) => w.code === 'event-parse'));
+  assert.ok(ctx.warnings.some((w) => w.code === 'event-parse'));
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -814,6 +814,50 @@ test('collect：UUID 形状错值的污染 dispatch + refSeq anomaly → 衍生�
     renderAll(model, out, null);
     const riskSection = fs.readFileSync(path.join(out, 'index.html'), 'utf8').split('<section class="section" id="risks">')[1].split('</section>')[0];
     assert.ok(riskSection.includes('已被补正'), '首页风险区可区分「补正后的残留」与「真伤」');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------- i18n 双语输出
+
+test('i18n：zh/en 文案目录键集完全一致；归一、回落、词形占位可用', () => {
+  const { M, makeT, normLang } = require('./i18n');
+  assert.deepEqual(Object.keys(M.zh).sort(), Object.keys(M.en).sort(), '双语键集必须奇偶一致');
+  assert.equal(normLang('zh-CN'), 'zh');
+  assert.equal(normLang('en'), 'en');
+  assert.equal(normLang('fr'), null, '不认识的语言不得悄悄回落');
+  const T = makeT('en');
+  assert.equal(T.lang, 'en');
+  assert.equal(T('risk.r8.title', { count: 1 }), 'Platform-side evidence missing for 1 run');
+  assert.equal(T('risk.r8.title', { count: 2 }), 'Platform-side evidence missing for 2 runs');
+  assert.equal(T('不存在的键'), '不存在的键', '缺键原样返回键名');
+  assert.equal(makeT('fr').lang, 'zh', '未知语言回落中文（行为基线）');
+});
+
+test('collect + render：lang=en 产出英文站点，lang 缺省保持中文基线', () => {
+  const fx = makeFixture();
+  const out = path.join(fx.dir, 'out-en');
+  try {
+    const model = collect({ runtimeDir: fx.runtimeDir, lang: 'en' });
+    assert.equal(model.lang, 'en');
+    const titles = model.risks.map((r) => r.title).join('\n');
+    assert.ok(titles.includes('acceptance was rejected'), 'R2 标题应为英文');
+    assert.ok(titles.includes('The orchestrator recorded an anomaly'), 'R3 标题应为英文');
+    assert.ok(titles.includes('Run not sealed'), 'R6 标题应为英文');
+    assert.ok(model.warnings.every((w) => !/未找到|不可读/.test(w.detail)), '取证告警文案应随语言走');
+
+    renderAll(model, out, null);
+    const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+    assert.ok(index.includes('<html lang="en">'), 'html lang 属性应随语言走');
+    assert.ok(index.includes('Anomalies & risks'), '风险区标题应为英文');
+    assert.ok(index.includes('Glossary'), '名词表标题应为英文');
+    assert.ok(index.includes('event stream（事件流）'), '术语括注应英前中后');
+
+    // 中文基线不动：缺省 lang 的行为与断言与改造前一致
+    const zh = collect({ runtimeDir: fx.runtimeDir });
+    assert.equal(zh.lang, 'zh');
+    assert.ok(zh.risks.map((r) => r.title).join('\n').includes('未封账'));
   } finally {
     fx.cleanup();
   }

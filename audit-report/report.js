@@ -4,6 +4,7 @@
 //
 // 用法：
 //   node audit-report/report.js --runtime-dir <流程运行目录>
+//       [--lang <zh|en>]                  输出语言（默认 zh）
 //       [--out <报告输出目录>]            默认 <runtimeDir>/report
 //       [--ai-analysis <ai-analysis.json>] 读取已回填的 AI 分析意见并渲染进报告
 //       [--ai-brief]                       导出 AI 分析简报（供大模型分析后回填）
@@ -14,12 +15,14 @@ const fs = require('fs');
 const path = require('path');
 const { collect } = require('./collect');
 const { renderAll } = require('./render');
+const { DEFAULT_LANG, makeT, normLang } = require('./i18n');
 
 function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--runtime-dir') args.runtimeDir = argv[++i];
+    else if (a === '--lang') args.lang = argv[++i];
     else if (a === '--out') args.out = argv[++i];
     else if (a === '--ai-analysis') args.aiAnalysis = argv[++i];
     else if (a === '--ai-brief') args.aiBrief = true;
@@ -29,104 +32,83 @@ function parseArgs(argv) {
   return args;
 }
 
-function usage() {
-  console.log(`用法: node audit-report/report.js --runtime-dir <流程运行目录> [选项]
-
-选项:
-  --out <dir>              报告输出目录（默认 <runtimeDir>/report）
-  --ai-analysis <file>     读取 AI 分析意见 JSON 并渲染为「分析意见」区块
-  --ai-brief               额外导出 AI 分析简报 analysis-brief.md（零成本人工/模型分析入口）
-
-说明:
-  对一次已完成（或进行中）的流程运行做纯本地旁路取证，生成可浏览的静态报告网站。
-  不调用任何大模型；主流程代码零改动，对目标仓库只读。`);
-}
-
 // AI 分析简报：把确定性证据整理成一份自包含的 markdown，供大模型（或人）离线分析。
 function buildAiBrief(model) {
+  const T = makeT(model.lang);
   const lines = [];
-  lines.push(`# 审计分析简报 · ${model.slug}`);
+  lines.push(T('brief.title', { slug: model.slug }));
   lines.push('');
-  lines.push(`> 本简报由审计工具从下列确定性来源机械整理：事件流（${model.events.length} 条）、平台子代理证据（${model.runRefs.length} 次运行）、git 事实。`);
-  lines.push('> 请基于本简报做交叉一致性检查与未建模风险识别；每条结论必须引用本简报中的条目编号或运行 ID 作为证据。');
+  lines.push(T('brief.provenance', { events: model.events.length, runs: model.runRefs.length }));
+  lines.push(T('brief.instruction'));
   lines.push('');
-  lines.push('## 一、确定性异常（脚本检出）');
+  lines.push(T('brief.s1'));
   if (model.risks.length) {
     model.risks.forEach((r, i) => lines.push(`${i + 1}. [${r.severity}] ${r.title} — ${r.detail}`));
   } else {
-    lines.push('（无）');
+    lines.push(T('brief.none'));
   }
   lines.push('');
-  lines.push('## 二、票目与裁决汇总');
+  lines.push(T('brief.s2'));
   for (const t of model.tickets) {
-    const v = t.verdicts.map((x) => `R${x.round}:${x.verdict}`).join(' ') || '未评审';
-    const m = t.merges.length ? `merge ${t.merges[t.merges.length - 1].mergeSha}` : '未合并';
-    lines.push(`- 票 ${t.id}「${t.title || '—'}」 评审 ${v}，修复 ${t.fixes.length} 轮，${m}`);
+    const v = t.verdicts.map((x) => `R${x.round}:${x.verdict}`).join(' ') || T('brief.noVerdicts');
+    const m = t.merges.length ? `merge ${t.merges[t.merges.length - 1].mergeSha}` : T('brief.notMerged');
+    lines.push(T('brief.ticketLine', { id: t.id, title: t.title || '—', verdicts: v, fixes: t.fixes.length, merge: m }));
   }
   lines.push('');
-  lines.push('## 三、成本与用量');
+  lines.push(T('brief.s3'));
   for (const [role, v] of Object.entries(model.stats.byRole)) {
-    lines.push(`- ${role}: ${v.runs} 次运行, $${(v.cost || 0).toFixed(4)}, ${v.tokens} tokens`);
+    lines.push(T('brief.roleLine', { role, runs: v.runs, cost: (v.cost || 0).toFixed(4), tokens: v.tokens }));
   }
   lines.push('');
-  lines.push('## 四、异常记录与升级（事件原文）');
-  for (const a of model.run.anomalies) lines.push(`- anomaly #${a.seq}: ${a.note}`);
-  for (const e of model.run.escalates) lines.push(`- escalate #${e.seq} 票 ${e.ticket}: ${e.note}`);
-  if (!model.run.anomalies.length && !model.run.escalates.length) lines.push('（无）');
+  lines.push(T('brief.s4'));
+  for (const a of model.run.anomalies) lines.push(T('brief.anomalyLine', { seq: a.seq, note: a.note }));
+  for (const e of model.run.escalates) lines.push(T('brief.escalateLine', { seq: e.seq, ticket: e.ticket, note: e.note }));
+  if (!model.run.anomalies.length && !model.run.escalates.length) lines.push(T('brief.none'));
   lines.push('');
-  lines.push('## 五、收尾状态');
-  lines.push(`- 封账: ${model.run.sealed ? `是（${model.run.close.note}）` : '否 —— 运行未终结'}`);
+  lines.push(T('brief.s5'));
+  lines.push(model.run.sealed ? T('brief.sealed', { note: model.run.close.note }) : T('brief.unsealed'));
   const pr = model.run.prs[model.run.prs.length - 1];
-  lines.push(`- PR: ${pr ? `${pr.state} ${pr.url || ''}` : '无'}`);
+  lines.push(T('brief.prLine', { value: pr ? `${pr.state} ${pr.url || ''}` : T('brief.noPr') }));
   lines.push('');
-  lines.push('## 六、运行清单（runId × 角色 × 状态）');
+  lines.push(T('brief.s6'));
   for (const r of model.runRefs) {
     const c = model.childRuns[r.runId];
-    lines.push(`- ${r.runId} [${r.role}] ${r.ticket === 'final' ? 'run 级终审' : `票 ${r.ticket}`} key=${r.key} ${c && c.found ? `exit=${c.exitCode} 验收=${c.acceptance ? c.acceptance.status : '—'} 模型=${c.model}` : '证据缺失'}`);
+    const ref = r.ticket === 'final' ? T('ref.final') : T('ref.ticket', { ticket: r.ticket });
+    const status = c && c.found
+      ? T('brief.runStatus', { exit: c.exitCode, acceptance: c.acceptance ? c.acceptance.status : '—', model: c.model })
+      : T('brief.evidenceMissing');
+    lines.push(T('brief.runLine', { runId: r.runId, role: r.role, ref, key: r.key, status }));
   }
   lines.push('');
   return lines.join('\n');
 }
 
-// 期望的回填格式说明，附在简报尾部
-const AI_INSTRUCTIONS = `
----
-
-## 给分析者的回填说明（大模型或人类）
-
-分析完成后，把结论写入 <报告输出目录>/ai-analysis.json，格式：
-
-{
-  "model": "<分析所用模型或 human>",
-  "generatedAt": "<ISO 时间>",
-  "findings": [
-    { "severity": "high|medium|low",
-      "title": "一句话风险标题",
-      "detail": "推理与依据",
-      "evidenceRefs": ["简报中的条目编号 / runId / 票号"] }
-  ]
-}
-
-然后重跑本工具（带 --ai-analysis <该文件>），意见会渲染进报告的独立「AI 分析意见」区块，
-与确定性事实明确分层。
-`;
-
 function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  // 语言先解析（usage / 报错文案也要跟语言走）；不认识的语言按默认语言报错退出
+  const lang = normLang(args.lang);
+  if (!lang) {
+    console.error(makeT(DEFAULT_LANG)('cli.badLang', { lang: args.lang }));
+    process.exit(1);
+  }
+  const T = makeT(lang);
+
   if (args.help || !args.runtimeDir) {
-    usage();
+    console.log(T('cli.usage'));
     process.exit(args.help ? 0 : 1);
   }
+
   const t0 = Date.now();
-  const model = collect({ runtimeDir: args.runtimeDir });
+  const model = collect({ runtimeDir: args.runtimeDir, lang: T.lang });
   const outDir = path.resolve(args.out || path.join(model.runtimeDir, 'report'));
 
   let ai = null;
   const aiPath = args.aiAnalysis || path.join(outDir, 'ai-analysis.json');
   if (args.aiAnalysis && !fs.existsSync(args.aiAnalysis)) {
-    console.error(`指定的 AI 意见文件不存在：${args.aiAnalysis}（将只渲染确定性事实区）`);
+    console.error(T('cli.aiMissing', { path: args.aiAnalysis }));
   } else if (args.aiAnalysis && fs.existsSync(args.aiAnalysis)) {
-    try { ai = JSON.parse(fs.readFileSync(args.aiAnalysis, 'utf8')); } catch (e) { console.error(`AI 意见文件解析失败：${e.message}`); }
+    try { ai = JSON.parse(fs.readFileSync(args.aiAnalysis, 'utf8')); } catch (e) { console.error(T('cli.aiParseError', { msg: e.message })); }
   } else if (fs.existsSync(aiPath)) {
     try { ai = JSON.parse(fs.readFileSync(aiPath, 'utf8')); } catch { /* 忽略坏文件 */ }
   }
@@ -137,17 +119,17 @@ function main() {
   fs.writeFileSync(path.join(outDir, 'model.json'), JSON.stringify(model, null, 2));
 
   if (args.aiBrief) {
-    fs.writeFileSync(path.join(outDir, 'analysis-brief.md'), buildAiBrief(model) + AI_INSTRUCTIONS);
+    fs.writeFileSync(path.join(outDir, 'analysis-brief.md'), buildAiBrief(model) + T('brief.aiInstructions'));
   }
 
-  console.log(`✓ 审计报告已生成（${Date.now() - t0} ms，零 LLM 调用）`);
-  console.log(`  运行目录: ${model.runtimeDir}`);
-  console.log(`  报告输出: ${outDir}`);
-  console.log(`  页面: ${files.filter((f) => f.endsWith('.html')).length} 个（首页 index.html）`);
-  console.log(`  确定性风险: ${model.risks.length} 条（高 ${model.risks.filter((r) => r.severity === 'high').length}）`);
-  if (model.warnings.length) console.log(`  取证降级警告: ${model.warnings.length} 条（详见报告内标注与 model.json）`);
-  if (ai) console.log(`  AI 分析意见: ${(ai.findings || []).length} 条（已标注为观点层）`);
-  else if (args.aiBrief) console.log(`  AI 分析简报: ${path.join(outDir, 'analysis-brief.md')}（分析后回填 ai-analysis.json 再重跑即可）`);
+  console.log(T('cli.done', { ms: Date.now() - t0 }));
+  console.log(T('cli.runtimeDir', { v: model.runtimeDir }));
+  console.log(T('cli.outDir', { v: outDir }));
+  console.log(T('cli.pages', { n: files.filter((f) => f.endsWith('.html')).length }));
+  console.log(T('cli.risks', { n: model.risks.length, high: model.risks.filter((r) => r.severity === 'high').length }));
+  if (model.warnings.length) console.log(T('cli.warnings', { n: model.warnings.length }));
+  if (ai) console.log(T('cli.aiOpinion', { n: (ai.findings || []).length }));
+  else if (args.aiBrief) console.log(T('cli.aiBrief', { path: path.join(outDir, 'analysis-brief.md') }));
 }
 
 main();

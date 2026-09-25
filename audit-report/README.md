@@ -1,80 +1,127 @@
-# audit-report — 流程审计报告（旁路取证工具）
+# audit-report — flow audit report (side-channel forensics)
 
-对一次已完成的 pi-matt-implement-flow 流程运行做**纯本地旁路取证**，生成可浏览的静态报告网站，
-供人类审核者检查全流程执行情况、暴露潜在问题。
+English | [简体中文](./README.zh-CN.md)
 
-- **零大模型调用**：全部内容从事件流、平台留存的子代理证据、主会话与 git 事实机械收集。
-- **主流程零侵入**：不修改 SKILL.md / ledger 脚本 / agents；对主流程文件与目标仓库源码只读。
-  报告默认写入运行目录下的 `report/`（该路径已被 gitignore，属运行期产物区）；如需完全
-  不触碰仓库目录，用 `--out` 指到仓库外。本目录不进 npm 发布面（`package.json` `files`
-  白名单未包含）。
-- **事实与观点分层**：报告主体是确定性事实（每条可回溯出处）；AI 分析意见是显式的
-  两步回填流程（见下），渲染时标注为非事实。
-- **附带产物**：报告目录中还会写入 `model.json`（中间取证模型，供调试与二次分析）与
-  `analysis-brief.md`（仅 `--ai-brief` 时），均为本工具自身产物，非目标仓库文件。
+Purely local, side-channel forensics over one finished pi-matt-implement-flow run, producing a
+browsable static report site for human auditors to check how the whole flow executed and to
+surface latent problems.
 
-## 用法
+- **Zero LLM calls**: everything is collected mechanically from the event stream, the platform's
+  retained subagent evidence, the main session, and git facts.
+- **Bilingual output**: `--lang zh|en` picks the language of the report site and every output —
+  page chrome, deterministic risk texts, forensics warnings, timeline narration, glossary
+  definitions, analysis brief, CLI (default `zh`). Facts and evidence are language-independent.
+- **Zero main-flow intrusion**: SKILL.md / the ledger scripts / the agents are untouched, and
+  main-flow files and the target repo's source are read-only. The report is written to `report/`
+  under the run directory by default (the run directory as a whole is gitignored, so git status
+  stays clean); to leave the target repo completely untouched, point `--out` outside it. This
+  directory is not in the npm publish surface (not in the `package.json` `files` allowlist).
+- **Facts and opinions are layered**: the report body is deterministic fact (every item traces
+  back to its source); AI analysis is an explicit two-step backfill flow (below), rendered and
+  labelled as non-fact.
+- **By-products**: the report directory also gets `model.json` (intermediate forensics model, for
+  debugging and secondary analysis) and `analysis-brief.md` (only with `--ai-brief`). Both are
+  products of this tool, not files of the target repo.
+
+## Usage
 
 ```bash
-# 最简：对一次运行生成报告（输出到 <运行目录>/report/，浏览器直接打开 index.html）
+# Minimal: report on one run (output to <run dir>/report/, open index.html in a browser)
 node audit-report/report.js --runtime-dir <repo>/.pi/matt-implement/<slug>
 
-# 导出 AI 分析简报（可选）
+# Output elsewhere (e.g. outside the repo, leaving the target repo completely untouched)
+node audit-report/report.js --runtime-dir <...> --out /path/to/report-out
+
+# Generate the report in English (default is Chinese)
+node audit-report/report.js --runtime-dir <...> --lang en
+
+# Export an AI analysis brief (optional, see below)
 node audit-report/report.js --runtime-dir <...> --ai-brief
 
-# 回填 AI 分析意见后重渲染（可选）
-node audit-report/report.js --runtime-dir <...> --ai-analysis <report>/ai-analysis.json
+# Re-render with an already backfilled AI analysis
+# (optional; not needed when the file sits in the report directory)
+node audit-report/report.js --runtime-dir <...> --ai-analysis <analysis>.json
 ```
 
-## 报告内容
+## What the report contains
 
-| 页面 | 内容 |
+| Page | Contents |
 |---|---|
-| `index.html` | 运行总览（分支/spec/流程形态/PR/封账）、**异常与风险区**（确定性检出）、票目总表、叙述化事件时间线、用量与成本、名词表 |
-| `ticket-NN.html` | 每票完整证据链：派发任务书原文 → 实现者结构化报告与验收详情（含门禁输出）→ 评审裁决与问题清单全文 → 评审 diff → 修复轮 → 合并 |
-| `final.html` | 终审（整分支评审）结论与全文（有 `final` 事件时裁决取自事件）、异常记录与升级、封账对账、编排笔记全文 |
+| `index.html` | Run overview (branch / spec / flow shape / test gate / PR / seal), run stats, the **anomalies & risks** section (deterministic findings), the ticket table, a narrated event timeline, usage & cost, glossary |
+| `ticket-NN.html` | The full evidence chain per ticket: ticket text → dispatch brief text → the implementer's structured report and acceptance details (including gate output) → review verdict with the full findings list → review diff → fix rounds → merge |
+| `final.html` | Final review (whole-branch) verdict and full text (with a `final` event the verdict is taken from the event), anomalies and escalations, sealing record (a note when unsealed), full orchestration notes |
 
-「异常与风险区」的确定性检出规则：失败的子代理运行、验收被拒、异常记录（anomaly）、
-升级（escalate）、修复轮耗尽预算、未封账、封账时最新终审裁决为 `not_ready`（带伤封账）、
-证据缺失、任务书未恢复等。两条口径：
+## Anomalies & risks (deterministic findings)
 
-- **「已恢复」降级（事实性豁免）**：失败的子代理运行（R1）与验收被拒（R2）在该票之后存在
-  更晚序号的成功结算（`settled`）时降为 medium 并在标题/detail 标注「后续运行已恢复」、
-  evidence 附恢复运行 runRef；从未恢复者维持 high。降级只到 medium（工作确实被打断过）、
-  风险本体不删除，且一次成功只豁免其后未再发生同票事故的那次失败（拒绝→拒绝→成功不被
-  一次成功抹平）。判定全在审计侧派生阶段，台账与事件流零变更。
-- **死 runRef 机判**：runId 不符合 UUID 形状（36 位十六进制-连字符）的 runRef 是记账污染的
-  死数据（真实事故里 shell 变量被写进 `--run-id`）——不探测平台证据、不参与证据缺失类风险
-  推导，只在取证 warnings 里留一条 `run-ref-dead` 供人核对；不写、不猜、不补造它对应的运行。
-  被污染的那条 dispatch 事件本身仍原样留在事件时间线上。
+Every item is found mechanically by script and traces back to its source; nothing is model
+inference. The rules:
 
-## AI 分析意见层（可选，两步回填）
+- a subagent run that failed (non-zero exit code)
+- an acceptance that was rejected
+- an anomaly record
+- an escalation
+- the fix-round budget used up
+- the run not sealed
+- sealed with a wound: the latest final-review verdict at seal time was `not_ready`
+- platform-side evidence missing
+- a dispatch brief that could not be restored
+- 2+ rounds of `changes_requested` verdicts on the same ticket
 
-确定性检测只能查「已建模的异常」；跨证据的语义矛盾值得一次 LLM 分析补充。为保持
-「事实/观点」分层，采用离线两步而不是在线调用：
+Items are sorted by severity (high / medium / low). Three presentation tags adjust how an item is
+shown, but **no risk item is ever deleted**:
 
-1. `--ai-brief` 导出 `analysis-brief.md`（自包含的证据简报，附回填格式说明）；
-2. 把简报交给大模型（或在 pi 会话中分析），按说明写 `ai-analysis.json` 放进报告目录，
-   带 `--ai-analysis` 重跑。意见渲染进独立的「AI 分析意见」区块，明确标注为非事实。
+- **"Recovered" downgrade (a factual exemption)**: a failed run or a rejected acceptance that has
+  a later successful settle (`settled`) on the same ticket is downgraded to medium and tagged
+  "recovered by a later run", with a link to the recovering run; never-recovered ones stay high.
+  The downgrade stops at medium — the work really was interrupted — and several incidents in a row
+  are never erased by one success: each stretch is judged on its own.
+- **"Corrected" tag**: an anomaly can carry a `refSeq` pointing at the record it corrects; when
+  the pointed-to record has been superseded by a later record of the same type on the same ticket,
+  the anomaly is downgraded to medium and tagged "corrected", and its derived evidence-missing
+  risk carries the "corrected" tag too. The correction basis is shown alongside, for human
+  re-check.
+- **Dead runRef detection**: a run reference whose runId is clearly not in the platform's run-id
+  shape is dead data from bookkeeping pollution — no platform evidence is probed for it, and it
+  takes no part in evidence-missing risk derivation; one `run-ref-dead` entry is left in the
+  forensics warnings for humans to check. The polluted dispatch event itself stays on the timeline
+  as recorded.
 
-## 测试
+## AI analysis layer (optional, two-step backfill)
+
+Deterministic checks can only find modelled anomalies; semantic contradictions across evidence are
+worth one LLM analysis pass. To keep fact and opinion layered, an offline two-step flow is used
+instead of online calls:
+
+1. `--ai-brief` exports `analysis-brief.md` (a self-contained evidence brief, with the backfill
+   format instructions appended);
+2. hand the brief to a language model (or analyse it in a pi session), write `ai-analysis.json`
+   per the instructions and rerun this tool — an `ai-analysis.json` in the report directory is
+   picked up automatically; if the file lives elsewhere, pass it via `--ai-analysis <file>`.
+
+Opinions render into a separate "AI analysis" section explicitly marked as non-fact: they are for
+hinting at cross-evidence contradictions and unmodelled risks — verify them against the evidence,
+do not take them as fact.
+
+## Tests
 
 ```bash
 node --test audit-report/collect.test.js
 ```
 
-测试使用合成 fixture（临时目录 + 假会话数据，自动清理），不依赖任何真实运行数据。
+Tests use synthetic fixtures (temp directories + fake session data, auto-cleaned) and depend on no
+real run data.
 
-## 数据源与关联
+## Data sources & correlation
 
-| 证据 | 位置 | 用途 |
+| Evidence | Location | Used for |
 |---|---|---|
-| 事件流 | `<运行目录>/events.jsonl` | 时间线、票状态机、运行 ID |
-| `final` 事件 | `<运行目录>/events.jsonl` 中的 `final` 事件 | 终审运行的 runId 与裁决：事件驱动路径的终审清单、成本桶与 findings 原文均由此定位（账上无 `final` 事件的旧账降级为下行的目录扫描） |
-| 平台证据四件套 | `~/.pi/agent/sessions/--<仓库路径>--/subagent-artifacts/<runId>_*` | 结构化输出、验收账、门禁输出、过程记录 |
-| 主会话 | `~/.pi/agent/sessions/--<仓库路径>--/*.jsonl` | 恢复每次派发任务书原文（平台 artifact 中的输入是红断占位，原文只在主会话） |
-| 票与 spec | `<repo>/.scratch/<slug>/` | 票面原文与标题 |
-| 评审材料 | `<运行目录>/reviews|findings/` | 评审输入 diff 与问题清单 |
-| git | 只读查询 | 提交存在性与主题 |
+| Event stream | `<run dir>/events.jsonl` | timeline, ticket state machine, run ids |
+| `final` event | the `final` events in `<run dir>/events.jsonl` | the final-review run's runId and verdict: on the event-driven path the final-review list, cost bucket and findings text are all located from here (ledgers without a `final` event fall back to the directory scan below) |
+| Platform evidence (the four) | `~/.pi/agent/sessions/--<repo path>--/subagent-artifacts/<runId>_*` | structured output, acceptance record, gate output, process transcript |
+| Main session | `~/.pi/agent/sessions/--<repo path>--/*.jsonl` | restores each dispatch brief's original text (the input task in platform artifacts is placeholder text; the original only exists in the main session) |
+| Tickets & spec | `<repo>/.scratch/<slug>/` | ticket text and titles |
+| Review material | `<run dir>/reviews|findings/` | review input diffs and findings lists |
+| git | read-only queries | commit existence and subjects |
 
-任何一层缺失都降级为页面标注与取证警告，不影响其余证据。
+Any missing layer degrades to a page annotation and a forensics warning; the rest of the evidence
+is unaffected.

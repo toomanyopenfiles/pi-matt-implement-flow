@@ -85,8 +85,8 @@ function readLedger(f) {
 }
 
 // --- 标准运行铺底：init + dispatch/settled/verdict（票 01）---
-
-function initRun(f) {
+// extra：追加 init 旗标（如票集边界 --tickets，票 04）；不传则维持零旗标的旧形态
+function initRun(f, extra = {}) {
   f.git('checkout -q -b feat/demo');
   const r = addAll(f, 'init', {
     branch: 'feat/demo',
@@ -95,6 +95,7 @@ function initRun(f) {
     spec: '.scratch/demo/spec.md',
     'test-command': 'npm test',
     tracker: 'local',
+    ...extra,
   });
   assert.equal(r.status, 0, r.stdout);
   return r;
@@ -1428,4 +1429,302 @@ test('旧账兼容：v=2 信封（含 final 事件、无 refSeq）的完整旧�
     '无 refSeq 的 anomaly 行渲染逐字不变（默认 payload 展开形态）'
   );
   assert.doesNotMatch(build.stdout, /↩/, '旧账不得凭空长出补正链指针');
+});
+
+// ====================================================================
+// 票号空间：tracker 原生编号（ADR-0004，ticket 01）
+// 归一化唯一转换点（normalizeTicket）：写入（--ticket / Blocked by 行）与核验（merge 令牌
+// 提取）共用；四位以上 issue number 正常入账，1–9 号补零显示为 01–09，混位数按数值排序。
+// ====================================================================
+
+test('票号空间：四位以上的 tracker 原生票号正常归一化入账（payload 存归一形态）', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '1042', '大号票');
+  initRun(f);
+  const r = addAll(f, 'dispatch', { ticket: '1042', key: 't-1042', 'run-id': 'aaaaaaaa' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.equal(readEvents(f).at(-1).payload.ticket, '1042', '写入侧：1042 经单一转换点入账为 1042');
+  assert.match(r.stdout, /ticket=1042/);
+});
+
+test('票号空间：仍拒绝非数字与非法形态（非数字 / 小数 / 负数 / 超位数上限），拒绝不入账', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  for (const bad of ['abc', '1.5', '-1', '1234567']) {
+    const r = addAll(f, 'dispatch', { ticket: bad, key: 't-bad', 'run-id': 'aaaaaaaa' });
+    assert.equal(r.status, 1, `非法票号 ${bad} 必须被拒`);
+    assert.match(r.stdout, /票号数字/);
+  }
+  assert.equal(readEvents(f).length, 1, '只有 init 一条——被拒载荷全部不入账');
+});
+
+test('票号空间：1–9 号补零为 07 形态，读写同过一个转换点自洽（令牌 7 核验归一为票 07）', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '7', '单号票');
+  initRun(f);
+  const r = addAll(f, 'dispatch', { ticket: '7', key: 't-7', 'run-id': 'aaaaaaaa' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.equal(readEvents(f).at(-1).payload.ticket, '07', '写入侧：--ticket 7 归一为 07');
+  // 核验侧同一转换点：git 历史里未补零的 ticket-7 令牌经归一化后与账上的 07 对上
+  mergeTicket(f, '7'); // 故意不记 merge 事件 → 对账必须报这条未入账合并
+  const r2 = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r2.status, 1);
+  assert.match(r2.stdout, /git 有票 07 的合并提交/, '令牌 7 与事件 ticket=07 同经归一化对上');
+  const md = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(md.status, 0, md.stdout);
+  assert.match(md.stdout, /\| 07 \| 单号票 \|/, '补零显示：表格行 ticket 列为 07');
+});
+
+test('票号空间：票表与前沿按数值排序——混位数（01 / 02 / 205 / 1042）顺序正确、Blocked by 多位号原样显示', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '1042', '大号票', { blockedBy: '205' });
+  writeTicketFile(f.dir, '205', '中号票', { blockedBy: '02' });
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '1042', key: 'k1', 'run-id': 'aaaaaaaa' });
+  addAll(f, 'dispatch', { ticket: '02', key: 'k2', 'run-id': 'bbbbbbbb' });
+  addAll(f, 'dispatch', { ticket: '205', key: 'k3', 'run-id': 'cccccccc' });
+  const r = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 0, r.stdout);
+  const rows = r.stdout
+    .split('\n')
+    .filter((l) => /^\| \d+ \|/.test(l))
+    .map((l) => /^\| (\d+) \|/.exec(l)[1]);
+  assert.deepEqual(rows, ['01', '02', '205', '1042'], '数值序——字典序会把 1042 排在 02 与 205 之间');
+  assert.match(r.stdout, /\| 1042 \| 大号票 \| claimed \| 205 \|/, 'blockedBy 的多位号引用原样显示');
+});
+
+test('票号空间：多位号 merge 全生命周期——令牌核验通过、check 扫描同归一（账实一致）', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '1042', '大号票');
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '1042', key: 'k1', 'run-id': 'aaaaaaaa' });
+  f.git('checkout -q -b ticket-1042');
+  const head = step(f, 'work 1042');
+  f.git('checkout -q feat/demo');
+  f.git('merge --no-ff -q -m "Merge ticket-1042: 大号票" ticket-1042');
+  const merge = f.git('rev-parse HEAD');
+  addAll(f, 'settled', { ticket: '1042', round: '1', 'head-sha': head });
+  addAll(f, 'verdict', { ticket: '1042', round: '1', verdict: 'approved' });
+  const ok = addAll(f, 'merge', { ticket: '1042', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(ok.status, 0, ok.stdout);
+  // 按协议收尾（关票 + 删分支）后：check 对 ticket-1042 令牌扫描归一为票 1042，账实一致
+  writeTicketFile(f.dir, '1042', '大号票', { status: 'resolved' });
+  f.git('branch -D ticket-1042');
+  const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 0, r.stdout);
+});
+
+test('票号空间：merge 门对多位号照旧执法——信息令牌缺失（ticket-104 ≠ 票 1042）→ 矛盾拒绝', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '1042', '大号票');
+  initRun(f);
+  addAll(f, 'dispatch', { ticket: '1042', key: 'k1', 'run-id': 'aaaaaaaa' });
+  f.git('checkout -q -b ticket-1042');
+  const head = step(f, 'work 1042');
+  f.git('checkout -q feat/demo');
+  f.git('merge --no-ff -q -m "Merge ticket-104: 少一位" ticket-1042');
+  const merge = f.git('rev-parse HEAD');
+  addAll(f, 'settled', { ticket: '1042', round: '1', 'head-sha': head });
+  addAll(f, 'verdict', { ticket: '1042', round: '1', verdict: 'approved' });
+  const bad = addAll(f, 'merge', { ticket: '1042', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stdout, /ticket-1042 令牌/);
+  assert.equal(readEvents(f).filter((e) => e.type === 'merge').length, 0);
+});
+
+test('票号空间：未入账合并扫描对多位号提取正确（ticket-205 历史提交 → 差异点名票 205）', (t) => {
+  const f = makeFixture(t);
+  writeTicketFile(f.dir, '205', '中号票');
+  initRun(f);
+  f.git('checkout -q -b ticket-205');
+  step(f, 'work 205');
+  f.git('checkout -q feat/demo');
+  f.git('merge --no-ff -q -m "Merge ticket-205: 中号票" ticket-205');
+  const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /git 有票 205 的合并提交/, '四位以下的多位号同样被扫描提取并点名');
+});
+
+// ====================================================================
+// 票集边界旗标（票 04）：init --tickets 可选票号清单——三层兜底的兜底层，
+// init 时冻结 run 的票集边界防中途偷加票。接缝①：旗标形态用例直喂 parseFlags
+// 纯函数；接受/冻结/对账行为走 CLI 黑盒（既有缝，fixture 仓）。
+// ====================================================================
+
+test('票集边界：--tickets 接受并归一化入账（去重 + 数值排序），台账头部与时间线如实渲染', (t) => {
+  const f = makeFixture(t);
+  const r = initRun(f, { tickets: '02, 01,1' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.equal(readEvents(f)[0].payload.tickets, '01,02', 'payload 存归一形态的逗号串');
+  const md = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(md.status, 0, md.stdout);
+  assert.match(md.stdout, /tickets: 01,02/, '头部有 tickets 行（冻结边界可见）');
+  assert.match(md.stdout, /tickets=01,02/, '时间线 init 行如实渲染旗标');
+});
+
+test('票集边界：旗标可选——旧形态（无 --tickets）零行为变化，台账无 tickets 行', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const md = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(md.status, 0, md.stdout);
+  assert.doesNotMatch(md.stdout, /tickets:/, '无旗标不渲染 tickets 行');
+  assert.doesNotMatch(md.stdout, /tickets=/, '时间线无旗标键');
+});
+
+test('票集边界：旗标形态非法一律拒绝——非数字 / 超 6 位 / 全空段 / 混入非法项，init 不入账', (t) => {
+  const f = makeFixture(t);
+  for (const bad of ['abc', '1234567', ',,', '01,x']) {
+    const r = addAll(f, 'init', {
+      branch: 'feat/demo',
+      'branch-base': 'main',
+      'baseline-sha': f.baseline(),
+      spec: '.scratch/demo/spec.md',
+      'test-command': 'npm test',
+      tracker: 'local',
+      tickets: bad,
+    });
+    assert.equal(r.status, 1, `--tickets ${bad} 必须被拒`);
+    assert.match(r.stdout, /票号列表/);
+  }
+  assert.ok(!fs.existsSync(f.eventsPath), 'init 全部被拒——事件流从未产生');
+});
+
+test('票集边界：冻结执法——边界外的票 dispatch / escalate 被拒（中途偷加票被拒），边界内照常', (t) => {
+  const f = makeFixture(t);
+  initRun(f, { tickets: '01,02' });
+  const ok = addAll(f, 'dispatch', { ticket: '02', key: 't-02', 'run-id': 'bbbbbbbb' });
+  assert.equal(ok.status, 0, ok.stdout);
+  const bad = addAll(f, 'dispatch', { ticket: '03', key: 't-03', 'run-id': 'cccccccc' });
+  assert.equal(bad.status, 1, '边界外的票不得派发');
+  assert.match(bad.stdout, /票集边界/);
+  assert.match(bad.stdout, /01,02/);
+  const esc = addAll(f, 'escalate', { ticket: '1042' });
+  assert.equal(esc.status, 1, '边界外的票同样不得升级');
+  assert.match(esc.stdout, /票集边界/);
+  assert.equal(readEvents(f).filter((e) => e.type !== 'init').length, 1, '被拒载荷全部不入账');
+});
+
+test('票集边界：对账盯住票文件——冻结后新出现的票文件报边界差异；无冻结的旧形态不报', (t) => {
+  const f = makeFixture(t);
+  initRun(f, { tickets: '01,02' });
+  writeTicketFile(f.dir, '03', '偷加票');
+  const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /票集边界外/);
+  const f2 = makeFixture(t);
+  initRun(f2);
+  writeTicketFile(f2.dir, '03', '普通新票');
+  const r2 = ledger(['check', '--runtime-dir', f2.runtime], { cwd: f2.dir });
+  assert.equal(r2.status, 0, r2.stdout, '无旗标 = 无冻结边界，票文件照旧枚举');
+});
+
+test('票集边界：对账兼住事件流——冻结后账上出现边界外票报差异；无冻结时只报既有缺文件差异', (t) => {
+  const f = makeFixture(t);
+  initRun(f, { tickets: '01,02' });
+  const head = f.baseline();
+  fs.appendFileSync(
+    f.eventsPath,
+    JSON.stringify({ v: 3, seq: 2, ts: new Date().toISOString(), head, type: 'dispatch', payload: { ticket: '03', key: 't-03', runId: 'aaaaaaaa' } }) + '\n'
+  );
+  const r = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /票集边界内/);
+  const f2 = makeFixture(t);
+  initRun(f2);
+  fs.appendFileSync(
+    f2.eventsPath,
+    JSON.stringify({ v: 3, seq: 2, ts: new Date().toISOString(), head: f2.baseline(), type: 'dispatch', payload: { ticket: '03', key: 't-03', runId: 'aaaaaaaa' } }) + '\n'
+  );
+  const r2 = ledger(['check', '--runtime-dir', f2.runtime], { cwd: f2.dir });
+  assert.equal(r2.status, 1);
+  assert.match(r2.stdout, /票文件缺失/, '无冻结时维持既有对账口径');
+  assert.doesNotMatch(r2.stdout, /票集边界/);
+});
+
+test('票集边界：旗标形态纯函数档——parseFlags 对 tickets 的接受 / 归一 / 拒绝三档', (t) => {
+  const { parseFlags } = require('./ledger-schema.js');
+  const ok = parseFlags(['--tickets', '02, 01,1'], 'init');
+  assert.ok(
+    ok.errors.every((e) => /缺少必选参数/.test(e)),
+    `tickets 本身不产生错误（其余为缺必选参数档）：${ok.errors.join('; ')}`
+  );
+  assert.equal(ok.payload.tickets, '01,02', '归一 + 去重 + 数值排序的规范逗号串');
+  const rejected = parseFlags(['--tickets', '01,x'], 'init');
+  assert.ok(
+    rejected.errors.some((e) => /票号列表/.test(e)),
+    `非法形态被拒：${rejected.errors.join('; ')}`
+  );
+  // 旗标不属于其他事件类型：dispatch 上给 --tickets 照样被拒
+  const stray = parseFlags(['--ticket', '01', '--key', 'k', '--run-id', 'aaaaaaaa', '--tickets', '01'], 'dispatch');
+  assert.equal(stray.errors.length, 1);
+  assert.match(stray.errors[0], /不属于事件 dispatch/);
+});
+
+// ====================================================================
+// tracker 快照（tracker=github）：真相层枚举零形态分叉
+// ——快照票文件即"票文件"（spec 明文），dirname(spec)/issues/ 枚举对快照同样生效
+// ====================================================================
+
+function writeSnapshotLayout(dir, runtimeSlug = 'demo') {
+  const tracker = path.join(dir, '.pi/matt-implement', runtimeSlug, 'tracker');
+  fs.mkdirSync(path.join(tracker, 'issues'), { recursive: true });
+  fs.writeFileSync(
+    path.join(tracker, 'spec.md'),
+    '# Spec: github 一等公民\n\nSource: https://github.com/o/r/issues/1040\n\n**Status:** ready-for-agent\n\n**Type:** spec\n'
+  );
+  fs.writeFileSync(
+    path.join(tracker, 'issues', '1042-snapshot-a.md'),
+    '# 1042: 快照票甲\n\n**Status:** ready-for-agent\n\n**Blocked by:** —\n'
+  );
+  fs.writeFileSync(
+    path.join(tracker, 'issues', '1043-snapshot-b.md'),
+    '# 1043: 快照票乙\n\n**Status:** resolved\n\n**Blocked by:** 1042\n'
+  );
+  return tracker;
+}
+
+function initGithubRun(f, extra = {}) {
+  f.git('checkout -q -b feat/demo');
+  const r = addAll(f, 'init', {
+    branch: 'feat/demo',
+    'branch-base': 'main',
+    'baseline-sha': f.baseline(),
+    spec: '.pi/matt-implement/demo/tracker/spec.md',
+    'test-command': 'npm test',
+    tracker: 'github',
+    ...extra,
+  });
+  assert.equal(r.status, 0, r.stdout);
+  return r;
+}
+
+test('tracker=github 快照：init --spec 指向快照 spec.md → 票表按快照票文件再生，枚举不降级', (t) => {
+  const f = makeFixture(t, { tickets: false });
+  writeSnapshotLayout(f.dir);
+  const r = initGithubRun(f);
+  assert.doesNotMatch(r.stdout, /仅支持本地/, '记账时刻不得出现失实降级警告');
+
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(build.status, 0, build.stdout);
+  assert.match(build.stdout, /tracker: github/);
+  assert.match(build.stdout, /\| 1042 \| 快照票甲 \|/, '快照票文件进票表——对账强度与 local 等价');
+  assert.match(build.stdout, /\| 1043 \| 快照票乙 \|/, '多位号快照票同样进票表');
+  assert.match(build.stdout, /^spec: \.pi\/matt-implement\/demo\/tracker\/spec\.md$/m, 'init --spec 如实展示（即快照的 spec.md）');
+  assert.doesNotMatch(build.stdout, /仅支持本地 markdown tracker 枚举/, '失实文案已修——快照不再是枚举死角');
+
+  // 对账走同一真相层：快照票文件的 Status 漂移逐条可见（账上无 merge 的 resolved 票）
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(check.status, 1);
+  assert.match(check.stdout, /票 1043 文件 Status 为 resolved，账上无 merge\/escalate 事件/);
+  assert.doesNotMatch(check.stdout, /仅支持本地/);
+});
+
+test('tracker=github 快照：封账门同样吃快照票文件——未闭环快照票阻塞封账，spec 母票豁免', (t) => {
+  const f = makeFixture(t, { tickets: false });
+  writeSnapshotLayout(f.dir);
+  initGithubRun(f);
+  const close = addAll(f, 'close', {});
+  assert.equal(close.status, 1, '未闭环的快照票必须阻塞封账');
+  assert.match(close.stdout, /票 1042/, '快照票文件即票文件——封账门逐票列出');
+  assert.match(close.stdout, /票 1043/);
 });

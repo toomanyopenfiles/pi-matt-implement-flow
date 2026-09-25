@@ -18,6 +18,7 @@ English | [简体中文](./README.zh-CN.md)
 6. **A whole-branch final review** — after the last ticket merges, the entire feature branch is reviewed once more for what single-ticket reviews cannot see: cross-file drift, components contradicting each other, spec requirements no ticket implemented, docs that no longer match the code.
 7. **Interrupted runs resume** — a run's progress is recorded in a local run directory inside your repo; after an interruption or context compaction it continues from the recorded state, not from memory.
 8. **Stuck tickets never block the rest** — a ticket that exhausts its fix budget is handed to you when the run ends; everything else keeps moving. With a GitHub remote, the run opens a draft PR at the start and marks it ready for review at the end.
+9. **GitHub Issues as a first-class tracker** — with the tracker on GitHub, the flow keeps local-markdown strength: the spec and every ticket are pulled into a local tracker snapshot at init, so dispatch, review, ledger, and reconciliation all read and write local paths; the spec issue is claimed up front so two sessions cannot silently race the same feature; and all tracker progress lands in one idempotent sync before the run seals. Local markdown runs behave exactly as before.
 
 ## Requirements
 
@@ -166,6 +167,10 @@ Every run writes a local run directory, `.pi/matt-implement/<feature>/`:
 - The path is gitignored and never enters version control. This is run data, not a cache — do not delete it while a run is active or might be resumed.
 - `ledger.md` and `events.jsonl` are maintained by the flow; do not hand-edit them. Notes belong in `notes.md`.
 - After the run, once only the branch / PR matters, keep the directory as a record or clean it up — your call.
+
+## Audit report
+
+Audit a finished run after the fact: [`audit-report/`](./audit-report/README.md) turns the run directory into a browsable static report site — zero LLM calls, the main flow untouched.
 
 ## License
 

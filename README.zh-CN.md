@@ -6,7 +6,7 @@
 
 上游照旧：`/grill-with-docs` → `/to-spec` → `/to-tickets`。本包接手最后一步——按 ticket 依赖图实现，把实现、review、测试在一条命令里做完。
 
-English | [简体中文](./README.zh-CN.md)
+[English](./README.md) | 简体中文
 
 ## 核心能力
 
@@ -18,6 +18,7 @@ English | [简体中文](./README.zh-CN.md)
 6. **整分支 final review**——全部 ticket 合完后，对整条 feature 分支再审一次，专门看单张 ticket 看不见的问题：跨文件漂移、组件互相矛盾、spec 里有要求却没有 ticket 承接、文档和实现对不上。
 7. **中断可续跑**——一次 run 的进度记录在仓库本地的运行目录里；会话中断或上下文被压缩后，从已记录的状态继续，不用凭记忆重来。
 8. **修不完不卡全局**——单张 ticket 修复次数用尽后，在 run 结束时交给你处理，其余 ticket 继续走。仓库有 GitHub 远端时，run 开始会开一个 draft PR，全部完成后标为可审查。
+9. **GitHub Issues 也是一等公民 tracker**——tracker 用 GitHub 时流程强度与 local markdown 相同：run 在初始化阶段把 spec 与全部工单拉取为本地 tracker 快照，派发、评审、账本、对账全链路读写本地路径；spec issue 先占坑，两个会话无法悄悄抢跑同一 feature；全部 tracker 进度攒到封账前一次幂等同步推送。local markdown 的 run 行为零变化。
 
 ## 环境要求
 
@@ -166,6 +167,10 @@ flowchart TD
 - 路径已写入 `.gitignore`，不会进版本库。这是运行数据，不是缓存——run 进行中或还打算续跑时，不要删。
 - `ledger.md` 和 `events.jsonl` 由流程维护，不要手工修改；想留备注写到 `notes.md`。
 - 跑完后如果只关心 feature 分支 / PR，目录可以留作记录，也可以自行清理。
+
+## 审计报告
+
+跑完可以做事后审计：[`audit-report/`](./audit-report/README.zh-CN.md) 把运行目录生成为可浏览的静态报告网站——零大模型调用，主流程零改动。
 
 ## 许可证
 

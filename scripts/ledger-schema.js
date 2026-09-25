@@ -31,6 +31,7 @@ const FLAG_TO_KEY = {
   spec: 'spec',
   'test-command': 'testCommand',
   tracker: 'tracker',
+  tickets: 'tickets',
   reviewer: 'reviewer',
   'max-fix-rounds': 'maxFixRounds',
   'max-concurrent': 'maxConcurrent',
@@ -59,7 +60,9 @@ const EVENT_TYPES = {
     required: ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand', 'tracker'],
     // 可选流程形态快照：reviewer=on|off、maxFixRounds、maxConcurrent。
     // 省略 = 默认形态（on / 2 / 3）——旧账本自然兼容。
-    optional: ['reviewer', 'maxFixRounds', 'maxConcurrent'],
+    // 可选票集边界（票 04）：init 票号清单——三层兜底的兜底层，init 时冻结 run 的票集边界
+    // （此后边界外的票号记账被拒，中途偷加票被拒）。省略 = 无冻结边界（旧形态零变化）。
+    optional: ['reviewer', 'maxFixRounds', 'maxConcurrent', 'tickets'],
   },
   dispatch: { required: ['ticket', 'key', 'runId'], optional: ['worktree', 'note'] },
   settled: { required: ['ticket', 'round', 'headSha'], optional: ['worktree', 'gate', 'note'] },
@@ -80,10 +83,29 @@ const EVENT_TYPES = {
   close: { required: [], optional: ['note'] },
 };
 
-// 票号归一：'1' → '01'（与票文件名、merge 令牌 ticket-NN 对齐）
+// 票号归一（单一转换点，ADR-0004）：票号一律采用 tracker 原生编号——local 是 feature 局部
+// 两位序号（'1' → '01'，与票文件名、merge 令牌 ticket-01 对齐），github 是 issue number，
+// 可达四位以上。1–9 号补零显示为 '01'–'09'；写入（parseFlags、Blocked by 行）与核验
+// （merge 令牌提取）共用本函数，两侧得到同一表示。位数上限放宽到 6 位：覆盖现实的
+// issue number 量级，再长按非法形态拒绝（也防超长数字串在 Number() 下失真）。
 function normalizeTicket(v) {
-  if (!/^\d{1,3}$/.test(String(v))) return null;
+  if (!/^\d{1,6}$/.test(String(v))) return null;
   return String(Number(v)).padStart(2, '0');
+}
+
+// 票号清单旗标（票集边界，票 04）的单一转换点：逗号分隔的票号列表 → 归一化、去重、
+// 数值排序后的规范数组。任一 token 非法（非数字 / 小数 / 负数 / 超 6 位 / 空段）或整体
+// 为空时返回 null——调用方按「旗标不可用」处理。写入（parseFlags 的形态档）与读取
+//（gateAdd 冻结执法、reconcile 边界对账）共用本函数，两侧得到同一集合。
+function ticketSetList(value) {
+  if (value == null || !String(value).trim()) return null;
+  const seen = new Set();
+  for (const tok of String(value).split(',')) {
+    const n = normalizeTicket(tok.trim());
+    if (!n) return null;
+    seen.add(n);
+  }
+  return [...seen].sort((a, b) => Number(a) - Number(b));
 }
 
 // refSeq（anomaly 的补正链指针，票 03）的数值形态：旗标值按原文入账（字符串，与 round 同惯例），
@@ -148,12 +170,24 @@ function parseFlags(tokens, typeName) {
   }
   if ('ticket' in payload) {
     const n = normalizeTicket(payload.ticket);
-    if (!n) errors.push(`ticket 必须是票号数字（如 01），得到：${payload.ticket}`);
+    if (!n) errors.push(`ticket 必须是票号数字（如 01 或 1042），得到：${payload.ticket}`);
     else payload.ticket = n;
   }
   for (const key of ['round', 'fixNo', 'maxFixRounds', 'maxConcurrent', 'refSeq']) {
     if (key in payload && !/^[1-9]\d*$/.test(String(payload[key]))) {
       errors.push(`${key} 必须是正整数（>=1），得到：${payload[key]}`);
+    }
+  }
+  // 票号清单旗标（票 04）：形态档——逗号分隔的票号列表；非法形态 / 空集合拒绝。
+  // 规范形态（归一 + 去重 + 数值排序的逗号串）经 ticketSetList 写入，读取侧同用它展开。
+  if ('tickets' in payload) {
+    const list = ticketSetList(payload.tickets);
+    if (!list) {
+      errors.push(
+        `tickets 必须是逗号分隔的票号列表（如 01,02,1042），得到：${payload.tickets}`
+      );
+    } else {
+      payload.tickets = list.join(',');
     }
   }
   for (const key of ['headSha', 'mergeSha', 'baselineSha']) {
@@ -184,6 +218,7 @@ module.exports = {
   KEY_TO_FLAG,
   normalizeTicket,
   refSeqNumber,
+  ticketSetList,
   parseFlags,
   makeEnvelope,
 };

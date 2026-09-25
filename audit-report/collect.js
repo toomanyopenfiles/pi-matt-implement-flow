@@ -20,6 +20,8 @@ const os = require('os');
 const { execFileSync } = require('child_process');
 // refSeq 的数值形态经 schema 的单一转换点归一（与写点校验、check 对账共用同一实现）
 const { refSeqNumber } = require('../scripts/ledger-schema');
+// 全部面向人类的文案走 i18n（lang 归一后贯穿收集侧派生文本：风险、告警、恢复说明）
+const { makeT, roleLabel } = require('./i18n');
 
 const MAX_TEXT = 400 * 1024; // 单文件收录上限，超出截断并标注
 
@@ -59,15 +61,16 @@ function resolvePayloadPath(repoPath, p) {
 
 // ---------------------------------------------------------------- 事件流
 
-function parseEvents(runtimeDir, warnings) {
+function parseEvents(runtimeDir, ctx) {
+  const T = makeT(ctx.lang);
   const file = path.join(runtimeDir, 'events.jsonl');
   if (!fs.existsSync(file)) {
-    warn(warnings, 'events-missing', `事件流不存在：${file}`);
+    warn(ctx.warnings, 'events-missing', T('warn.events-missing', { file }));
     return [];
   }
   const raw = readText(file);
   if (!raw || typeof raw.text !== 'string') {
-    warn(warnings, 'events-unreadable', `事件流不可读：${file}`);
+    warn(ctx.warnings, 'events-unreadable', T('warn.events-unreadable', { file }));
     return [];
   }
   const events = [];
@@ -76,7 +79,7 @@ function parseEvents(runtimeDir, warnings) {
     try {
       events.push(JSON.parse(line));
     } catch (e) {
-      warn(warnings, 'event-parse', `第 ${i + 1} 行不是合法 JSON，已跳过`);
+      warn(ctx.warnings, 'event-parse', T('warn.event-parse', { line: i + 1 }));
     }
   }
   events.sort((a, b) => (a.seq || 0) - (b.seq || 0));
@@ -91,13 +94,7 @@ const RUN_ROLE_BY_TYPE = {
   verdict: 'reviewer',
 };
 
-// 角色 → 中文标签：全工具唯一共享表（collect 与 render 共用，避免双表漂移）
-const ROLE_LABEL = {
-  coder: '实现者',
-  'coder-resume': '实现者（续跑）',
-  reviewer: '评审者',
-  'final-reviewer': '终审',
-};
+// 角色标签单一来源在 i18n（roleLabel），collect 与 render 共用，避免双表漂移。
 
 function emptyTicket(id) {
   return { id, title: null, file: null, dispatches: [], settles: [], verdicts: [], fixes: [], merges: [] };
@@ -194,7 +191,8 @@ function splitRunRefs(runRefs) {
 
 // ---------------------------------------------------------------- 票标题与票面
 
-function loadTicketFiles(runtimeDir, repoPath, run, tickets, warnings) {
+function loadTicketFiles(runtimeDir, repoPath, run, tickets, ctx) {
+  const T = makeT(ctx.lang);
   const slug = path.basename(runtimeDir);
   const specPath = run.init && run.init.spec ? run.init.spec : null;
   // spec 形如 .scratch/<slug>/spec.md → issues 目录是其同级 issues/
@@ -205,7 +203,7 @@ function loadTicketFiles(runtimeDir, repoPath, run, tickets, warnings) {
   for (const t of tickets.values()) {
     const prefix = `${String(t.id).padStart(2, '0')}-`;
     const hit = files.find((f) => f.startsWith(prefix));
-    if (!hit) { warn(warnings, 'ticket-file-missing', `票 ${t.id} 的票文件未找到（${issuesDir} 下无 ${prefix}*）`); continue; }
+    if (!hit) { warn(ctx.warnings, 'ticket-file-missing', T('warn.ticket-file-missing', { id: t.id, dir: issuesDir, prefix })); continue; }
     const abs = path.join(issuesDir, hit);
     t.file = abs;
     const content = readText(abs, { max: 64 * 1024 });
@@ -228,11 +226,12 @@ function sessionDirName(repoPath) {
   return '--' + repoPath.split(path.sep).filter(Boolean).join('-') + '--';
 }
 
-function artifactDirCandidates(repoPath, warnings) {
+function artifactDirCandidates(repoPath, ctx) {
+  const T = makeT(ctx.lang);
   const root = sessionsRoot();
   const primary = path.join(root, sessionDirName(repoPath), 'subagent-artifacts');
   if (fs.existsSync(primary)) return [primary];
-  warn(warnings, 'artifact-dir-primary-missing', `按仓库路径推导的会话目录不存在：${primary}，尝试全局兜底扫描`);
+  warn(ctx.warnings, 'artifact-dir-primary-missing', T('warn.artifact-dir-primary-missing', { dir: primary }));
   // 全局兜底：收集所有含 subagent-artifacts 的会话目录
   const out = [];
   try {
@@ -241,7 +240,7 @@ function artifactDirCandidates(repoPath, warnings) {
       if (fs.existsSync(cand)) out.push(cand);
     }
   } catch (e) {
-    warn(warnings, 'sessions-root-unreadable', `会话根目录不可读：${root}`);
+    warn(ctx.warnings, 'sessions-root-unreadable', T('warn.sessions-root-unreadable', { dir: root }));
   }
   return out;
 }
@@ -258,7 +257,8 @@ function findFilesForRun(candidates, runId) {
 
 // ---------------------------------------------------------------- 主会话：恢复派发任务书原文
 
-function mainSessionCandidates(repoPath, runIds, warnings) {
+function mainSessionCandidates(repoPath, runIds, ctx) {
+  const T = makeT(ctx.lang);
   const dir = path.join(sessionsRoot(), sessionDirName(repoPath));
   if (!fs.existsSync(dir)) return [];
   const needles = runIds.slice(0, 3); // 用前几个 runId 做内容预筛，避免逐行解析全部历史
@@ -269,7 +269,7 @@ function mainSessionCandidates(repoPath, runIds, warnings) {
     try {
       const stat = fs.statSync(abs);
       if (stat.size > 64 * 1024 * 1024) {
-        warn(warnings, 'session-file-too-large', `主会话文件超过 64MB，跳过：${f}`);
+        warn(ctx.warnings, 'session-file-too-large', T('warn.session-file-too-large', { file: f }));
         continue;
       }
       const buf = fs.readFileSync(abs);
@@ -338,10 +338,13 @@ function findBriefFor(briefs, key, eventTs) {
 
 // ---------------------------------------------------------------- 子代理运行证据
 
-function loadChildRun(dirs, ref, warnings) {
+function loadChildRun(dirs, ref, ctx) {
+  const T = makeT(ctx.lang);
   const hit = findFilesForRun(dirs, ref.runId);
   if (!hit) {
-    warn(warnings, 'run-evidence-missing', `运行 ${ref.runId}（${ref.role}${ref.ticket && ref.ticket !== 'final' ? `，票 ${ref.ticket}` : '，run 级终审'}）未找到平台侧证据`);
+    // 中文逐字基线：角色用原始 role 码（如 coder），归属文本随语言走
+    const refText = ref.ticket && ref.ticket !== 'final' ? T('ref.ticket', { ticket: ref.ticket }) : T('ref.final');
+    warn(ctx.warnings, 'run-evidence-missing', T('warn.run-evidence-missing', { runId: ref.runId, ctx: T('warn.ctx', { role: ref.role, ref: refText }) }));
     return { runId: ref.runId, found: false };
   }
   const { dir, files } = hit;
@@ -408,7 +411,7 @@ function loadChildRun(dirs, ref, warnings) {
             if (a.task || a.workflowScript) {
               nested.push({
                 ts: rec.timestamp || null,
-                agent: a.agent || (a.workflowScript ? '(编排脚本)' : '(未知)'),
+                agent: a.agent || (a.workflowScript ? T('run.nestedAgentScript') : T('run.nestedAgentUnknown')),
                 excerpt: String(a.task || a.workflowScript || '').slice(0, 500),
               });
             }
@@ -428,7 +431,7 @@ function loadChildRun(dirs, ref, warnings) {
 // 事件驱动路径（ADR-0002 Decision 8）：终审运行引用直接取自 final 事件的 runId，
 // 裁决也取自事件（裁决权威在事件流）。不扫目录，因此时间窗过滤不适用——
 // 不存在“同项目历史终审混入”的问题，也不存在与降级路径双计的问题。
-function finalReviewsFromEvents(finals, candidates, warnings) {
+function finalReviewsFromEvents(finals, candidates, ctx) {
   return finals.map((f, i) => {
     const ref = { runId: f.runId, ticket: 'final', key: `final-r${i + 1}`, role: 'final-reviewer', seq: f.seq, ts: f.ts };
     // 死 runRef 分流同样适用于终审路径（与 runRefs 同一机判）：runId 存在但不是 UUID 形状
@@ -437,7 +440,7 @@ function finalReviewsFromEvents(finals, candidates, warnings) {
     // runId 缺失的残缺记账不在此列（照旧走证据探测并告警）。
     const child = f.runId && !isUuidRunId(f.runId)
       ? { runId: f.runId, found: false, deadRunRef: true }
-      : loadChildRun(candidates, ref, warnings);
+      : loadChildRun(candidates, ref, ctx);
     return {
       ...child,
       source: 'event',
@@ -452,7 +455,7 @@ function finalReviewsFromEvents(finals, candidates, warnings) {
 }
 
 // 降级路径（无 final 事件的旧账）：现有「目录名扫描 + 时间窗过滤」行为不变。
-function findFinalReviews(candidates, timeWindow) {
+function findFinalReviews(candidates, timeWindow, ctx) {
   const out = [];
   for (const dir of candidates) {
     let files;
@@ -463,7 +466,7 @@ function findFinalReviews(candidates, timeWindow) {
     for (const runId of runIds) {
       const ref = { runId, ticket: 'final', key: 'final-review', role: 'final-reviewer', seq: null, ts: null };
       // findFinalReviews 直接读取，不产生「证据缺失」警告
-      const run = loadChildRun([dir], ref, []);
+      const run = loadChildRun([dir], ref, { ...ctx, warnings: [] });
       if (!run.found) continue;
       // 只收本次流程时间窗内的终审运行，避免混入同项目其他会话的历史终审
       if (timeWindow && run._metaTs != null && (run._metaTs < timeWindow.start - 5000 || run._metaTs > timeWindow.end + 5000)) continue;
@@ -491,6 +494,7 @@ function gitFacts(repoPath, shas) {
 // ---------------------------------------------------------------- 确定性风险推导
 
 function deriveRisks(model) {
+  const T = makeT(model.lang);
   const risks = [];
   const add = (severity, title, detail, evidence) => risks.push({ severity, title, detail, evidence: evidence || [] });
   // 分流规则只有 splitRunRefs 一处实现：collect 顶层已分流（model.runRefs 即 live），
@@ -505,9 +509,9 @@ function deriveRisks(model) {
     const c = model.childRuns[r.runId];
     if (c && c.found && c.exitCode != null && c.exitCode !== 0) {
       const rec = recoveryFor(model, r, incidents);
-      add(rec ? 'medium' : 'high', `一次 ${roleName(r.role)}运行以失败告终（退出码 ${c.exitCode}）${rec ? RECOVERED_TAG : ''}`,
-        `${ticketRef(r)}（key ${r.key || '—'}）的这次运行失败或超时。台账只记最终结果，过程中的失败在此原样暴露。${recoveryNote(rec)}`,
-        [{ label: '运行', ref: r.runId }, ...(r.ticket === 'final' ? [] : [{ label: '票', ref: `ticket-${r.ticket}.html` }]), ...recoveryEvidence(rec)]);
+      add(rec ? 'medium' : 'high', T('risk.r1.title', { role: roleLabel(model.lang, r.role), exit: c.exitCode, tag: rec ? T('risk.recoveredTag') : '' }),
+        T('risk.r1.detail', { ref: ticketRef(T, r), key: r.key || '—', recovery: recoveryNote(T, rec) }),
+        [{ label: T('ev.run'), ref: r.runId }, ...(r.ticket === 'final' ? [] : [{ label: T('ev.ticket'), ref: `ticket-${r.ticket}.html` }]), ...recoveryEvidence(T, rec)]);
     }
   }
   // R2 验收被拒
@@ -515,9 +519,9 @@ function deriveRisks(model) {
     const c = model.childRuns[r.runId];
     if (c && c.found && c.acceptance && /reject/i.test(String(c.acceptance.status))) {
       const rec = recoveryFor(model, r, incidents);
-      add(rec ? 'medium' : 'high', `一次 ${roleName(r.role)}运行的验收被拒收（${c.acceptance.status}）${rec ? RECOVERED_TAG : ''}`,
-        `${ticketRef(r)}：平台验收检查未通过（可能缺证据、报告形状不对或门禁失败）。工作可能已完成但被要求重报。${recoveryNote(rec)}`,
-        [{ label: '运行', ref: r.runId }, ...recoveryEvidence(rec)]);
+      add(rec ? 'medium' : 'high', T('risk.r2.title', { role: roleLabel(model.lang, r.role), status: c.acceptance.status, tag: rec ? T('risk.recoveredTag') : '' }),
+        T('risk.r2.detail', { ref: ticketRef(T, r), recovery: recoveryNote(T, rec) }),
+        [{ label: T('ev.run'), ref: r.runId }, ...recoveryEvidence(T, rec)]);
     }
   }
   // R3 异常记录
@@ -526,37 +530,37 @@ function deriveRisks(model) {
     if (fix) {
       // 已补正（票 03）：anomaly 带 refSeq 且被指向事件同票后续有补正记录——留痕不删除，
       // 只把报告口径降为 medium 并标注处置状态（降级依据必须可复核）。
-      add('medium', `编排器记了一条异常（序号 ${a.seq}）——已补正`,
-        `${a.note}｜补正依据：本异常指向的 seq ${fix.target.seq}（${fix.target.type}，票 ${fix.target.payload.ticket}）在 seq ${fix.correction.seq} 有同类型后续记录取代之；异常留痕保留，仅报告口径降级。`,
-        [{ label: '事件', ref: `seq ${a.seq}` }, { label: '补正', ref: `seq ${fix.correction.seq}` }]);
+      add('medium', T('risk.r3.titleCorrected', { seq: a.seq }),
+        T('risk.r3.detailCorrected', { note: a.note, tseq: fix.target.seq, ttype: fix.target.type, tticket: fix.target.payload.ticket, cseq: fix.correction.seq }),
+        [{ label: T('ev.event'), ref: `seq ${a.seq}` }, { label: T('ev.correction'), ref: `seq ${fix.correction.seq}` }]);
     } else {
-      add('high', `编排器记了一条异常（序号 ${a.seq}）`, a.note, [{ label: '事件', ref: `seq ${a.seq}` }]);
+      add('high', T('risk.r3.title', { seq: a.seq }), a.note, [{ label: T('ev.event'), ref: `seq ${a.seq}` }]);
     }
   }
   // R4 升级
   for (const e of model.run.escalates) {
-    add('medium', `票 ${e.ticket} 被升级给维护者`, e.note || '修复预算耗尽，票未关闭，移交人工裁决。', [{ label: '事件', ref: `seq ${e.seq}` }]);
+    add('medium', T('risk.r4.title', { ticket: e.ticket }), e.note || T('risk.r4.defaultDetail'), [{ label: T('ev.event'), ref: `seq ${e.seq}` }]);
   }
   // R5 修复预算耗尽
   const budget = model.run.init && model.run.init.maxFixRounds != null ? Number(model.run.init.maxFixRounds) : 2;
   for (const t of model.tickets.values()) {
     if (t.fixes.length >= budget && !model.run.escalates.some((e) => e.ticket === t.id)) {
-      add('medium', `票 ${t.id} 的修复轮数用满预算（${t.fixes.length}/${budget}）`,
-        '该票在评审与修复之间反复多次，值得回看每轮问题清单是否在收敛。',
-        [{ label: '票', ref: `ticket-${t.id}.html` }]);
+      add('medium', T('risk.r5.title', { id: t.id, used: t.fixes.length, budget }),
+        T('risk.r5.detail'),
+        [{ label: T('ev.ticket'), ref: `ticket-${t.id}.html` }]);
     }
   }
   // R6 未封账
   if (!model.run.sealed) {
-    add('medium', '运行未封账', '事件流中没有 close 记账，运行可能中途停止或仍进行中——报告反映的可能不是终局。', []);
+    add('medium', T('risk.r6.title'), T('risk.r6.detail'), []);
   }
   // R7 带伤封账：封账时最新终审裁决为 not_ready（用户拍板放弃的合法出口，但代码带着已知问题收场）
   const finals = model.run.finals || [];
   const latestFinal = finals.length ? finals[finals.length - 1] : null;
   if (model.run.sealed && latestFinal && latestFinal.finalVerdict === 'not_ready') {
-    add('medium', '封账时最新终审裁决为 not_ready（带伤封账）',
-      '整分支终审判定未就绪，运行仍被封账——多半是用户拍板放弃的合法出口，但代码带着已知问题收场，值得回看终审问题清单。',
-      [{ label: '事件', ref: `seq ${latestFinal.seq}` }, { label: '运行', ref: latestFinal.runId }]);
+    add('medium', T('risk.r7.title'),
+      T('risk.r7.detail'),
+      [{ label: T('ev.event'), ref: `seq ${latestFinal.seq}` }, { label: T('ev.run'), ref: latestFinal.runId }]);
   }
   // R8 证据缺失（死 runRef 已在上游分流，此处只判活运行）。两种机制共存：形状合法但错值的
   // runId（复制粘贴污染）机判覆盖不到，其衍生风险照旧存活——若 anomaly.refSeq 指向引入它的
@@ -565,18 +569,18 @@ function deriveRisks(model) {
   const correctedMissing = missing.filter((r) => corrections.has(r.seq));
   const plainMissing = missing.filter((r) => !corrections.has(r.seq));
   if (plainMissing.length) {
-    add('low', `${plainMissing.length} 次运行的平台侧证据缺失`, '可能已被平台清理或落在其他项目的会话目录。相关票页会标注证据不可用，时间线与 git 事实不受影响。',
-      plainMissing.slice(0, 5).map((r) => ({ label: '运行', ref: r.runId })));
+    add('low', T('risk.r8.title', { count: plainMissing.length }), T('risk.r8.detail'),
+      plainMissing.slice(0, 5).map((r) => ({ label: T('ev.run'), ref: r.runId })));
   }
   if (correctedMissing.length) {
-    add('low', `${correctedMissing.length} 次运行的平台侧证据缺失${CORRECTED_TAG}`,
-      '这些运行引用已被 anomaly 的补正记录取代（指向事件的同票同类型后续记录）——平台证据缺失是记账污染的残留，不是运行时事实；风险本体保留供核对，补正依据见引用。',
+    add('low', T('risk.r8.titleCorrected', { count: correctedMissing.length, tag: T('risk.correctedTag') }),
+      T('risk.r8.detailCorrected'),
       correctedMissing.slice(0, 5).flatMap((r) => {
         const fix = corrections.get(r.seq);
         return [
-          { label: '运行', ref: r.runId },
-          { label: '异常', ref: `seq ${fix.anomaly.seq}` },
-          { label: '补正', ref: `seq ${fix.correction.seq}` },
+          { label: T('ev.run'), ref: r.runId },
+          { label: T('ev.anomaly'), ref: `seq ${fix.anomaly.seq}` },
+          { label: T('ev.correction'), ref: `seq ${fix.correction.seq}` },
         ];
       }));
   }
@@ -589,14 +593,16 @@ function deriveRisks(model) {
     }
   }
   if (noBrief.length) {
-    add('low', `${noBrief.length} 次派发的任务书原文未恢复`, `主会话数据中未匹配到这些派发的脚本原文（${noBrief.slice(0, 5).join('、')}${noBrief.length > 5 ? '…' : ''}）。其余证据不受影响。`, []);
+    add('low', T('risk.r9.title', { count: noBrief.length }),
+      T('risk.r9.detail', { list: `${noBrief.slice(0, 5).join(T('risk.listSep'))}${noBrief.length > 5 ? '…' : ''}` }), []);
   }
   // R10 需修改裁决多
   for (const t of model.tickets.values()) {
     const cr = t.verdicts.filter((v) => v.verdict === 'changes_requested').length;
     if (cr >= 2) {
-      add('low', `票 ${t.id} 有 ${cr} 轮评审要求修改`, '多轮返工不一定有问题，但值得对照各轮问题清单看修复质量。',
-        [{ label: '票', ref: `ticket-${t.id}.html` }]);
+      add('low', T('risk.r10.title', { id: t.id, count: cr }),
+        T('risk.r10.detail'),
+        [{ label: T('ev.ticket'), ref: `ticket-${t.id}.html` }]);
     }
   }
   const order = { high: 0, medium: 1, low: 2 };
@@ -613,10 +619,9 @@ function deriveRisks(model) {
 // 设计红线：事实性豁免而非补偿性豁免——降级只到 medium（工作确实被打断过）、detail 必须给出
 // 恢复运行的引用、风险本体不删除；拒绝→拒绝→成功不被一次成功抹平（前一次失败之后的下一个
 // 同票事实仍是失败，故它维持 high，只有各自有后续恢复的那次才降级）。
-const RECOVERED_TAG = '——后续运行已恢复';
+// 标注文案在 i18n：'risk.recoveredTag'（已恢复）与 'risk.correctedTag'（已被补正）。
 // 补正链的标注口径（票 03 × 票 02）：anomaly.refSeq 指向的事件已有同票同类型后续记录取代之时，
-// 其衍生风险（证据缺失类）带此标注——风险本体保留，只把处置状态变成机器可读。
-const CORRECTED_TAG = '——已被补正';
+// 其衍生风险（证据缺失类）带「已补正」标注——风险本体保留，只把处置状态变成机器可读。
 
 // 一次运行是否构成事故：平台证据里退出码非零（失败）或验收被拒收（拒收）
 function incidentOf(ref, model) {
@@ -654,23 +659,20 @@ function recoveryFor(model, ref, incidents) {
   return { settle, runId: run ? run.runId : null };
 }
 
-function recoveryNote(rec) {
+function recoveryNote(T, rec) {
   if (!rec) return '';
-  const where = `事件 seq ${rec.settle.seq}${rec.settle.headSha ? `，提交 ${String(rec.settle.headSha).slice(0, 12)}` : ''}`;
-  const who = rec.runId ? `运行 ${rec.runId}（${where}）` : `同票后续运行（${where}）`;
-  return `同票的后续运行已恢复：${who}已成功 settle——该次事故是过程抖动而非未处置的伤，故降为 medium（事实性豁免：工作确实被打断过，风险本体不删除）。`;
+  const where = T('risk.recoveryWhere', { seq: rec.settle.seq })
+    + (rec.settle.headSha ? T('risk.recoveryWhereSha', { sha: String(rec.settle.headSha).slice(0, 12) }) : '');
+  const who = rec.runId ? T('risk.recoveryWhoRun', { runId: rec.runId, where }) : T('risk.recoveryWhoAnon', { where });
+  return T('risk.recoveredNote', { who });
 }
 
-function recoveryEvidence(rec) {
+function recoveryEvidence(T, rec) {
   if (!rec) return [];
   return [
-    ...(rec.runId ? [{ label: '恢复运行', ref: rec.runId }] : []),
-    { label: '恢复结算', ref: `seq ${rec.settle.seq}` },
+    ...(rec.runId ? [{ label: T('ev.recoveryRun'), ref: rec.runId }] : []),
+    { label: T('ev.recoverySettle'), ref: `seq ${rec.settle.seq}` },
   ];
-}
-
-function roleName(role) {
-  return ROLE_LABEL[role] || role;
 }
 
 // R3 的「已补正」判定（票 03）：anomaly 的 refSeq 指向的既有事件，若同票、序号更晚处存在
@@ -698,9 +700,9 @@ function correctionsByRefSeq(events, anomalies) {
   return map;
 }
 
-// 风险文案里的运行归属：票级运行写票号，run 级终审写“run 级终审”
-function ticketRef(ref) {
-  return ref.ticket === 'final' ? 'run 级终审' : `票 ${ref.ticket}`;
+// 风险文案里的运行归属：票级运行写票号，run 级终审写“run 级终审”（各语言自己的说法）
+function ticketRef(T, ref) {
+  return ref.ticket === 'final' ? T('ref.final') : T('ref.ticket', { ticket: ref.ticket });
 }
 
 // ---------------------------------------------------------------- 成本统计
@@ -740,29 +742,36 @@ function inferRepoPath(runtimeDir) {
   return conventional;
 }
 
-function collect({ runtimeDir }) {
+function collect({ runtimeDir, lang }) {
+  const T = makeT(lang);
   const warnings = [];
+  // 取证上下文（告警收口 + 语言）一路同行，不再拆成两个散参
+  const ctx = { lang: T.lang, warnings };
   runtimeDir = path.resolve(runtimeDir);
   if (!fs.existsSync(path.join(runtimeDir, 'events.jsonl'))) {
-    throw new Error(`不是有效的流程运行目录（缺 events.jsonl）：${runtimeDir}`);
+    throw new Error(T('cli.invalidRuntimeDir', { dir: runtimeDir }));
   }
   const repoPath = inferRepoPath(runtimeDir);
   const slug = path.basename(runtimeDir);
 
-  const events = parseEvents(runtimeDir, warnings);
+  const events = parseEvents(runtimeDir, ctx);
   const { run, tickets, runRefs } = buildRunModel(events);
   const { live: liveRefs, dead: deadRefs } = splitRunRefs(runRefs);
   for (const r of deadRefs) {
-    warn(warnings, 'run-ref-dead',
-      `运行引用 ${r.runId}（${r.ticket === 'final' ? 'run 级终审' : `票 ${r.ticket}`}，key ${r.key || '—'}，事件 seq ${r.seq}）的 runId 不是 UUID 形状——判定为记账污染的死数据：不探测平台证据、不参与证据缺失类风险推导`);
+    warn(warnings, 'run-ref-dead', T('warn.run-ref-dead', {
+      runId: r.runId,
+      ctx: r.ticket === 'final' ? T('ref.final') : T('ref.ticket', { ticket: r.ticket }),
+      key: r.key || '—',
+      seq: r.seq,
+    }));
   }
 
-  const candidates = artifactDirCandidates(repoPath, warnings);
+  const candidates = artifactDirCandidates(repoPath, ctx);
   const childRuns = {};
-  for (const ref of liveRefs) childRuns[ref.runId] = loadChildRun(candidates, ref, warnings);
+  for (const ref of liveRefs) childRuns[ref.runId] = loadChildRun(candidates, ref, ctx);
 
-  const sessionFiles = mainSessionCandidates(repoPath, liveRefs.map((r) => r.runId), warnings);
-  if (!sessionFiles.length) warn(warnings, 'main-session-missing', '未找到匹配的主会话记录，派发任务书原文不可恢复（其余证据不受影响）');
+  const sessionFiles = mainSessionCandidates(repoPath, liveRefs.map((r) => r.runId), ctx);
+  if (!sessionFiles.length) warn(warnings, 'main-session-missing', T('warn.main-session-missing'));
   const briefs = extractBriefs(sessionFiles);
 
   // 终审汇集：事件驱动优先（ADR-0002 Decision 8）。账上有 final 事件 → 从事件取 runId 建终审运行
@@ -773,7 +782,7 @@ function collect({ runtimeDir }) {
   let finalReviewSource;
   if (run.finals.length) {
     finalReviewSource = 'event';
-    finalReviews = finalReviewsFromEvents(run.finals, candidates, warnings);
+    finalReviews = finalReviewsFromEvents(run.finals, candidates, ctx);
   } else {
     finalReviewSource = 'scan';
     // 终审时间窗：从首事件到末事件（容忍 5s 边界）
@@ -781,12 +790,12 @@ function collect({ runtimeDir }) {
       start: Date.parse(events[0].ts),
       end: Date.parse(events[events.length - 1].ts),
     } : null;
-    finalReviews = findFinalReviews(candidates, timeWindow && timeWindow.start && timeWindow.end ? timeWindow : null)
+    finalReviews = findFinalReviews(candidates, timeWindow && timeWindow.start && timeWindow.end ? timeWindow : null, ctx)
       .map((r) => ({ ...r, source: 'scan', verdict: (r.structuredValue && r.structuredValue.verdict) || null }));
   }
 
   const ticketList = [...tickets.values()].sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
-  loadTicketFiles(runtimeDir, repoPath, run, tickets, warnings);
+  loadTicketFiles(runtimeDir, repoPath, run, tickets, ctx);
 
   // 评审材料包与问题清单；有路径但读不到时告警（spec：证据缺失必须标注而非静默）
   const bundles = {};
@@ -797,12 +806,12 @@ function collect({ runtimeDir }) {
         const abs = resolvePayloadPath(repoPath, v.findings);
         const c = readText(abs, { max: 256 * 1024 });
         if (c && typeof c.text === 'string') findingsFiles[v.findings] = c;
-        else warn(warnings, 'findings-unreadable', `裁决引用的问题清单不可读：${v.findings}（票 ${t.id} 第 ${v.round} 轮）`);
+        else warn(warnings, 'findings-unreadable', T('warn.findings-unreadable-round', { path: v.findings, id: t.id, round: v.round }));
       }
       const bundleRel = `.pi/matt-implement/${slug}/reviews/${String(t.id).padStart(2, '0')}-r${v.round || 1}.diff`;
       const b = readText(path.join(repoPath, bundleRel), { max: 512 * 1024 });
       if (b && typeof b.text === 'string') bundles[bundleRel] = b;
-      else warn(warnings, 'bundle-unreadable', `评审材料包不可读：${bundleRel}（票 ${t.id} 第 ${v.round} 轮）`);
+      else warn(warnings, 'bundle-unreadable', T('warn.bundle-unreadable', { path: bundleRel, id: t.id, round: v.round }));
     }
   }
   const finalBundleRel = `.pi/matt-implement/${slug}/reviews/final.diff`;
@@ -814,7 +823,7 @@ function collect({ runtimeDir }) {
     if (!f.findings) return;
     const c = readText(resolvePayloadPath(repoPath, f.findings), { max: 256 * 1024 });
     if (c && typeof c.text === 'string') findingsFiles[f.findings] = c;
-    else warn(warnings, 'findings-unreadable', `终审裁决引用的问题清单不可读：${f.findings}（第 ${i + 1} 轮终审）`);
+    else warn(warnings, 'findings-unreadable', T('warn.findings-unreadable-final', { path: f.findings, round: i + 1 }));
   });
 
   // 编排笔记
@@ -831,6 +840,7 @@ function collect({ runtimeDir }) {
 
   const model = {
     version: 1,
+    lang: T.lang,
     generatedAt: new Date().toISOString(),
     slug,
     runtimeDir,
@@ -865,5 +875,4 @@ module.exports = {
   deriveRisks,
   artifactDirCandidates,
   sessionDirName,
-  ROLE_LABEL,
 };
