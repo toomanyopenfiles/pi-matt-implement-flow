@@ -115,8 +115,8 @@ function validateContract(c) {
   const commands = c.commands;
   check(isObj(commands) && (commands.cli === null || typeof commands.cli === 'string'), '契约缺 commands（操作面；local 为全 null + cli null）');
   if (isObj(commands)) {
-    for (const key of ['listIssues', 'subIssues', 'blockedBy', 'viewIssue', 'claim', 'unclaim', 'comment', 'close']) {
-      check(isNullOrStrList(commands[key]), `契约 commands.${key} 必须是 null 或 argv 模板（字符串数组，占位符 <num>/<body>/<login>/<repo>）`);
+    for (const key of ['listIssues', 'subIssues', 'blockedBy', 'repoView', 'prProbe', 'viewIssue', 'claim', 'unclaim', 'comment', 'close']) {
+      check(isNullOrStrList(commands[key]), `契约 commands.${key} 必须是 null 或 argv 模板（字符串数组，占位符 <num>/<body>/<login>/<repo>/<branch>）`);
     }
   }
 

@@ -32,7 +32,7 @@ const RENAMED_CONTRACT = {
   ticketSet: { edges: ['init-list'] },
   capabilities: { claimStrength: 'advisory', closeWithComment: true, closingSurface: 'none' },
   commands: {
-    cli: 'fake', listIssues: null, subIssues: null, blockedBy: null, viewIssue: null,
+    cli: 'fake', listIssues: null, subIssues: null, blockedBy: null, repoView: null, prProbe: null, viewIssue: null,
     claim: null, unclaim: null, comment: null, close: null,
   },
   idempotency: { marker: '<!-- matt-implement:<runId>:<kind> -->', carrier: 'comment-body' },

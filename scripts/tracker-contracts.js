@@ -17,9 +17,12 @@
 //   capabilities —— 能力声明：占坑强度（advisory 锁如实声明，spec User Story 18）、
 //                   closeWithComment、收尾面（'PR' | 'MR' | 'none'）。
 //   commands     —— 操作面：cli 名 + argv 命令模板（占位符 <num> / <body> / <login> /
-//                   <repo>）。closeWithComment=true 表示允许在 close 模板后追加
+//                   <repo> / <branch>）。closeWithComment=true 表示允许在 close 模板后追加
 //                   ['--comment', '<body>']；=false（gitlab）表示 close 不接受收尾评论，
 //                   需 note 先行（同步动作集由能力生成的数据前提，票 05/06）。
+//                   repoView：仓库标识探测（best-effort；模板自带 owner/repo 形态的 spec 引用
+//                   时不探测。票 05 落地自关闭脚本的硬码调用点）。
+//                   prProbe：收尾面状态探测（best-effort 台账展示；非同步与对账的判定面）。
 //                   local 全 null——票文件即真相，快照/同步无操作（spec：local 行为零变化）。
 //   idempotency  —— 幂等键：marker 模板（票 02 落地）与载体（tracker 评论正文 / 票文件
 //                   Comments 节）。
@@ -73,6 +76,8 @@ const LOCAL_CONTRACT = {
     listIssues: null,
     subIssues: null,
     blockedBy: null,
+    repoView: null,
+    prProbe: null,
     viewIssue: null,
     claim: null,
     unclaim: null,
@@ -126,6 +131,8 @@ const GITHUB_CONTRACT = {
     listIssues: ['issue', 'list', '--state', 'all', '--limit', '1000', '--json', 'number,title,body,state,labels,url'],
     subIssues: ['api', 'repos/<repo>/issues/<num>/sub_issues'],
     blockedBy: ['api', 'repos/<repo>/issues/<num>/dependencies/blocked_by'],
+    repoView: ['repo', 'view', '--json', 'nameWithOwner'],
+    prProbe: ['pr', 'list', '--head', '<branch>', '--json', 'state,isDraft', '--limit', '1'],
     viewIssue: ['issue', 'view', '<num>', '--json', 'number,state,assignees,comments'],
     claim: ['issue', 'edit', '<num>', '--add-assignee', '@me'],
     unclaim: ['issue', 'edit', '<num>', '--remove-assignee', '<login>'],
@@ -179,6 +186,8 @@ const GITLAB_CONTRACT = {
     listIssues: ['issue', 'list', '--state', 'all', '-F', 'json'],
     subIssues: null,
     blockedBy: null,
+    repoView: null,
+    prProbe: null,
     viewIssue: ['issue', 'view', '<num>', '-F', 'json'],
     claim: ['issue', 'update', '<num>', '--assignee', '@me'],
     unclaim: ['issue', 'update', '<num>', '--unassign', '<login>'],

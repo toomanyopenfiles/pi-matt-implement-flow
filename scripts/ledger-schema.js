@@ -52,9 +52,10 @@ const ENUMS = {
   // （ADR-0002 Decision 1）。
   finalVerdict: ['ready', 'ready_with_fixes', 'not_ready'],
   state: ['opened-draft', 'ready'],
-  // tracker 字段值域（事件格式零迁移，票 04）：识别出的契约预设只有三预设（tracker-contracts），
-  // 三者恒在此域——字段校验照旧有效，既有账本照常渲染与对账。
-  tracker: ['local', 'github', 'gitlab'],
+  // tracker 字段值域（事件格式零迁移，票 04）：识别出的契约预设只有随包发布的预设
+  //（tracker-contracts，票 05 起按预设键派生，不再硬编码名单）——字段校验照旧有效，
+  // 既有账本照常渲染与对账。
+  tracker: Object.keys(require('./tracker-contracts').CONTRACTS),
   reviewer: ['on', 'off'],
 };
 
