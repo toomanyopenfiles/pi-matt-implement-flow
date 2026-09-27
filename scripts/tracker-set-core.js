@@ -215,7 +215,7 @@ function resolveTicketSet({ issues, specRef, initTickets, contract } = {}) {
   if (!specNum) {
     errors.push(
       `spec 引用无法解析出 issue 号：${JSON.stringify(specRef ?? '')}——` +
-        'GitHub 传 issue 号 / #号 / issue URL（local 传 spec 文件路径，不经此解析）'
+        'remote 契约传契约声明票形态（GitHub：issue 号 / #号 / issue URL；GitLab：IID / #IID / 原址 URL）'
     );
     return no();
   }

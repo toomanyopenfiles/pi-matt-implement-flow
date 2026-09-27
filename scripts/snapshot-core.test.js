@@ -161,7 +161,8 @@ test('planSnapshot：spec 引用不可解析（local 路径 / 散文）→ 拒�
   assert.equal(plan.ok, false);
   assert.equal(plan.files ? plan.files.length : plan.tickets.length, 0);
   assert.match(plan.errors[0], /spec 引用无法解析出 issue 号/);
-  assert.match(plan.errors[0], /GitHub 传 issue 号/);
+  assert.match(plan.errors[0], /issue 号/);
+  assert.match(plan.errors[0], /GitHub 传 issue 号|remote 契约传契约声明票形态/);
   assert.equal(plan.spec, null);
 });
 
