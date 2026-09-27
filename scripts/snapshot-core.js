@@ -88,7 +88,7 @@ function planSnapshot({ issues, specRef, initTickets, contract } = {}) {
           ? '--tickets 清单笔误或越界（用户输入），'
           : '票集边界指向了未被拉到的票，') +
         '或拉取' +
-        (limit == null ? '上限截断' : `恰达 --limit ${limit} 上限截断`) +
+        (limit == null ? '取数上限截断' : `恰达 --limit ${limit} 取数上限截断`) +
         '导致拉取不全；核对票号与 tracker 状态后重跑'
     );
     return {
