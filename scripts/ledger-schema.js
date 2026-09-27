@@ -1,8 +1,10 @@
 'use strict';
 
 // 事件分类学与 CLI 载荷 schema（纯函数，无 IO）。
-// 十一类事件枚举定死（spec：事件分类学）；每类事件有固定的必选/可选参数集；
-// 自由文本统一 --note。本模块不知道文件系统与 git——真相层查询由 ledger.js 注入。
+// 可由 add 记账的事件（10 类）+ init 载荷档（票 04 起 init 移入子命令，载荷档保留：
+// init 子命令与既往 add init 同一参数集，tracker 字段来自契约识别），枚举定死；
+// 每类事件有固定的必选/可选参数集；自由文本统一 --note。
+// 本模块不知道文件系统与 git——真相层查询由 ledger.js 注入。
 
 // 信封格式版本：事件分类学演进时 +1，旧运行账本按此识别（v=2 起含 run 级 final 事件；
 // v=3 起 anomaly 可带 optional 键 refSeq——补正链指针）。
@@ -30,7 +32,6 @@ const FLAG_TO_KEY = {
   'baseline-sha': 'baselineSha',
   spec: 'spec',
   'test-command': 'testCommand',
-  tracker: 'tracker',
   tickets: 'tickets',
   reviewer: 'reviewer',
   'max-fix-rounds': 'maxFixRounds',
@@ -40,6 +41,8 @@ const FLAG_TO_KEY = {
   note: 'note',
   'ref-seq': 'refSeq',
 };
+// --tracker 不是任何事件的旗标（票 04）：tracker 由 setup 产物自动识别（契约驱动 init），
+// 旗标双轨废除——配置单源是 docs/agents/issue-tracker.md；schema 的未知旗标拒绝自动生效。
 const KEY_TO_FLAG = Object.fromEntries(Object.entries(FLAG_TO_KEY).map(([f, k]) => [k, f]));
 
 // 枚举字段：值必须落在集合内（校验档：拒绝）
@@ -49,12 +52,17 @@ const ENUMS = {
   // （ADR-0002 Decision 1）。
   finalVerdict: ['ready', 'ready_with_fixes', 'not_ready'],
   state: ['opened-draft', 'ready'],
+  // tracker 字段值域（事件格式零迁移，票 04）：识别出的契约预设只有三预设（tracker-contracts），
+  // 三者恒在此域——字段校验照旧有效，既有账本照常渲染与对账。
   tracker: ['local', 'github', 'gitlab'],
   reviewer: ['on', 'off'],
 };
 
-// 事件分类学（11 类，枚举定死）。reviewer 派发不单独记事件——由 verdict 的 revRunId 承载；
-// final-reviewer 的派发同理不记，runId 由 run 级 final 事件承载。
+// 事件分类学（10 类可在 add 的事件 + init 载荷档，枚举定死）。reviewer 派发不单独记事件——
+// 由 verdict 的 revRunId 承载；final-reviewer 的派发同理不记，runId 由 run 级 final 事件承载。
+// init 载荷档保留（票 04）：它是 init 子命令的载荷口径（tracker 由契约识别填入，不再经 add）——
+// 参数集、枚举校验、票号归一与既往零差异；schema 的枚举/SHA/票号档在此档照常生效。
+// 历史账本的 init 事件照常渲染与对账（事件格式零迁移）。
 const EVENT_TYPES = {
   init: {
     required: ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand', 'tracker'],
@@ -210,6 +218,55 @@ function makeEnvelope({ type, payload, seq, now, head, warnings }) {
   return event;
 }
 
+// init 载荷档校验（票 04，纯函数）：init 子命令的 tracker 来自契约识别（非旗标），
+// 旗标在 ledger.js 的 init 子命令收集成键值对象后传入，本函数按 init 的参数集校验——
+// 与 parseFlags 同一套字段档（SHA 形态 / 枚举 / 正整数 / tickets 清单），载荷形态是
+// 已组装的对象（tracker 由识别结果预先填入）；返回校验后的最终载荷与错误。
+// 返回 { payload, errors }：errors 非空即拒绝；payload 为校验后的最终事件载荷（归一态）。
+function validateInitPayload(rawPayload = {}) {
+  const spec = EVENT_TYPES.init;
+  const payload = { ...rawPayload };
+  const errors = [];
+  for (const key of spec.required) {
+    if (!(key in payload) || !String(payload[key] ?? '').trim()) {
+      errors.push(`缺少必选参数 --${KEY_TO_FLAG[key]}`);
+    }
+  }
+  const allowed = new Set([...spec.required, ...spec.optional]);
+  for (const key of Object.keys(payload)) {
+    if (!allowed.has(key)) errors.push(`载荷键 ${key} 不属于事件 init 的参数集`);
+  }
+  for (const [key, values] of Object.entries(ENUMS)) {
+    if (key in payload && !values.includes(payload[key])) {
+      errors.push(`${key} 必须是 ${values.join(' | ')}，得到：${payload[key]}`);
+    }
+  }
+  if ('ticket' in payload) {
+    const n = normalizeTicket(payload.ticket);
+    if (!n) errors.push(`ticket 必须是票号数字（如 01 或 1042），得到：${payload.ticket}`);
+    else payload.ticket = n;
+  }
+  for (const key of ['round', 'fixNo', 'maxFixRounds', 'maxConcurrent', 'refSeq']) {
+    if (key in payload && !/^[1-9]\d*$/.test(String(payload[key]))) {
+      errors.push(`${key} 必须是正整数（>=1），得到：${payload[key]}`);
+    }
+  }
+  if ('tickets' in payload) {
+    const list = ticketSetList(payload.tickets);
+    if (!list) {
+      errors.push(`tickets 必须是逗号分隔的票号列表（如 01,02,1042），得到：${payload.tickets}`);
+    } else {
+      payload.tickets = list.join(',');
+    }
+  }
+  for (const key of ['headSha', 'mergeSha', 'baselineSha']) {
+    if (key in payload && !/^[0-9a-f]{7,40}$/i.test(String(payload[key]))) {
+      errors.push(`${key} 必须是 git SHA（7-40 位十六进制），得到：${payload[key]}`);
+    }
+  }
+  return { payload, errors };
+}
+
 module.exports = {
   EVENT_VERSION,
   EVENT_TYPES,
@@ -217,6 +274,7 @@ module.exports = {
   FLAG_TO_KEY,
   KEY_TO_FLAG,
   normalizeTicket,
+  validateInitPayload,
   refSeqNumber,
   ticketSetList,
   parseFlags,

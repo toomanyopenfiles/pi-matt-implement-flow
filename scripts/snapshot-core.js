@@ -39,7 +39,7 @@ function ticketFileRel(num, title) {
 // ------------------------------------------------------------------
 
 // 输入：tracker 的 issue 集合表示（gh 拉取产物，票 04 的调用方契约）+ spec 引用 +
-// 可选 init 票号清单（兜底层，与 add init --tickets 同一清单）。
+// 可选 init 票号清单（兜底层，与 init 子命令 --tickets 同一清单）。
 // 返回 { ok, specNum, source, spec, tickets, errors, warnings }：
 //   ok=true   —— spec: { rel, text, source（tracker 原址 URL）}；tickets: [{num, rel, text}]
 //                （spec.md 在前，票按数值序）；source 为票集解析命中的层。
