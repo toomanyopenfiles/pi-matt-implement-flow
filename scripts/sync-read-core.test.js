@@ -15,6 +15,8 @@ const {
   readSnapshot,
   toTrackerIssues,
 } = require('./sync-read-core.js');
+const { GITHUB_CONTRACT, GITLAB_CONTRACT, LOCAL_CONTRACT } = require('./tracker-contracts');
+const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
 
 const SHA = '0f3a9c41b7e2d5f8a6c1e4b9d2f7a3c5e8b1d4f6';
 
@@ -98,6 +100,33 @@ test('Source 行：缺行或非 GitHub issue URL → null（调用方拒绝同�
   assert.equal(parseSourceLine('# Spec: t\n\n**Type:** spec\n'), null);
   assert.equal(parseSourceLine('Source: https://example.com/x/issues/3001\n'), null);
   assert.equal(parseSourceLine(null), null);
+});
+
+// 票 05 接缝②参数化：原址形态是契约数据——同一能力机吃三预设 + 合成形态。
+
+test('Source 行参数化：GitHub 契约与不传契约同口径（态回归不变）', () => {
+  assert.deepEqual(parseSourceLine('Source: https://github.com/o/r/issues/3001\n', { contract: GITHUB_CONTRACT }), {
+    num: '3001',
+    repo: 'o/r',
+    url: 'https://github.com/o/r/issues/3001',
+  });
+  // 域外 URL 不认（GitHub 契约的 host 锚是 github.com 字面）
+  assert.equal(parseSourceLine('Source: https://example.com/x/issues/3001\n', { contract: GITHUB_CONTRACT }), null);
+});
+
+test('Source 行参数化（形态即数据）：合成契约的 host 形态、local 的 kind=path 均按契约', () => {
+  assert.deepEqual(parseSourceLine('Source: https://example.test/o/r/issues/3001\n', { contract: RENAMED_CONTRACT }), {
+    num: '3001',
+    repo: 'o/r',
+    url: 'https://example.test/o/r/issues/3001',
+  });
+  // host=null 的契约（自建实例）：按路径形态识别，不认域名
+  assert.deepEqual(
+    parseSourceLine('Source: https://gitlab.dev/ns/proj/-/issues/3001\n', { contract: GITLAB_CONTRACT }),
+    { num: '3001', repo: 'ns/proj', url: 'https://gitlab.dev/ns/proj/-/issues/3001' }
+  );
+  // kind=path：Source 行是文件路径，不经 URL 解析（同步面不达，纯函数层拒绝即如实）
+  assert.equal(parseSourceLine('Source: .scratch/demo/spec.md\n', { contract: LOCAL_CONTRACT }), null);
 });
 
 // ------------------------------------------------------------------

@@ -95,6 +95,12 @@ test('判型：github 范本 → github 契约——sub-issues 边、PR 收尾�
     c.commands.listIssues,
     ['issue', 'list', '--state', 'all', '--limit', '1000', '--json', 'number,title,body,state,labels,url']
   );
+  // 通用 driver 的辅助模板（票 05）：仓库标识探测与收尾面状态探测——格式驱动的最佳努力拉取
+  assert.deepEqual(c.commands.repoView, ['repo', 'view', '--json', 'nameWithOwner']);
+  assert.deepEqual(
+    c.commands.prProbe,
+    ['pr', 'list', '--head', '<branch>', '--json', 'state,isDraft', '--limit', '1']
+  );
 });
 
 test('判型：gitlab 范本 → gitlab 契约——无 sub-issues、note 先行关票、MR 收尾面、路径形态原址', () => {
@@ -480,6 +486,8 @@ test('合成契约：假想 tracker 形态不经判型直接构造并通过 sche
       listIssues: ['card', 'list', '--json'],
       subIssues: null,
       blockedBy: null,
+      repoView: null,
+      prProbe: null,
       viewIssue: ['card', 'view', '<num>', '--json'],
       claim: ['card', 'assign', '<num>', '@me'],
       unclaim: ['card', 'assign', '<num>', '--remove', '<login>'],

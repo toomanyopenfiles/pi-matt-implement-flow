@@ -119,14 +119,15 @@ function initRun2nd(f) {
 }
 
 // init 子命令（票 04 契约驱动）：tracker 不再是旗标——setup 产物识别，无 initRun 之外的铺底。
-function initAll(f, flags = {}) {
+// opts.env 可注入 PATH（prProbe 桩等 PATH 注入用例，票 05 起探测走契约模板仍认 PATH 桩）。
+function initAll(f, flags = {}, { env } = {}) {
   const args = ['init', '--runtime-dir', f.runtime];
   for (const [k, v] of Object.entries(flags)) {
     if (v === undefined) continue;
     args.push(`--${k}`);
     if (v !== '') args.push(String(v));
   }
-  return ledger(args, { cwd: f.dir });
+  return ledger(args, { cwd: f.dir, env });
 }
 
 function makeWorktree(f, name) {
@@ -444,8 +445,9 @@ test('事件流丢失 → build 降级再生：git 可导出列保留，平台�
   assert.doesNotMatch(md, /9ea3e64b/, '不得编造丢失的 runId');
 });
 
-test('gh 离线 → PR 状态标 unknown；无 remote → none；gh 在线 → 真实状态', (t) => {
-  const offline = makeFixture(t, { remote: 'https://github.com/x/y.git' });
+test('gh 离线 → PR 状态标 unknown；无 remote → none；gh 在线 → 真实状态（票 05：探测走契约 prProbe 模板）', (t) => {
+  // 契约收尾面探测的前提：github 契约（prProbe 模板在）；local 契约无收尾面 → 恒 unknown。
+  const offline = makeFixture(t, { remote: 'https://github.com/x/y.git', trackerDoc: 'issue-tracker-github.md' });
   initRun(offline);
   const fakeBin = path.join(offline.dir, 'fakebin');
   fs.mkdirSync(fakeBin);
@@ -463,8 +465,8 @@ test('gh 离线 → PR 状态标 unknown；无 remote → none；gh 在线 → �
   r = ledger(['build', '--runtime-dir', bare.runtime], { cwd: bare.dir });
   assert.match(r.stdout, /^pr: none/m, '无 remote 不探测 gh');
 
-  const online = makeFixture(t, { remote: 'https://github.com/x/y.git' });
-  initRun(online);
+  const online = makeFixture(t, { remote: 'https://github.com/x/y.git', trackerDoc: 'issue-tracker-github.md' });
+  // onlineBin 既是 init 记账的 PATH（票 05 起探测走契约模板，仍认 PATH 桩）也是 build 探测的桩。
   const onlineBin = path.join(online.dir, 'fakebin');
   fs.mkdirSync(onlineBin);
   fs.writeFileSync(
@@ -472,6 +474,7 @@ test('gh 离线 → PR 状态标 unknown；无 remote → none；gh 在线 → �
     '#!/bin/sh\necho \'[{"state":"OPEN","isDraft":true}]\'\n'
   );
   fs.chmodSync(path.join(onlineBin, 'gh'), 0o755);
+  initRun(online, {}, { env: { PATH: `${onlineBin}:${process.env.PATH}` } });
   r = ledger(['build', '--runtime-dir', online.runtime], {
     cwd: online.dir,
     env: { PATH: `${onlineBin}:${process.env.PATH}` },
