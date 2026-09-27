@@ -22,7 +22,6 @@ const path = require('node:path');
 const schema = require('./ledger-schema');
 const core = require('./ledger-core');
 const contractCore = require('./tracker-contract-core');
-const contractsData = require('./tracker-contracts');
 const driver = require('./tracker-driver');
 const snapshot = require('./snapshot-core');
 const tset = require('./tracker-set-core');
@@ -77,9 +76,9 @@ init（run 初始化，票 04——契约驱动）:
               # init 阶段一条命令：拉取 spec 与全部工单（含原生 sub-issues 与 blocked_by
               # 依赖边，能力由契约声明），转写为 tracker 快照
               # （<runtime-dir>/tracker/spec.md 带 Source: 行 + tracker/issues/<号>-<slug>.md，
-              # 与 local 票文件同构，账本零形态分叉）。票集接堀往后由契约兑底链驱动；
+              # 与 local 票文件同构，账本零形态分叉）。票集边界此后由契约兜底链驱动；
               # spec 母票带 Type: spec 豁免标记。快照已存在时拒绝执行（续跑保护：既有内容
-              # 零覆盖，续跑绝不重拉）；取数（issue 集合/sub-issues/依赖边/仓库топ间）全都
+              # 零覆盖，续跑绝不重拉）；取数（issue 集合/sub-issues/依赖边/仓库标识探测）全都
               # 走契约命令模板（票 05 通用 driver）——失败报错清晰、
               # 不产生半成品（临时目录整体改名，全部成功才落盘）。local 契约无需快照。
               # 缺 setup 产物 → 指引运行 /setup-matt-pocock-skills，停下不降级。
@@ -399,7 +398,7 @@ function resolveTrackerFromRepo(repoRoot) {
   if (!resolved.ok) {
     return { ok: false, tracker: null, contract: null, errors: [...resolved.errors], warnings: [...resolved.warnings] };
   }
-  // 票 05：契约对象随识别结果一并回传（快照/同步的命令模板、兕底链、形态、拉取上限
+  // 票 05：契约对象随识别结果一并回传（快照/同步的命令模板、兜底链、形态、拉取上限
   // 的唯一来源）——init 只用 tracker 字段，其余消费方不再重复判型。
   return { ok: true, tracker: resolved.contract.tracker, contract: resolved.contract, warnings: [...resolved.warnings] };
 }
@@ -634,7 +633,7 @@ const cliDetail = (e) =>
 
 // cwd 仓库的 owner/repo（best-effort，契约 repoView 模板）：仅供 REST 路径模板的 <repo>
 // 占位；失败不拦快照——票集边界还有 ## Parent 反查与 --tickets 两层兜底。contract
-// 未声明 repoView（能力缺席）→ 探测不执行（调用方由 spec 引用自带 repo 或走兕底）。
+// 未声明 repoView（能力缺席）→ 探测不执行（调用方由 spec 引用自带 repo 或走兜底）。
 function cliRepoView(contract, warnings) {
   if (!contract?.commands?.repoView) return null;
   try {
@@ -772,7 +771,7 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
 
   const warnings = [];
   // 契约先于一切网络动作（零半成品）：配置单源是 setup 产物——快照取数/占位/引擎参数
-  // （命令模板、兕底链、引用形态、拉取上限）全部由它派生；无法识别 → 显式停下不猜测，
+  // （命令模板、兜底链、引用形态、拉取上限）全部由它派生；无法识别 → 显式停下不猜测，
   // 与 init 子命令同一转接（resolveTrackerFromRepo）。
   const resolution = resolveTrackerFromRepo(process.cwd());
   if (!resolution.ok) {
@@ -1174,10 +1173,13 @@ function cmdClaim({ runtimeDir, rest }) {
     );
     return 1;
   }
+  // 仓库解析与 snapshot-init 同口径：引用自带 repo 优先，否则按契约 repoView 模板探测
+  //（best-effort；跨仓引用必须打到契约仓，不能落在 cwd）。
+  const repo = tset.repoOfSpecRef(flags.spec, { contract }) ?? cliRepoView(contract, []);
 
   // 先读状态再写入（冲突检查不可用时不盲写）：占坑是并发锁的占有面，他人已在位即停下。
   try {
-    const view = JSON.parse(driver.runCommand(contract, 'viewIssue', { num: specNum }) || '{}');
+    const view = JSON.parse(driver.runCommand(contract, 'viewIssue', { num: specNum, repo }) || '{}');
     const assignees = (view?.assignees ?? []).map((a) => a?.login).filter((l) => typeof l === 'string' && l);
     if (assignees.length) {
       out(
@@ -1196,7 +1198,7 @@ function cmdClaim({ runtimeDir, rest }) {
     return 1;
   }
   try {
-    driver.runCommand(contract, 'claim', { num: specNum });
+    driver.runCommand(contract, 'claim', { num: specNum, repo });
   } catch (e) {
     out(`✗ 占坑失败：claim 执行失败——${cliDetail(e)}`, '  占坑未落（可安全重跑）。');
     return 1;

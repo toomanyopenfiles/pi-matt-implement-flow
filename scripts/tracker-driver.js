@@ -92,7 +92,10 @@ function buildArgv(contract, kind, values = {}) {
   if (kind === 'close' && values.body != null && contract.capabilities?.closeWithComment !== false) {
     argv = [...argv, '--comment', String(values.body)];
   }
-  const scoped = !!(values.repo && !template.some(hasPlaceholder));
+  // 仓库作用域：模板不自带 <repo> 占位（自作用域的 REST 路径模板除外）时前置 ['-R', repo]——
+  // 跨仓引用（o/r#号、issue URL、Source 行 repo ≠ cwd）必须打到契约仓，不能落在 cwd（票 05 评审 P0：
+  // 判定只看 <repo> 占位，不可被 <num>/<body>/<login> 等其他占位符干扰）。
+  const scoped = !!(values.repo && !template.some((el) => /<repo>/.test(el)));
   if (scoped) argv = [REPO_FLAG, values.repo, ...argv];
   return { cli: commands.cli, argv, scoped };
 }
@@ -126,4 +129,4 @@ function listLimit(contract) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-module.exports = { buildArgv, runCommand, defaultRun, listLimit, substitute };
+module.exports = { buildArgv, runCommand, defaultRun, listLimit };

@@ -615,3 +615,49 @@ test('sync 拒绝：缺 setup 产物 → 识别先于一切拉取，指引运行
   assert.match(r.stdout, /setup-matt-pocock-skills/);
   assert.equal(callLog(f).length, 0, '识别失败零网络');
 });
+
+// ====================================================================
+// 仓库作用域（票 05 评审 r1 P0/P1）：跨仓引用必须打到契约仓——issue 命令一律前置 -R <repo>
+//（viewIssue / close / comment / unclaim 四面；REST 路径模板自带 <repo> 除外）
+// ====================================================================
+
+test('仓库作用域：sync 的 viewIssue/close/comment/unclaim 全部携带 -R <repo>（契约仓，非 cwd）', (t) => {
+  const f = makeFixture(t);
+  seedSealFixture(f);
+  const r = sync(f, [], withGh(f));
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const log = callLog(f);
+  // viewIssue：三个同步对象的拉取都带 -R o/r（Source 行的 repo）
+  const views = log.filter(isViewCall);
+  assert.equal(views.length, 3);
+  assert.ok(views.every((l) => /^-R o\/r issue view /.test(l)), `view 全部 -R 前置：${views.join(' | ')}`);
+  // close / comment：写入动作同样 -R 前置（stub 日志多行正文折行，按原文窗口断言）
+  assert.ok(markerNear(rawLog(f), '-R o/r issue close 1043 --comment ', MARK('merge')), 'close 1043 带 -R');
+  assert.ok(markerNear(rawLog(f), '-R o/r issue comment 1102 --body ', MARK('escalate')), 'comment 1102 带 -R');
+  assert.ok(markerNear(rawLog(f), '-R o/r issue close 3001 --comment ', MARK('closing')), 'close 3001 带 -R');
+});
+
+test('仓库作用域：abandon 的 unclaim（撤占坑）同样携带 -R <repo>', (t) => {
+  const f = makeFixture(t);
+  writeSpec(f, { closing: false });
+  stubState(f, { 3001: { state: 'open', assignees: ['alice'], comments: [] } });
+  const r = sync(f, ['--mode', 'abandon', '--claimant', 'alice', '--reason', '放弃'], withGh(f));
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const log = callLog(f);
+  assert.ok(log.some((l) => /^-R o\/r issue view 3001 /.test(l)), 'abandon 母票拉取带 -R');
+  assert.ok(log.some((l) => /^-R o\/r issue edit 3001 --remove-assignee alice/.test(l)), 'unclaim 带 -R');
+});
+
+test('仓库作用域：跨仓 spec 引用（o/r#号）的 claim 读/写都落在契约仓', (t) => {
+  const f = makeFixture(t);
+  stubState(f, { 3001: { state: 'open', assignees: [], comments: [] } });
+  const r = spawnSync(process.execPath, [LEDGER, 'claim', '--runtime-dir', f.runtime, '--spec', 'other/repo#3001'], {
+    cwd: f.dir,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${f.bin}${path.delimiter}${process.env.PATH}`, GH_STUB_STATE: f.stateFile, GH_STUB_LOG: f.logFile },
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const log = callLog(f);
+  assert.ok(log.some((l) => /^-R other\/repo issue view 3001 /.test(l)), `view 落在引用声明的契约仓：${log.join(' | ')}`);
+  assert.ok(log.some((l) => /^-R other\/repo issue edit 3001 --add-assignee @me/.test(l)), 'claim 落在契约仓');
+});
