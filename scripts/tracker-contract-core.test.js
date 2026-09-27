@@ -478,6 +478,14 @@ test('合成契约：假想 tracker 形态不经判型直接构造并通过 sche
       closedStatus: 'resolved',
       typeSource: 'wayfinder-label',
       blockingEdges: ['inline'],
+      // view/list JSON 形状（票 06 适配面）：假想形态自报 canonical 字面。
+      viewShape: {
+        number: 'number', title: 'name', body: 'note', state: 'status',
+        stateOpen: ['active'], stateClosed: ['done'],
+        assignees: 'owners', assigneeLogin: 'id',
+        comments: 'activity', commentBody: 'text',
+        urlKeys: ['cardUrl'],
+      },
     },
     ticketSet: { edges: ['parent-edges', 'init-list'] },
     capabilities: { claimStrength: 'advisory', closeWithComment: false, closingSurface: 'none' },

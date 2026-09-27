@@ -162,16 +162,66 @@ function readSnapshot({ trackerDir, readFile, listDir, exists, contract }) {
   return { ok: true, tickets, spec, source: { repo: src.repo, url: src.url }, errors, warnings };
 }
 
-// tracker issue view 产物数组 → planTrackerSync 的 tracker.issues。
-// view 语义 → 规划器语义：state 大写归小写、assignees 对象取 login、comments 对象取 body；
-// 字段缺省为 []（规划器输入形态的缺省约定）。state 与票号形态合法性由规划器统一校验。
-function toTrackerIssues(views) {
+// tracker issue 产物数组 → 引擎 canonical issue 形态（票 06 接缝②适配面）。
+// tracker issue list 产物（snapshot-init 取数）与 view 产物（sync/claim 拉状态）同被本层归一：
+// 字段名从契约 mapping.viewShape 取（差异是数据不是代码）——number/title/body/state 字段、
+// state 识别词表（stateOpen/stateClosed → 'open'|'closed' 二值；词表外照实透传）、
+// 原址取 urlKeys 首个命中。契约未声明 viewShape → canonical 字面（引擎 canonical 输入形态
+// 即缺省形状；GitHub 契约下与票 05 逐字面读 number/title/body/state/labels/url 的既有口径
+// 行为等价——纯透传）。labels / subIssues / blockedBy 原样传递（适配层不猜不编造）。
+const CANONICAL_VIEW_SHAPE = {
+  number: 'number', title: 'title', body: 'body', state: 'state',
+  stateOpen: ['open'], stateClosed: ['closed'],
+  assignees: 'assignees', assigneeLogin: 'login',
+  comments: 'comments', commentBody: 'body',
+  urlKeys: ['url', 'html_url'],
+};
+
+function viewShapeOf(contract) {
+  return contract?.mapping?.viewShape ?? CANONICAL_VIEW_SHAPE;
+}
+
+function stateMappingOf(vs) {
+  const openSet = new Set(vs.stateOpen.map((s) => String(s).trim().toLowerCase()));
+  const closedSet = new Set(vs.stateClosed.map((s) => String(s).trim().toLowerCase()));
+  return (raw) => {
+    const s = String(raw ?? '').trim().toLowerCase();
+    if (closedSet.has(s)) return 'closed';
+    if (openSet.has(s)) return 'open';
+    return s; // 词表外照实透传——形态合法性由下游（规划器/转写）判定，不猜测
+  };
+}
+
+function adaptTrackerIssues(views, { contract } = {}) {
+  const vs = viewShapeOf(contract);
+  const stateOf = stateMappingOf(vs);
   return (views ?? []).map((v) => ({
-    num: normalizeTicket(v?.number),
-    state: String(v?.state ?? '').trim().toLowerCase(),
-    assignees: (v?.assignees ?? []).map((a) => a?.login).filter((l) => typeof l === 'string' && l),
-    comments: (v?.comments ?? []).map((c) => c?.body).filter((b) => typeof b === 'string' && b),
+    number: v?.[vs.number] ?? null,
+    title: v?.[vs.title] ?? null,
+    body: v?.[vs.body] ?? null,
+    state: stateOf(v?.[vs.state]),
+    labels: v?.labels ?? [],
+    subIssues: v?.subIssues,
+    blockedBy: v?.blockedBy,
+    url: vs.urlKeys.map((k) => v?.[k]).find((u) => typeof u === 'string' && u) ?? null,
   }));
 }
 
-module.exports = { parseCommentsFacts, parseSourceLine, readSnapshot, toTrackerIssues };
+// view 产物 → planTrackerSync 的 tracker.issues（规划器输入形态）。
+// closedSet 优先（state 词表内判定）；票号形态合法性由规划器统一校验。
+function toTrackerIssues(views, { contract } = {}) {
+  const vs = viewShapeOf(contract);
+  const stateOf = stateMappingOf(vs);
+  return (views ?? []).map((v) => ({
+    num: normalizeTicket(v?.[vs.number]),
+    state: stateOf(v?.[vs.state]),
+    assignees: (v?.[vs.assignees] ?? [])
+      .map((a) => a?.[vs.assigneeLogin])
+      .filter((l) => typeof l === 'string' && l),
+    comments: (v?.[vs.comments] ?? [])
+      .map((c) => c?.[vs.commentBody])
+      .filter((b) => typeof b === 'string' && b),
+  }));
+}
+
+module.exports = { parseCommentsFacts, parseSourceLine, readSnapshot, adaptTrackerIssues, toTrackerIssues };

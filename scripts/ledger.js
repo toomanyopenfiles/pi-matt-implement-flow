@@ -794,7 +794,7 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
     const repo = tset.repoOfSpecRef(flags.spec, { contract }) ?? cliRepoView(contract, warnings);
     try {
       const raw = driver.runCommand(contract, 'listIssues', { repo });
-      issues = JSON.parse(raw || '[]') ?? [];
+      issues = syncread.adaptTrackerIssues(JSON.parse(raw || '[]') ?? [], { contract });
       // 单拉无分页（真分页 defer 到 hardening 票）：行数恰达契约模板声明的上限即如实
       // 警告——已达上限，拉取可能不全；不在拉取处硬拒，缺口由票集解析的缺票诊断点名后重跑。
       const limit = driver.listLimit(contract);
@@ -1059,10 +1059,10 @@ function cmdSync({ runtimeDir, rest }) {
   try {
     actions = syncplan.planTrackerSync(
       { tickets: read.tickets, spec: read.spec },
-      { issues: syncread.toTrackerIssues(views) },
+      { issues: syncread.toTrackerIssues(views, { contract }) },
       mode === 'abandon'
-        ? { mode, claimant: flags.claimant, reason: flags.reason, runId }
-        : { mode, runId },
+        ? { mode, claimant: flags.claimant, reason: flags.reason, runId, closeWithComment: contract.capabilities?.closeWithComment }
+        : { mode, runId, closeWithComment: contract.capabilities?.closeWithComment },
     );
   } catch (e) {
     out(`✗ ${e.message}`, '  同步规划拒绝即零推送——修正快照事实后重跑。');
@@ -1178,9 +1178,11 @@ function cmdClaim({ runtimeDir, rest }) {
   const repo = tset.repoOfSpecRef(flags.spec, { contract }) ?? cliRepoView(contract, []);
 
   // 先读状态再写入（冲突检查不可用时不盲写）：占坑是并发锁的占有面，他人已在位即停下。
+  // view 字段名从契约 viewShape 适配（票 06）——GitLab 的 assignees[].username 与 GitHub 的
+  //  assignees[].login 同过一张契约表，零 if-tracker。
   try {
-    const view = JSON.parse(driver.runCommand(contract, 'viewIssue', { num: specNum, repo }) || '{}');
-    const assignees = (view?.assignees ?? []).map((a) => a?.login).filter((l) => typeof l === 'string' && l);
+    const raw = driver.runCommand(contract, 'viewIssue', { num: specNum, repo });
+    const assignees = syncread.toTrackerIssues([JSON.parse(raw || '{}')], { contract })[0]?.assignees ?? [];
     if (assignees.length) {
       out(
         `✗ 占坑冲突：spec ${specNum} 已在 tracker 上被认领（${assignees.join('、')}）——`,
