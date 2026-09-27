@@ -190,7 +190,7 @@ test('--tickets 兜底：三层走到 init 票号清单——按清单落盘', (
   assert.deepEqual(lsIssues(f), ['1043-issue-transcription-pure-fns.md', '1044-sync-command.md']);
 });
 
-test('--tickets 与 add init 同名旗标过同一转换点（schema.ticketSetList）：空段/非法项在旗标层拒绝', (t) => {
+test('--tickets 与 init 子命令同名旗标过同一转换点（schema.ticketSetList）：空段/非法项在旗标层拒绝', (t) => {
   const f = makeFixture(t);
   writeStubData(f, { issues: ISSUES_NO_EDGES, subs: null });
   for (const bad of ['1043,,1044', '1043,x']) {
@@ -199,12 +199,12 @@ test('--tickets 与 add init 同名旗标过同一转换点（schema.ticketSetLi
       ['--runtime-dir', f.runtime, '--spec', '#1042', '--tickets', bad],
       withGh(f, { GH_STUB_SUBS: '' })
     );
-    assert.equal(r.status, 2, `--tickets ${JSON.stringify(bad)} 必须被拒（与 add init 同一转换点）`);
+    assert.equal(r.status, 2, `--tickets ${JSON.stringify(bad)} 必须被拒（与 init 子命令同一转换点）`);
     assert.match(r.stdout, /票号列表/);
     assert.doesNotMatch(r.stdout, /init 票号清单 含非法票号/, '不走 resolveTicketSet 的双轨校验口径');
     assert.equal(fs.existsSync(f.tracker), false, '拒绝即零落盘');
   }
-  // 归一化 + 去重同轨：add init 接受的形态这里也接受
+  // 归一化 + 去重同轨：init 子命令接受的形态这里也接受
   const ok = snapshot(
     f,
     ['--runtime-dir', f.runtime, '--spec', '#1042', '--tickets', ' 1044, 1044,1043 '],

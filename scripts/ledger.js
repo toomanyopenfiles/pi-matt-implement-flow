@@ -19,6 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 const schema = require('./ledger-schema');
 const core = require('./ledger-core');
+const contractCore = require('./tracker-contract-core');
 const snapshot = require('./snapshot-core');
 const tset = require('./tracker-set-core');
 const syncCore = require('./tracker-sync-core');
@@ -34,17 +35,24 @@ const SNAPSHOT_DIR = 'tracker';
 const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事件流 / 派生台账三层，LLM 永不手写台账）
 
 用法:
+  node ledger.js init --runtime-dir <dir> --branch <branch> --branch-base <base> --baseline-sha <sha>
+               --spec <spec 文件路径> --test-command <cmd> [--reviewer on|off] [--max-fix-rounds N]
+               [--max-concurrent N] [--tickets 01,02,1042]
   node ledger.js add <type> --runtime-dir <dir> [--flag value ...]
   node ledger.js build --runtime-dir <dir>
   node ledger.js check --runtime-dir <dir>
 
+init（run 初始化，票 04——契约驱动）:
+  # Round 0 的第一条（也是唯一一条可以入账的 init）:tracker 不再手工声明——按目标仓库
+  # 的 setup 产物（docs/agents/issue-tracker.md + triage-labels.md）自动识别 tracker 并
+  # 选中契约预设；识别结果（tracker 字段）照旧入账，事件格式零迁移。
+  # 缺 setup 产物 → 指引运行 /setup-matt-pocock-skills；范本认不出 → 贴出「仅支持
+  # local / github / gitlab 三种」并列出支持面——两者都是显式停下，不猜测不降级。
+  # --tracker 旗标已废除（配置单源是 setup 产物，不再重复声明）。票集边界 --tickets、
+  # 流程形态快照 --reviewer/--max-fix-rounds/--max-concurrent 与既往 init 同参同对：
+  # 流程形态冻结后校验按其执行；票集边界冻结后，边界外的票号记账被拒。
+
 事件类型与参数集 (add):
-  init        --branch --branch-base --baseline-sha --spec --test-command --tracker(local|github|gitlab)
-              [--reviewer on|off] [--max-fix-rounds N] [--max-concurrent N] [--tickets 01,02,1042]
-              # 流程形态快照（flow shape）：本 run 是否逐票评审 / 每票修复预算 / 并发 coder 数；
-              # 省略 = 默认形态 on / 2 / 3。快照冻结后，verdict/fix/merge 校验均按它执行。
-              # --tickets（票集边界，票 04）：本 run 的票号清单（票集解析三层兜底的兜底层）；
-              # init 时冻结——此后边界外的票号记账被拒（中途偷加票被拒）。省略 = 无冻结边界。
   dispatch    --ticket --key --run-id [--worktree] [--note]
   settled     --ticket --round --head-sha [--worktree] [--gate] [--note]
   verdict     --ticket --round --verdict(approved|changes_requested) [--findings] [--rev-run-id] [--note]
@@ -60,7 +68,7 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
   pr          --state(opened-draft|ready) [--url] [--note]
   close       [--note]
 
-快照初始化 (snapshot-init，tracker=github):
+快照初始化 (snapshot-init，github 契约):
   snapshot-init --spec <issue号|#号|owner/repo#号|issueURL> [--tickets 01,02,1042]
               # init 阶段一条命令：拉取 spec 与全部工单（含原生 sub-issues 与 blocked_by
               # 依赖边），转写为 tracker 快照
@@ -70,7 +78,7 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
               # 零覆盖，续跑绝不重拉）；gh 收发为 best-effort 薄 IO——失败报错清晰、
               # 不产生半成品（临时目录整体改名，全部成功才落盘）。
 
-同步 (sync，tracker=github，时点固定在封账之前、pr --state ready 之前):
+同步 (sync，封账前、pr --state ready 之前):
   sync [--mode seal|abandon] [--claimant <login>] [--reason <放弃说明>]
               # 把 tracker/ 快照的待推送状态幂等推送到 tracker 本体（票 06；执行 03 的
               # 同步规划）。seal（缺省）：合并票关票附 merge SHA、escalate 票留评保持开放、
@@ -88,11 +96,14 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
               # run 已封账或 PR 已标 ready 时拒绝执行（同步须在两时点之前）。
 
 说明:
+  init     run 初始化（Round 0 唯一一次）：契约驱动——tracker 从 setup 产物自动识别；
+           识别结果（tracker 字段）照旧入账，事件格式零迁移；缺/认不出 setup 产物
+           分别指引运行 /setup-matt-pocock-skills / 贴出仅支持三种，停下不降级
   add      记账：脚本盖权威时间戳/单调序号/版本/git HEAD 锚点，append 后自动再生台账
   build    台账再生：四段 markdown（头部/表格/时间线/对账结论），确定性重建
   check    对账：账实差异核验，非零退出码 = 有差异；派发与合并前、compaction 后必跑；
            并对 final 事件的 runId 做 best-effort 平台证据核验（不可核验仅警告，不影响退出码）
-  sync     封账前单点同步：快照事实 → 03 规划 → gh 幂等执行（ticket 06，tracker=github）；
+  sync     封账前单点同步：快照事实 → 03 规划 → gh 幂等执行（ticket 06，tracker=github 契约）；
            成功后打印清理指引（快照与 review bundle 清理、findings 与账本三件套留存）
   时间不由 LLM 提供；自由文本统一 --note；校验拒绝时给出原因，修正后重试；
   与校验器分歧 → add anomaly --note "..." 并停下上报（无任何绕过旗标）。
@@ -336,11 +347,144 @@ function atomicWrite(filePath, content) {
 
 // --- 子命令 ---
 
+// init 子命令（票 04）：契约驱动的 run 初始化——Round 0 的首条（也是唯一一条）init。
+// 与 add 的唯一区分：tracker 不是旗标而是识别结果——setup 产物判型选契约预设；
+// 事件里 tracker 字段照旧（零迁移），载荷参数集与既往 init 事件完全一致。
+// 识别先于一切写入（零半成品）：缺 setup 产物 → 指引运行 /setup-matt-pocock-skills；
+// 范本认不出 → 「仅支持三种」，都停下不猜测不降级；词表违约指到文件+行+列+期望。
+const INIT_REQUIRED = ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand'];
+const INIT_OPTIONAL = ['reviewer', 'maxFixRounds', 'maxConcurrent', 'tickets'];
+
+// setup 产物 → tracker（契约驱动）：判型输入是 repo 内的两份上游文档。
+// 读取是纯 IO；解析/判型/词表全部在 tracker-contract-core（票 01，接缝①），
+// 本层只做「读文件 → 调解析 → 贴错误」的转接，不重复任何判型逻辑。
+const TRACKER_DOC = 'docs/agents/issue-tracker.md';
+const TRIAGE_DOC = 'docs/agents/triage-labels.md';
+
+function resolveTrackerFromRepo(repoRoot) {
+  const trackerPath = path.resolve(repoRoot, TRACKER_DOC);
+  const triagePath = path.resolve(repoRoot, TRIAGE_DOC);
+  if (!fs.existsSync(trackerPath)) {
+    return {
+      ok: false,
+      tracker: null,
+      errors: [
+        `缺少 issue tracker setup 产物：${TRACKER_DOC}——先运行 /setup-matt-pocock-skills 落盘 setup 产物，再重跑`,
+      ],
+      warnings: [],
+    };
+  }
+  const issueTracker = fs.readFileSync(trackerPath, 'utf8');
+  const triageLabels = fs.existsSync(triagePath) ? fs.readFileSync(triagePath, 'utf8') : null;
+  const resolved = contractCore.resolveContract({
+    issueTracker,
+    triageLabels,
+    issueTrackerFile: TRACKER_DOC,
+    triageLabelsFile: TRIAGE_DOC,
+  });
+  if (!resolved.ok) {
+    return { ok: false, tracker: null, errors: [...resolved.errors], warnings: [...resolved.warnings] };
+  }
+  return { ok: true, tracker: resolved.contract.tracker, warnings: [...resolved.warnings] };
+}
+
+function cmdInit({ runtimeDir, rest }) {
+  const errors = [];
+  const collected = {};
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (!tok.startsWith('--')) {
+      errors.push(`意外位置参数「${tok}」——参数一律用 --flag value 形式（flags 式，非裸 JSON）`);
+      continue;
+    }
+    let flag = tok.slice(2);
+    let value = null;
+    const eq = flag.indexOf('=');
+    if (eq !== -1) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else if (i + 1 < rest.length && !rest[i + 1].startsWith('--')) {
+      value = rest[++i];
+    } else {
+      errors.push(`旗标 --${flag} 缺少值`);
+      continue;
+    }
+    const key = schema.FLAG_TO_KEY[flag];
+    if (!key) {
+      if (flag === 'tracker') {
+        // 硬枚举分支删除的显式拒面（票 04）：--tracker 双轨废除，识别是唯一来源，
+        // 文案点名替代面（setup 产物）助一轮内修正。
+        errors.push(
+          '未知旗标 --tracker：tracker 由 setup 产物自动识别，不再手工声明——' +
+            '配置单源是 docs/agents/issue-tracker.md（/setup-matt-pocock-skills 落盘）'
+        );
+      } else {
+        errors.push(`未知旗标 --${flag}（init 的参数集见 --help）；本脚本无任何绕过校验的旗标`);
+      }
+      continue;
+    }
+    if (!INIT_REQUIRED.includes(key) && !INIT_OPTIONAL.includes(key)) {
+      errors.push(`旗标 --${flag} 不属于 init 的参数集`);
+      continue;
+    }
+    if (key in collected) {
+      errors.push(`旗标 --${flag} 重复给出`);
+      continue;
+    }
+    if (!String(value).trim()) {
+      errors.push(`旗标 --${flag} 的值为空`);
+      continue;
+    }
+    collected[key] = value;
+  }
+  const missing = INIT_REQUIRED.filter((key) => !(key in collected));
+  if (missing.length) {
+    errors.push(
+      `缺少必选参数 ${missing.map((key) => `--${schema.KEY_TO_FLAG[key]}`).join(' ')}` +
+        '——tracker 不在此列：由 setup 产物自动识别'
+    );
+  }
+  if (errors.length) {
+    out(`✗ 拒绝（未入账）：`, ...errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+
+  // 识别先于一切写入（零半成品，与 snapshot-init 的续跑保护同哲学）：缺 setup 产物 →
+  // 指引运行 /setup-matt-pocock-skills；范本认不出 → 「仅支持三种」；词表违约指到
+  // 文件+行+列+期望——都停下不猜测不降级。
+  const resolution = resolveTrackerFromRepo(process.cwd());
+  if (!resolution.ok) {
+    out(`✗ 拒绝（未入账）：`, ...resolution.errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+  for (const w of resolution.warnings) out(`⚠ ${w}`);
+
+  // tracker 字段来自识别结果——载荷与其他字段同一扇 schema 门过 init 载荷档
+  //（枚举 / SHA / 正整数 / tickets 清单档与既往零差异，事件格式零迁移）。
+  const { payload: validated, errors: schemaErrors } = schema.validateInitPayload({
+    ...collected,
+    tracker: resolution.tracker,
+  });
+  if (schemaErrors.length) {
+    out(`✗ 拒绝（未入账）：`, ...schemaErrors.map((e) => `  - ${e}`));
+    return 1;
+  }
+
+  return recordEvent({ runtimeDir, type: 'init', payload: validated });
+}
+
 function cmdAdd({ runtimeDir, rest }) {
   const type = rest[0];
+  if (type === 'init') {
+    out(
+      '✗ 拒绝：add init 已废除（票 04）——run 初始化移入 init 子命令（契约驱动：' +
+        'tracker 由 setup 产物自动识别，不再以旗标手工声明）；用法见 --help'
+    );
+    return 1;
+  }
   if (!type || !schema.EVENT_TYPES[type]) {
     out(
-      `✗ 拒绝：未知事件类型 ${type ?? '(缺失)'}——可选：${Object.keys(schema.EVENT_TYPES).join(', ')}`
+      `✗ 拒绝：未知事件类型 ${type ?? '(缺失)'}——可选：${Object.keys(schema.EVENT_TYPES).filter((k) => k !== 'init').join(', ')}（add 不再收 init：run 初始化用 init 子命令）`
     );
     return 1;
   }
@@ -349,7 +493,13 @@ function cmdAdd({ runtimeDir, rest }) {
     out(`✗ 拒绝（未入账）：`, ...errors.map((e) => `  - ${e}`));
     return 1;
   }
+  return recordEvent({ runtimeDir, type, payload });
+}
 
+// 共享入账路径（add 与 init 子命令的唯一写点）：loadEvents → collectTruth → gateAdd →
+// 盖信封 append → 自动再生台账。init 事件也走 gateAdd（init-only 状态机执法面不变：
+// 只能是第一条事件、baselineSha 需在 git 中存在、spec 文件需存在）。
+function recordEvent({ runtimeDir, type, payload }) {
   const eventsPath = path.join(runtimeDir, EVENTS_FILE);
   const { events, loadError } = loadEvents(eventsPath);
   if (loadError) {
@@ -397,7 +547,7 @@ function cmdAdd({ runtimeDir, rest }) {
   const ledgerPath = path.join(runtimeDir, LEDGER_FILE);
   atomicWrite(ledgerPath, md);
 
-  const what = payload.ticket ? `ticket=${payload.ticket}` : type;
+  const what = payload.ticket ? `ticket=${payload.ticket}` : type === 'init' ? `tracker=${payload.tracker}` : type;
   out(
     `✓ recorded seq=${seq} ${type} ${what}`,
     ...warnings.map((w) => `⚠ ${w}`),
@@ -592,8 +742,8 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
   if (!('spec' in flags)) {
     errors.push('缺少必选参数 --spec <spec 引用>（GitHub：issue 号 / #号 / owner/repo#号 / issue URL）');
   }
-  // --tickets 与 add init 同名旗标共用 schema.ticketSetList 单一转换点：归一 + 去重 +
-  // 数值排序，非法形态（空段/非数字/越界）在旗标层拒绝——不与 add init 双轨校验。
+  // --tickets 与 init 子命令同名旗标共用 schema.ticketSetList 单一转换点：归一 + 去重 +
+  // 数值排序，非法形态（空段/非数字/越界）在旗标层拒绝——不与 init 子命令双轨校验。
   let initTickets;
   if ('tickets' in flags) {
     initTickets = schema.ticketSetList(flags.tickets);
@@ -935,7 +1085,7 @@ function main(argv) {
     return 0;
   }
   const command = argv[0];
-  if (!['add', 'build', 'check', 'snapshot-init', 'sync'].includes(command)) {
+  if (!['add', 'build', 'check', 'snapshot-init', 'sync', 'init'].includes(command)) {
     out(`未知子命令：${command}`, USAGE);
     return 2;
   }
@@ -956,6 +1106,7 @@ function main(argv) {
     return 2;
   }
   runtimeDir = path.resolve(runtimeDir);
+  if (command === 'init') return cmdInit({ runtimeDir, rest });
   if (command === 'add') return cmdAdd({ runtimeDir, rest });
   if (command === 'build') return cmdBuild({ runtimeDir });
   if (command === 'snapshot-init') return cmdSnapshotInit({ runtimeDir, rest });

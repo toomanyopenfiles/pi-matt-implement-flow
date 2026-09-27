@@ -29,7 +29,7 @@ function writeTicketFile(dir, num, title, { blockedBy = null, status = 'ready-fo
   fs.writeFileSync(path.join(dir, `.scratch/demo/issues/${num}-x.md`), lines.join('\n'));
 }
 
-function makeFixture(t, { tickets = true, remote = null } = {}) {
+function makeFixture(t, { tickets = true, remote = null, trackerDoc = 'issue-tracker-local.md' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-fixture-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   sh(dir, 'git init -q -b main');
@@ -42,6 +42,12 @@ function makeFixture(t, { tickets = true, remote = null } = {}) {
     writeTicketFile(dir, '01', '自检基线', { blockedBy: null });
     writeTicketFile(dir, '02', 'README 速览', { blockedBy: '01' });
   }
+  // setup 产物（票 04）：ledger.test 的默认铺底按 local 范本判型——契约识别的判型输入，
+  // 复用 scripts/fixtures 的既有范本 / 词表 fixture；trackerDoc 可换 github 等预设范本。
+  const fixturesDir = path.join(__dirname, 'fixtures');
+  fs.mkdirSync(path.join(dir, 'docs/agents'), { recursive: true });
+  fs.copyFileSync(path.join(fixturesDir, trackerDoc), path.join(dir, 'docs/agents/issue-tracker.md'));
+  fs.copyFileSync(path.join(fixturesDir, 'triage-labels-canonical.md'), path.join(dir, 'docs/agents/triage-labels.md'));
   if (remote) sh(dir, `git remote add origin ${remote}`);
   return {
     dir,
@@ -84,21 +90,43 @@ function readLedger(f) {
   return fs.readFileSync(f.ledgerPath, 'utf8');
 }
 
-// --- 标准运行铺底：init + dispatch/settled/verdict（票 01）---
-// extra：追加 init 旗标（如票集边界 --tickets，票 04）；不传则维持零旗标的旧形态
+// --- 标准运行铺底：init（契约驱动子命令）+ dispatch/settled/verdict ---
+// extra：追加 init 旗标（如票集边界 --tickets）；不传则维持零旗标的形态。
+// fixture 仓默认带 docs/agents/issue-tracker.md（local 范本）——契约识别的判型输入。
 function initRun(f, extra = {}) {
   f.git('checkout -q -b feat/demo');
-  const r = addAll(f, 'init', {
+  const r = initAll(f, {
     branch: 'feat/demo',
     'branch-base': 'main',
     'baseline-sha': f.baseline(),
     spec: '.scratch/demo/spec.md',
     'test-command': 'npm test',
-    tracker: 'local',
     ...extra,
   });
   assert.equal(r.status, 0, r.stdout);
   return r;
+}
+
+// init 子命令的二跑（重复记账执法面的探针）：同一 fixture 上再执行一次 init。
+function initRun2nd(f) {
+  return initAll(f, {
+    branch: 'feat/demo',
+    'branch-base': 'main',
+    'baseline-sha': f.baseline(),
+    spec: '.scratch/demo/spec.md',
+    'test-command': 'npm test',
+  });
+}
+
+// init 子命令（票 04 契约驱动）：tracker 不再是旗标——setup 产物识别，无 initRun 之外的铺底。
+function initAll(f, flags = {}) {
+  const args = ['init', '--runtime-dir', f.runtime];
+  for (const [k, v] of Object.entries(flags)) {
+    if (v === undefined) continue;
+    args.push(`--${k}`);
+    if (v !== '') args.push(String(v));
+  }
+  return ledger(args, { cwd: f.dir });
 }
 
 function makeWorktree(f, name) {
@@ -151,7 +179,7 @@ test('缺 --runtime-dir 以非零退出', (t) => {
 // add：信封字段由脚本生成（时间戳 / 序号 / 版本 / HEAD 锚点）
 // ====================================================================
 
-test('add init: 事件行含脚本盖的版本/序号/时间戳/HEAD 锚点，台账落盘', (t) => {
+test('init: 事件行含脚本盖的版本/序号/时间戳/HEAD 锚点，台账落盘（契约驱动：tracker 来自识别）', (t) => {
   const f = makeFixture(t);
   const r = initRun(f);
   const events = readEvents(f);
@@ -204,15 +232,8 @@ test('非 init 事件在空事件流上被拒绝；init 重复记账被拒绝', 
   assert.match(early.stdout, /init/);
   assert.ok(!fs.existsSync(f.eventsPath), '被拒绝的事件不得落盘');
   initRun(f);
-  const again = addAll(f, 'init', {
-    branch: 'feat/demo',
-    'branch-base': 'main',
-    'baseline-sha': f.baseline(),
-    spec: '.scratch/demo/spec.md',
-    'test-command': 'npm test',
-    tracker: 'local',
-  });
-  assert.equal(again.status, 1);
+  const again = initRun2nd(f);
+  assert.equal(again.status, 1, 'init 重复执行被拒（init 只能是第一条事件）');
   assert.match(again.stdout, /init/);
   assert.equal(readEvents(f).length, 1);
 });
@@ -267,16 +288,10 @@ test('坏载荷：非法枚举值（verdict / pr state / tracker）被拒绝', (
   const p = addAll(f, 'pr', { state: 'merged' });
   assert.equal(p.status, 1);
   assert.match(p.stdout, /opened-draft|ready/);
-  const tr = addAll(f, 'init', {
-    branch: 'b',
-    'branch-base': 'main',
-    'baseline-sha': f.baseline(),
-    spec: 's',
-    'test-command': 'npm test',
-    tracker: 'jira',
-  });
+  // --tracker 不再是任何事件的旗标（票 04）：识别是唯一来源，schema 硬拒重复声明。
+  const tr = addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa', tracker: 'jira' });
   assert.equal(tr.status, 1);
-  assert.match(tr.stdout, /local|github|gitlab/);
+  assert.match(tr.stdout, /--tracker/);
   assert.equal(readEvents(f).length, 1);
 });
 
@@ -520,13 +535,12 @@ function seedFixes(f, k) {
 test('init 前置核验：spec 文件不存在被拒（未经验证的结论不得进账）', (t) => {
   const f = makeFixture(t);
   f.git('checkout -q -b feat/demo');
-  const r = addAll(f, 'init', {
+  const r = initAll(f, {
     branch: 'feat/demo',
     'branch-base': 'main',
     'baseline-sha': f.baseline(),
     spec: '.scratch/nonexistent/spec.md',
     'test-command': 'npm test',
-    tracker: 'local',
   });
   assert.equal(r.status, 1);
   assert.match(r.stdout, /spec 文件不存在/);
@@ -800,13 +814,12 @@ test('事件流里的票没有票文件：表格有行、对账报缺失、封�
 test('reviewer=off：verdict/fix 被拒、merge 无 verdict 放行、台账 header 标注形态', (t) => {
   const f = makeFixture(t);
   f.git('checkout -q -b feat/demo');
-  const r = addAll(f, 'init', {
+  const r = initAll(f, {
     branch: 'feat/demo',
     'branch-base': 'main',
     'baseline-sha': f.baseline(),
     spec: '.scratch/demo/spec.md',
     'test-command': 'npm test',
-    tracker: 'local',
     reviewer: 'off',
     'max-concurrent': '5',
   });
@@ -831,13 +844,12 @@ test('reviewer=off：verdict/fix 被拒、merge 无 verdict 放行、台账 head
 test('maxFixRounds=3：init 快照放宽预算，第 3 次 fix 可入账，第 4 次拒绝', (t) => {
   const f = makeFixture(t);
   f.git('checkout -q -b feat/demo');
-  const r = addAll(f, 'init', {
+  const r = initAll(f, {
     branch: 'feat/demo',
     'branch-base': 'main',
     'baseline-sha': f.baseline(),
     spec: '.scratch/demo/spec.md',
     'test-command': 'npm test',
-    tracker: 'local',
     'max-fix-rounds': '3',
   });
   assert.equal(r.status, 0, r.stdout);
@@ -853,7 +865,7 @@ test('maxFixRounds=3：init 快照放宽预算，第 3 次 fix 可入账，第 4
   assert.match(fourth.stdout, /上限 3/);
 });
 
-test('init 非法快照值被 schema 拒绝（枚举 / 正整数）', (t) => {
+test('init 非法快照值被 schema 拒绝（枚举 / 正整数）——成功基线与坏载荷同屏对照', (t) => {
   const f = makeFixture(t);
   f.git('checkout -q -b feat/demo');
   const base = {
@@ -862,12 +874,16 @@ test('init 非法快照值被 schema 拒绝（枚举 / 正整数）', (t) => {
     'baseline-sha': f.baseline(),
     spec: '.scratch/demo/spec.md',
     'test-command': 'npm test',
-    tracker: 'local',
   };
-  assert.equal(addAll(f, 'init', { ...base, reviewer: 'maybe' }).status, 1);
-  assert.equal(addAll(f, 'init', { ...base, 'max-fix-rounds': '0' }).status, 1);
-  assert.equal(addAll(f, 'init', { ...base, 'max-concurrent': 'x' }).status, 1);
-  assert.ok(!fs.existsSync(f.eventsPath), '三条全部未入账——事件流文件都未创建');
+  const ok = initAll(f, base);
+  assert.equal(ok.status, 0, ok.stdout);
+  assert.equal(JSON.parse(fs.readFileSync(f.eventsPath, 'utf8')).payload.tracker, 'local', '识别结果已入账');
+  const f2 = makeFixture(t);
+  f2.git('checkout -q -b feat/demo');
+  assert.equal(initAll(f2, { ...base, reviewer: 'maybe' }).status, 1);
+  assert.equal(initAll(f2, { ...base, 'max-fix-rounds': '0' }).status, 1);
+  assert.equal(initAll(f2, { ...base, 'max-concurrent': 'x' }).status, 1);
+  assert.ok(!fs.existsSync(f2.eventsPath), '三条全部未入账——事件流文件都未创建');
 });
 
 // ====================================================================
@@ -1037,13 +1053,12 @@ test('--help 的事件清单与参数说明含 final 与旗标集（记账语法
 test('add final: reviewer=off 的运行终审照跑照记（final 不进流程形态快照）', (t) => {
   const f = makeFixture(t);
   f.git('checkout -q -b feat/demo');
-  const init = addAll(f, 'init', {
+  const init = initAll(f, {
     branch: 'feat/demo',
     'branch-base': 'main',
     'baseline-sha': f.baseline(),
     spec: '.scratch/demo/spec.md',
     'test-command': 'npm test',
-    tracker: 'local',
     reviewer: 'off',
   });
   assert.equal(init.status, 0, init.stdout);
@@ -1574,13 +1589,12 @@ test('票集边界：旗标可选——旧形态（无 --tickets）零行为变�
 test('票集边界：旗标形态非法一律拒绝——非数字 / 超 6 位 / 全空段 / 混入非法项，init 不入账', (t) => {
   const f = makeFixture(t);
   for (const bad of ['abc', '1234567', ',,', '01,x']) {
-    const r = addAll(f, 'init', {
+    const r = initAll(f, {
       branch: 'feat/demo',
       'branch-base': 'main',
       'baseline-sha': f.baseline(),
       spec: '.scratch/demo/spec.md',
       'test-command': 'npm test',
-      tracker: 'local',
       tickets: bad,
     });
     assert.equal(r.status, 1, `--tickets ${bad} 必须被拒`);
@@ -1685,13 +1699,12 @@ function writeSnapshotLayout(dir, runtimeSlug = 'demo') {
 
 function initGithubRun(f, extra = {}) {
   f.git('checkout -q -b feat/demo');
-  const r = addAll(f, 'init', {
+  const r = initAll(f, {
     branch: 'feat/demo',
     'branch-base': 'main',
     'baseline-sha': f.baseline(),
     spec: '.pi/matt-implement/demo/tracker/spec.md',
     'test-command': 'npm test',
-    tracker: 'github',
     ...extra,
   });
   assert.equal(r.status, 0, r.stdout);
@@ -1699,9 +1712,10 @@ function initGithubRun(f, extra = {}) {
 }
 
 test('tracker=github 快照：init --spec 指向快照 spec.md → 票表按快照票文件再生，枚举不降级', (t) => {
-  const f = makeFixture(t, { tickets: false });
+  const f = makeFixture(t, { tickets: false, trackerDoc: 'issue-tracker-github.md' });
   writeSnapshotLayout(f.dir);
   const r = initGithubRun(f);
+  assert.equal(JSON.parse(fs.readFileSync(f.eventsPath, 'utf8')).payload.tracker, 'github', '识别结果（github 范本）驱动 init 的 tracker 字段');
   assert.doesNotMatch(r.stdout, /仅支持本地/, '记账时刻不得出现失实降级警告');
 
   const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
@@ -1720,7 +1734,7 @@ test('tracker=github 快照：init --spec 指向快照 spec.md → 票表按快�
 });
 
 test('tracker=github 快照：封账门同样吃快照票文件——未闭环快照票阻塞封账，spec 母票豁免', (t) => {
-  const f = makeFixture(t, { tickets: false });
+  const f = makeFixture(t, { tickets: false, trackerDoc: 'issue-tracker-github.md' });
   writeSnapshotLayout(f.dir);
   initGithubRun(f);
   const close = addAll(f, 'close', {});
