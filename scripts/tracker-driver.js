@@ -48,8 +48,12 @@ function nativeNum(raw) {
 }
 
 // 模板 → argv：整元素占位符严格替换 + <repo>/<num> 的元素内替换（REST 路径模板）。
+// 模板不带 <num>/<repo> 时值可以缺省（如 listIssues 模板零占位）——不抬高调用方的负担。
 function substitute(template, values) {
-  const native = nativeNum(values.num);
+  const needsNum = template.some((el) => /<num>/.test(el));
+  const needsRepo = template.some((el) => /<repo>/.test(el));
+  const native = needsNum ? nativeNum(values.num) : '';
+  const repo = needsRepo ? String(values.repo ?? '') : '';
   return template.map((el) => {
     if (el in EXACT_PLACEHOLDERS) {
       const v = values[EXACT_PLACEHOLDERS[el]];
@@ -59,9 +63,10 @@ function substitute(template, values) {
     let out = el;
     if (el === '<num>') {
       out = native;
+    } else if (el === '<repo>') {
+      out = repo;
     } else {
-      out = out.replace(/<repo>/g, String(values.repo ?? ''))
-        .replace(/<num>/g, native);
+      out = out.replace(/<repo>/g, repo).replace(/<num>/g, native);
     }
     if (hasPlaceholder(out)) {
       reject(`模板占位符未赋值：${JSON.stringify(el)}——契约模板缺值（values=${JSON.stringify(values)}）`);
