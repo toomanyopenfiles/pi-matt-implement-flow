@@ -16,6 +16,11 @@ const path = require('node:path');
 
 const LEDGER = path.resolve(__dirname, 'ledger.js');
 
+// 票 02：同步幂等机器 marker——黑盒断言点在 gh 桩的状态与调用日志里。run 标识 = --runtime-dir 的
+// 目录名（fixture 下恒 'demo'）；kind = 四类同步写入（merge / escalate / closing / abandon）。
+const RUN = 'demo';
+const MARK = (kind) => `<!-- matt-implement:${RUN}:${kind} -->`;
+
 // --- gh 桩（Node 脚本）：状态存 GH_STUB_STATE 指向的 JSON 文件，调用追加进 GH_STUB_LOG ---
 // GH_STUB_FAIL：所有调用模拟失败（网络不可用）；GH_STUB_FAIL_WRITE=<num>：该号的写入
 // 动作（close/comment/edit）模拟失败——部分同步状态的注入点（每次 gh 调用是独立进程，
@@ -142,9 +147,19 @@ function sync(f, args, env = {}) {
 
 const withGh = (f) => ({ GH_STUB_STATE: f.stateFile, GH_STUB_LOG: f.logFile });
 
-function callLog(f) {
-  return fs.existsSync(f.logFile) ? fs.readFileSync(f.logFile, 'utf8').split('\n').filter(Boolean) : [];
+function rawLog(f) {
+  return fs.existsSync(f.logFile) ? fs.readFileSync(f.logFile, 'utf8') : '';
 }
+
+function callLog(f) {
+  return rawLog(f).split('\n').filter(Boolean);
+}
+
+// 多行正文会让桩日志把 marker 折到后续物理行——按日志原文窗口断言同一调用内携带
+// （命令与 marker 之间只有该调用的正文，不跨调用）。
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const markerNear = (raw, cmdRe, mark) =>
+  new RegExp(cmdRe + '[\\s\\S]{0,80}?' + reEscape(mark)).test(raw);
 
 function stateOf(f, num) {
   return JSON.parse(fs.readFileSync(f.stateFile, 'utf8')).issues[String(num)];
@@ -185,13 +200,23 @@ test('sync seal 成功：合并票关票附 SHA、升级票只留评保持开放
   const r = sync(f, [], withGh(f));
   assert.equal(r.status, 0, r.stdout + r.stderr);
 
-  // tracker 桩状态：合并票已关且评论含 SHA；升级票保持开放只有留评；spec 已关附收尾评论
-  assert.deepEqual(stateOf(f, 1043), { state: 'closed', assignees: [], comments: [`已合并（merge SHA：${SHA_A}）`] });
-  assert.deepEqual(stateOf(f, 1102), { state: 'open', assignees: [], comments: ['已升级上报：预算用尽'] });
+  // tracker 桩状态：合并票已关且评论含 SHA + merge marker；升级票保持开放只有留评
+  //（escalate marker）；spec 已关附收尾评论（closing marker）。marker 隐藏在正文尾部，
+  // 人类可读正文信息不变。
+  assert.deepEqual(stateOf(f, 1043), {
+    state: 'closed',
+    assignees: [],
+    comments: [`已合并（merge SHA：${SHA_A}）\n\n${MARK('merge')}`],
+  });
+  assert.deepEqual(stateOf(f, 1102), {
+    state: 'open',
+    assignees: [],
+    comments: [`已升级上报：预算用尽\n\n${MARK('escalate')}`],
+  });
   assert.deepEqual(stateOf(f, 3001), {
     state: 'closed',
     assignees: [],
-    comments: ['已交付：票 1043 合并于主分支，PR #12 待审。'],
+    comments: [`已交付：票 1043 合并于主分支，PR #12 待审。\n\n${MARK('closing')}`],
   });
   assert.deepEqual(stateOf(f, 1044), { state: 'open', assignees: [], comments: [] }, '在途票不惊动 tracker');
 
@@ -204,6 +229,11 @@ test('sync seal 成功：合并票关票附 SHA、升级票只留评保持开放
   assert.ok(log.some((l) => /issue close 1043 --comment 已合并（merge SHA：0f3a9c41b7e2d5f8a6c1e4b9d2f7a3c5e8b1d4f6）/.test(l)));
   assert.ok(log.some((l) => /issue comment 1102 --body 已升级上报：预算用尽/.test(l)));
   assert.ok(log.some((l) => /issue close 3001 --comment 已交付：票 1043/.test(l)));
+  // 四类同步写入均带 marker —— 逐条验（合并关票=merge、升级留评=escalate、spec 收尾=closing；
+  // 各 marker 含本 run 标识）。多行正文折行，按原文窗口断言同一调用内携带。
+  assert.ok(markerNear(rawLog(f), 'issue close 1043 --comment ', MARK('merge')), '同步写入携带 marker：merge');
+  assert.ok(markerNear(rawLog(f), 'issue comment 1102 --body ', MARK('escalate')), '同步写入携带 marker：escalate');
+  assert.ok(markerNear(rawLog(f), 'issue close 3001 --comment ', MARK('closing')), '同步写入携带 marker：closing');
 
   assert.match(r.stdout, /同步完成：3 个动作/);
   assert.match(r.stdout, /✓ close 1043/);
@@ -238,6 +268,62 @@ test('sync 幂等重跑：已关不重关、已评论不重复——第二次执
   assert.equal(stateOf(f, 1043).comments.length, 1);
 });
 
+// 票 02：幂等判定只认 marker——人在 tracker 上翻译/改写/追加已推送评论的正文后，
+// 重跑零动作（正文不再参与判定；marker 是唯一键）。
+test('sync 幂等重跑：人改写/翻译/追加正文后 rerun 零动作（只认 marker）', (t) => {
+  const f = makeFixture(t);
+  seedSealFixture(f);
+  const first = sync(f, [], withGh(f));
+  assert.equal(first.status, 0, first.stdout);
+
+  // 模拟人类改写：删掉正文原样、换译写、追加补充——只留 marker（HTML 注释人类不可见，
+  // 正常编辑正文时不会动它）
+  const s = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
+  s.issues[ '1043' ].comments = [`Merged (merge commit: ${SHA_A.slice(0, 7)}, squash).\n\n<!-- matt-implement:${RUN}:merge -->`];
+  s.issues[ '1102' ].comments = [`Escalated: budget exhausted（翻译后的升级评论）。\n\n(matt note：细节见 ledger)\n\n<!-- matt-implement:${RUN}:escalate -->`];
+  s.issues[ '3001' ].comments = [`Delivered – ticket 1043 merged into main, PR #12 awaiting review.\n\n<!-- matt-implement:${RUN}:closing -->`];
+  fs.writeFileSync(f.stateFile, JSON.stringify(s));
+
+  const writesBefore = rawLog(f).match(/issue (close|comment|edit) /g)?.length ?? 0;
+  const second = sync(f, [], withGh(f));
+  assert.equal(second.status, 0, second.stdout);
+  assert.match(second.stdout, /已同步：无待推送动作/);
+  const writesAfter = rawLog(f).match(/issue (close|comment|edit) /g)?.length ?? 0;
+  assert.equal(writesAfter, writesBefore, '改写正文后重跑：仍是零动作零写入');
+  assert.deepEqual(stateOf(f, 1043).comments.length, 1, '不重复推送');
+});
+
+// 票 02：历史无 marker 评论（旧 run 形态）在首次 marker 同步后照带重推（语义显式记录），
+// 新写入带 marker —— 再重跑按 marker 判重归零。
+test('sync 幂等重跑：旧 run 无 marker 历史评论 → 首重跑后照常推送一次，再跑归零', (t) => {
+  const f = makeFixture(t);
+  seedSealFixture(f);
+  // 预置旧形态痕迹：已关 + 无 marker 的合并评论（旧 run 推的）
+  const s = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
+  s.issues[ '1043' ].state = 'closed';
+  s.issues[ '1043' ].comments = [`已合并（merge SHA：${SHA_A}）`];
+  fs.writeFileSync(f.stateFile, JSON.stringify(s));
+
+  const first = sync(f, [], withGh(f));
+  assert.equal(first.status, 0, first.stdout);
+  assert.match(first.stdout, /✓ comment 1043/, '历史无 marker 评论视为未同步、照常推送一次');
+  assert.deepEqual(stateOf(f, 1043), {
+    state: 'closed',
+    assignees: [],
+    comments: [`已合并（merge SHA：${SHA_A}）`, `已合并（merge SHA：${SHA_A}）\n\n${MARK('merge')}`],
+  });
+
+  // 再重跑：marker 已在 → 零动作（新写入不再重复，语义收敛到 marker）
+  const writesBefore = rawLog(f).match(/issue (close|comment|edit) /g)?.length ?? 0;
+  const second = sync(f, [], withGh(f));
+  assert.equal(second.status, 0, second.stdout);
+  assert.deepEqual(
+    rawLog(f).match(/issue (close|comment|edit) /g)?.length ?? 0,
+    writesBefore,
+    'marker 补推后重跑：零动作',
+  );
+});
+
 // ====================================================================
 // 部分失败：逐动作报告已完成/未完成，可安全重跑（重跑只补未完成）
 // ====================================================================
@@ -258,8 +344,8 @@ test('sync 部分失败：报告已完成/未完成；重跑续作（已完成�
   assert.equal(stateOf(f, 1043).state, 'closed', '已完成的部分真实生效');
   assert.equal(stateOf(f, 3001).state, 'open', '未完成的动作不落任何状态');
 
-  // 重跑：规划器看到已推送痕迹 → 只补 spec 收尾，已关不重关、已评论不重复
-  const logBefore = callLog(f).length;
+  // 重跑：规划器看到已推送 marker → 只补 spec 收尾，已关不重关、已评论不重复
+  const logBefore = rawLog(f).length;
   const r2 = sync(f, [], withGh(f));
   assert.equal(r2.status, 0, r2.stdout);
   assert.match(r2.stdout, /✓ close 3001/);
@@ -267,7 +353,11 @@ test('sync 部分失败：报告已完成/未完成；重跑续作（已完成�
   assert.doesNotMatch(r2.stdout, /comment 1102/);
   assert.equal(stateOf(f, 1043).comments.length, 1, '合并票评论不重复');
   assert.equal(stateOf(f, 1102).comments.length, 1, '升级票留评不重复');
-  assert.ok(callLog(f).slice(logBefore).every((l) => isViewCall(l) || /3001/.test(l)), '重跑只动未完成的票');
+  // 重跑只动未完成的票：日志增量的写入调用只有 3001（关票命令）；多行正文折行，
+  // 按原文窗口断言，不逐物理行。
+  const logAfter = rawLog(f).slice(logBefore);
+  assert.doesNotMatch(logAfter, /issue (close|comment|edit) (1043|1102)( |\n)/, '重跑只动未完成的票');
+  assert.match(logAfter, /issue close 3001/, '重跑只补未完成的票');
 });
 
 // ====================================================================
@@ -284,19 +374,21 @@ test('sync abandon：spec 留评放弃说明 + 撤占坑；重跑零动作', (t)
   });
   const r = sync(f, ['--mode', 'abandon', '--claimant', 'alice', '--reason', '用户拍板放弃：终审 not_ready'], withGh(f));
   assert.equal(r.status, 0, r.stdout + r.stderr);
+  // 放弃留评携带 abandon marker（含 run 标识）——人类可读正文原样保留
   assert.deepEqual(stateOf(f, 3001), {
     state: 'open',
     assignees: [],
-    comments: ['本 run 已放弃：用户拍板放弃：终审 not_ready'],
+    comments: [`本 run 已放弃：用户拍板放弃：终审 not_ready\n\n${MARK('abandon')}`],
   });
+  assert.ok(markerNear(rawLog(f), 'issue comment 3001 --body ', MARK('abandon')), '放弃留评携带 marker：abandon');
   assert.match(r.stdout, /✓ comment 3001/);
   assert.match(r.stdout, /✓ unassign 3001（alice）/);
 
-  const logBefore = callLog(f).filter((l) => !isViewCall(l)).length;
+  const logBefore = rawLog(f).length;
   const again = sync(f, ['--mode', 'abandon', '--claimant', 'alice', '--reason', '用户拍板放弃：终审 not_ready'], withGh(f));
   assert.equal(again.status, 0);
   assert.match(again.stdout, /已同步：无待推送动作/);
-  assert.equal(callLog(f).filter((l) => !isViewCall(l)).length, logBefore, '重跑不产生任何新写入');
+  assert.equal(rawLog(f).slice(logBefore).match(/issue (close|comment|edit) /g), null, '重跑不产生任何新写入');
 });
 
 test('sync abandon：占坑者已不在（他人已处理）→ 只留说明', (t) => {
@@ -305,7 +397,11 @@ test('sync abandon：占坑者已不在（他人已处理）→ 只留说明', (
   stubState(f, { 3001: { state: 'open', assignees: [], comments: [] } });
   const r = sync(f, ['--mode', 'abandon', '--claimant', 'alice', '--reason', '改期重跑'], withGh(f));
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.deepEqual(stateOf(f, 3001), { state: 'open', assignees: [], comments: ['本 run 已放弃：改期重跑'] });
+  assert.deepEqual(stateOf(f, 3001), {
+    state: 'open',
+    assignees: [],
+    comments: [`本 run 已放弃：改期重跑\n\n${MARK('abandon')}`],
+  });
   assert.match(r.stdout, /✓ comment 3001/);
 });
 
