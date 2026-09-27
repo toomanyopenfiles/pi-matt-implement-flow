@@ -19,6 +19,8 @@
 const { normalizeTicket } = require('./ledger-schema');
 const { resolveTicketSet } = require('./tracker-set-core');
 const { transcribeSpec, transcribeTicket } = require('./tracker-sync-core');
+const { listLimit } = require('./tracker-driver');
+const { GITHUB_CONTRACT } = require('./tracker-contracts');
 
 // 标题 → 文件名 slug（确定性；无 locale、无随机）
 function slugify(title) {
@@ -51,7 +53,7 @@ function planSnapshot({ issues, specRef, initTickets, contract } = {}) {
   const warnings = [];
   const list = Array.isArray(issues) ? issues : [];
 
-  const set = resolveTicketSet({ issues: list, specRef, initTickets });
+  const set = resolveTicketSet({ issues: list, specRef, initTickets, contract });
   warnings.push(...set.warnings);
   if (!set.ok) {
     return {
@@ -72,9 +74,12 @@ function planSnapshot({ issues, specRef, initTickets, contract } = {}) {
     if (n && !byNum.has(n)) byNum.set(n, it);
   }
 
+  // 拉取上限取自契约 listIssues 模板（--limit 后随值）；缺省 = 既有 github 形态口径；
+  // 模板未声明 → 不点名上限数值。
+  const limit = listLimit(contract ?? GITHUB_CONTRACT);
   // 边界票号不在拉取集合中是用户可见事实，不是内部不变量：--tickets 清单笔误/越界
-  //（用户输入）与 gh issue list --limit 1000 截断（拉取不全）都会造成缺口——诊断点名
-  // 两种成因与重跑前置，不伪装成程序错误。
+  //（用户输入）与拉取上限截断（拉取不全）都会造成缺口——诊断点名两种成因与重跑前置，
+  // 不伪装成程序错误。
   const missing = set.tickets.filter((num) => !byNum.has(num));
   if (missing.length) {
     errors.push(
@@ -82,7 +87,9 @@ function planSnapshot({ issues, specRef, initTickets, contract } = {}) {
         (set.source === 'init-list'
           ? '--tickets 清单笔误或越界（用户输入），'
           : '票集边界指向了未被拉到的票，') +
-        '或 gh issue list --limit 1000 截断导致拉取不全；核对票号与 tracker 状态后重跑'
+        '或拉取' +
+        (limit == null ? '上限截断' : `恰达 --limit ${limit} 上限截断`) +
+        '导致拉取不全；核对票号与 tracker 状态后重跑'
     );
     return {
       ok: false,

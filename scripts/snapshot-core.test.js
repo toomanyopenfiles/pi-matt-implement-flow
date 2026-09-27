@@ -9,7 +9,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { slugify, planSnapshot, checkOverwrite } = require('./snapshot-core.js');
-const { LOCAL_CONTRACT } = require('./tracker-contracts');
+const { LOCAL_CONTRACT, GITHUB_CONTRACT } = require('./tracker-contracts');
 const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
 
 // --- fixture：tracker 的 issue 集合表示（gh issue list --json 的手工等价物）---
@@ -234,10 +234,11 @@ test('planSnapshot：状态词表参数化——改名词表下的票集转写�
   assert.equal(statusOfTicket('1044'), RENAMED_CONTRACT.mapping.closedStatus, 'closed → 契约 closedStatus');
   assert.equal(renamed.spec.text.match(/^\*\*Status:\*\* (\S+)$/m)[1], 'ready-for-agent', 'spec 母票同样走契约词表');
 
-  // 缺省契约 = canonical 默认：既有调用面（不传 contract）行为零变化；
-  // canonical 预设与不传参数产物逐字节一致。
-  const canonical = planSnapshot({ issues: mk(LOCAL_CONTRACT), specRef: '#1042', contract: LOCAL_CONTRACT });
-  const bare = planSnapshot({ issues: mk(LOCAL_CONTRACT), specRef: '#1042' });
+  // 缺省契约 = canonical 默认：既有调用面（不传 contract）行为零变化；票 05 起引用形
+  // 态同样契约驱动——number 形态的预设（github 与 canonical 同映射面）与不传参数产物
+  // 逐字节一致；local 的 spec 引用是文件路径（kind=path），不经此处票号解析。
+  const canonical = planSnapshot({ issues: mk(GITHUB_CONTRACT), specRef: '#1042', contract: GITHUB_CONTRACT });
+  const bare = planSnapshot({ issues: mk(GITHUB_CONTRACT), specRef: '#1042' });
   assert.equal(canonical.ok, true, canonical.errors.join(';'));
   assert.deepEqual(bare.tickets.map((t) => t.text), canonical.tickets.map((t) => t.text),
     '不传 contract 与显式 canonical 预设产物一致');

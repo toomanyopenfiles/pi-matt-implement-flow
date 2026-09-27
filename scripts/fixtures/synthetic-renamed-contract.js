@@ -14,7 +14,10 @@ const RENAMED_CONTRACT = {
   detection: { h1: 'issue tracker: synthetic', anchors: ['anchor-phrase'] },
   identity: {
     ticketNumber: '1–6 位数字',
-    specRef: { kind: 'number', accepts: ['<num>'] },
+    specRef: {
+      kind: 'number',
+      accepts: ['<num>', '#<num>', '<owner>/<repo>#<num>', 'https://example.test/<owner>/<repo>/issues/<num>'],
+    },
     sourceUrl: { kind: 'url', host: 'example.test', path: '/<owner>/<repo>/issues/<num>' },
   },
   mapping: {
@@ -29,7 +32,7 @@ const RENAMED_CONTRACT = {
     typeSource: 'wayfinder-label',
     blockingEdges: ['inline'],
   },
-  ticketSet: { edges: ['init-list'] },
+  ticketSet: { edges: ['sub-issues', 'parent-edges', 'init-list'] },
   capabilities: { claimStrength: 'advisory', closeWithComment: true, closingSurface: 'none' },
   commands: {
     cli: 'fake', listIssues: null, subIssues: null, blockedBy: null, repoView: null, prProbe: null, viewIssue: null,
