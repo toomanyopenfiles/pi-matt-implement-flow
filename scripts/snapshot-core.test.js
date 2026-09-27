@@ -9,6 +9,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { slugify, planSnapshot, checkOverwrite } = require('./snapshot-core.js');
+const { LOCAL_CONTRACT } = require('./tracker-contracts');
+const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
 
 // --- fixture：tracker 的 issue 集合表示（gh issue list --json 的手工等价物）---
 
@@ -216,6 +218,29 @@ test('planSnapshot：sub-issues 边界指向未拉到的票 → 同样如实诊�
   assert.match(plan.errors.join('\n'), /9999/);
   assert.match(plan.errors.join('\n'), /拉取不全/);
   assert.doesNotMatch(plan.errors.join('\n'), /内部不变量/);
+});
+
+test('planSnapshot：状态词表参数化——改名词表下的票集转写出同一套 canonical 快照（票 03）', () => {
+  // 接缝②矩阵：引擎只吃契约词表，同一批票在改名词表下仍落到 canonical Status 行。
+  const mk = (c) => [
+    { number: 1042, title: 'Spec: 词表参数化', body: 'spec 正文', state: 'OPEN', labels: [c.mapping.labelMap['ready-for-agent']], url: 'https://github.com/o/r/issues/1042' },
+    { number: 1043, title: '改名 wontfix 票', body: '## Parent\n\n#1042', state: 'OPEN', labels: [c.mapping.labelMap['wontfix']] },
+    { number: 1044, title: 'closed 票', body: '## Parent\n\n#1042', state: 'CLOSED', labels: [] },
+  ];
+  const renamed = planSnapshot({ issues: mk(RENAMED_CONTRACT), specRef: '#1042', contract: RENAMED_CONTRACT });
+  assert.equal(renamed.ok, true, renamed.errors.join(';'));
+  const statusOfTicket = (num) => renamed.tickets.find((t) => t.num === num).text.match(/^\*\*Status:\*\* (\S+)$/m)[1];
+  assert.equal(statusOfTicket('1043'), 'wontfix', '改名词表的 wontfix label → canonical wontfix');
+  assert.equal(statusOfTicket('1044'), RENAMED_CONTRACT.mapping.closedStatus, 'closed → 契约 closedStatus');
+  assert.equal(renamed.spec.text.match(/^\*\*Status:\*\* (\S+)$/m)[1], 'ready-for-agent', 'spec 母票同样走契约词表');
+
+  // 缺省契约 = canonical 默认：既有调用面（不传 contract）行为零变化；
+  // canonical 预设与不传参数产物逐字节一致。
+  const canonical = planSnapshot({ issues: mk(LOCAL_CONTRACT), specRef: '#1042', contract: LOCAL_CONTRACT });
+  const bare = planSnapshot({ issues: mk(LOCAL_CONTRACT), specRef: '#1042' });
+  assert.equal(canonical.ok, true, canonical.errors.join(';'));
+  assert.deepEqual(bare.tickets.map((t) => t.text), canonical.tickets.map((t) => t.text),
+    '不传 contract 与显式 canonical 预设产物一致');
 });
 
 // ====================================================================

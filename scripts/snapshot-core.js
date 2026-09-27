@@ -39,13 +39,14 @@ function ticketFileRel(num, title) {
 // ------------------------------------------------------------------
 
 // 输入：tracker 的 issue 集合表示（gh 拉取产物，票 04 的调用方契约）+ spec 引用 +
-// 可选 init 票号清单（兜底层，与 add init --tickets 同一清单）。
+// 可选 init 票号清单（兜底层，与 add init --tickets 同一清单）+ 可选契约（01 解析产物；
+// 票 03：缺省 = canonical 默认词表，转写状态映射按契约 mapping.labelMap / closedStatus）。
 // 返回 { ok, specNum, source, spec, tickets, errors, warnings }：
 //   ok=true   —— spec: { rel, text, source（tracker 原址 URL）}；tickets: [{num, rel, text}]
 //                （spec.md 在前，票按数值序）；source 为票集解析命中的层。
 //   ok=false  —— 票集边界不可定 / 转写拒绝（如缺 Source）：spec 为 null、tickets 为空、
 //                errors 点名原因——调用方不得落盘。
-function planSnapshot({ issues, specRef, initTickets } = {}) {
+function planSnapshot({ issues, specRef, initTickets, contract } = {}) {
   const errors = [];
   const warnings = [];
   const list = Array.isArray(issues) ? issues : [];
@@ -96,12 +97,12 @@ function planSnapshot({ issues, specRef, initTickets } = {}) {
 
   try {
     const specIssue = byNum.get(set.specNum);
-    const spec = transcribeSpec({ issue: specIssue });
+    const spec = transcribeSpec({ issue: specIssue, contract });
     // transcribeSpec 不回传 Source 值——从同一 issue 再取一次（同源，无第二真相面）
     const sourceUrl = specIssue.url ?? specIssue.html_url ?? null;
     const tickets = set.tickets.map((num) => {
       const issue = byNum.get(num);
-      return { num, rel: ticketFileRel(num, issue.title), text: transcribeTicket(issue) };
+      return { num, rel: ticketFileRel(num, issue.title), text: transcribeTicket(issue, { contract }) };
     });
     return {
       ok: true,
