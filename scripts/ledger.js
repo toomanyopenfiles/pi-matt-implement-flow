@@ -74,6 +74,11 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
               # 把 tracker/ 快照的待推送状态幂等推送到 tracker 本体（票 06；执行 03 的
               # 同步规划）。seal（缺省）：合并票关票附 merge SHA、escalate 票留评保持开放、
               # spec 母票收尾关闭；abandon：撤占坑（--claimant）+ 留评说明（--reason）。
+              # 幂等键（票 02）：每条同步评论携带隐藏机器 marker
+              # \`<!-- matt-implement:<runId>:<kind> -->\`（runId = 本 run 的运行目录名，
+              # kind = merge|escalate|closing|abandon；HTML 注释，tracker 上人类不可见）。
+              # 重入判定只认 marker：人改写/翻译/追加评论正文后重跑不重复推送；
+              # 无 marker 的历史评论（旧形态）视为未同步、照常推送一次。
               # 快照事实来自票文件 ## Comments 节：merge SHA: <sha>、escalate: <原因>；
               # spec.md 的 Comments 节里 closing: <交付指引>（票 07 对齐措辞）。
               # gh 收发为 best-effort 薄 IO：先拉状态再规划、规划通过后才写入——
@@ -688,8 +693,11 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
 //   close    → gh issue close <num> [--comment <body>]
 //   comment  → gh issue comment <num> --body <body>
 //   unassign → gh issue edit <num> --remove-assignee <login>
-// 部分失败即停：报告已完成/未完成逐动作清单；重跑从拉取重新开始，规划器按 tracker
-// 已有痕迹只补未完成的动作——已关不重关、已评论不重复。
+// 幂等键（票 02）：每条同步评论携带隐藏机器 marker `<!-- matt-implement:<runId>:<kind> -->`
+//（runId = 本 run 的 --runtime-dir 目录名 feature slug；kind = 动作种类），重入判定只认
+// marker——人改写/翻译评论正文不影响重入；无 marker 的历史评论（旧形态）视为未同步、
+// 照常推送一次。部分失败即停：报告已完成/未完成逐动作清单；重跑从拉取重新开始，
+// 规划器按 tracker 已有 marker 痕迹只补未完成的动作——已关不重关、已评论不重复。
 
 function describeSyncAction(action) {
   if (action.kind === 'close') return `close ${action.num}${action.body ? '（附评论）' : ''}`;
@@ -769,6 +777,10 @@ function parseSyncFlags(rest) {
 function cmdSync({ runtimeDir, rest }) {
   const { flags, errors } = parseSyncFlags(rest);
   const mode = flags.mode ?? 'seal';
+  // 同步幂等 marker 的 run 标识（票 02）：一次 run 的稳定身份标识 = feature slug
+  //（--runtime-dir 的目录名，即事件流与快照所在的运行目录）。同名同分支重跑
+  // 同一 slug 会命中旧 marker、不重复推送；目录名不含 < > 换行等界定性字符。
+  const runId = path.basename(runtimeDir).trim();
   if (mode !== 'seal' && mode !== 'abandon') {
     errors.push(`--mode 非法：${JSON.stringify(flags.mode ?? '')}——应为 seal | abandon（缺省 seal）`);
   }
@@ -865,7 +877,9 @@ function cmdSync({ runtimeDir, rest }) {
     actions = syncplan.planTrackerSync(
       { tickets: read.tickets, spec: read.spec },
       { issues: syncread.toTrackerIssues(views) },
-      mode === 'abandon' ? { mode, claimant: flags.claimant, reason: flags.reason } : { mode },
+      mode === 'abandon'
+        ? { mode, claimant: flags.claimant, reason: flags.reason, runId }
+        : { mode, runId },
     );
   } catch (e) {
     out(`✗ ${e.message}`, '  同步规划拒绝即零推送——修正快照事实后重跑。');
