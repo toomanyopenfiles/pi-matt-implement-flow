@@ -21,6 +21,7 @@ const schema = require('./ledger-schema');
 const core = require('./ledger-core');
 const snapshot = require('./snapshot-core');
 const tset = require('./tracker-set-core');
+const syncCore = require('./tracker-sync-core');
 const syncread = require('./sync-read-core');
 const syncplan = require('./sync-planning-core');
 
@@ -124,7 +125,7 @@ function sessionDirName(repoPath) {
 
 // --- 真相层采集（只读）---
 
-function collectTruth({ runtimeDir, events }) {
+function collectTruth({ runtimeDir, events, contract }) {
   fs.mkdirSync(runtimeDir, { recursive: true }); // 首次记账时目录尚不存在；git -C 需要它已存在
   const git = (args) => {
     try {
@@ -270,7 +271,7 @@ function collectTruth({ runtimeDir, events }) {
       const m = /^(\d+)/.exec(name);
       if (!m) continue;
       const num = schema.normalizeTicket(m[1]);
-      const parsed = parseTicketFile(fs.readFileSync(path.join(issuesDir, name), 'utf8'));
+      const parsed = parseTicketFile(fs.readFileSync(path.join(issuesDir, name), 'utf8'), { contract });
       truth.tickets.push({ num, file: name, ...parsed });
     }
     // 票号数值排序（ADR-0004）：混位数下文件名字典序会乱（'1042-…' 排在 '02-…' 前面），
@@ -297,8 +298,11 @@ function collectTruth({ runtimeDir, events }) {
   return truth;
 }
 
-// 票文件解析：Status / Type / Blocked by 行 + 首题（兼容 **Status:** x 与 Status: x 两种写法）
-function parseTicketFile(text) {
+// 票文件解析：Status / Type / Blocked by 行 + 首题（兼容 **Status:** x 与 Status: x 两种写法）。
+// Status 读取过状态词表（票 03，与转写同一张契约词表）：canonical 五名恒可读、自定义
+// label 串映射进角色；contract 由调用方注入（票 04 接线），缺省 = canonical 默认——
+// local 模式现状行为零变化。
+function parseTicketFile(text, { contract } = {}) {
   const grab = (label) => {
     const m = new RegExp(`^\\**\\s*${label}\\s*:\\**\\s*(.*)$`, 'mi').exec(text);
     return m ? m[1].replace(/\*+/g, '').trim() : null;
@@ -311,7 +315,7 @@ function parseTicketFile(text) {
   const type = grab('Type');
   return {
     title,
-    status: grab('Status'),
+    status: syncCore.normalizeStatus(grab('Status'), { contract }),
     type: type ? type.trim().toLowerCase() : null,
     blockedBy,
   };

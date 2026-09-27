@@ -5,10 +5,12 @@
 //   同步规划（sync-planning-core.js，票 03）：（快照状态, tracker 状态）→ 幂等动作列表
 //
 // 转写由三部分构成：
-//   - statusOf      状态映射表：wontfix label → wontfix（spec 明文唯一的 closed 豁免）；
-//                   closed → resolved；其余按 triage label 词表（目标仓库的
-//                   docs/agents/triage-labels.md；词表契约与解析方案见 ADR-0006）
-//                   映射 Status: 行
+//   - statusOf      状态映射表：词表里的 wontfix label → wontfix（spec 明文唯一的 closed
+//                   豁免）；closed → 契约 closedStatus；其余按契约词表（01 解析产物
+//                   mapping.labelMap，ADR-0006：拉取时钉死、输出固定 canonical 五角色）
+//                   映射 Status: 行。缺省契约 = canonical 默认（local 预设映射面）。
+//   - normalizeStatus local 票文件 Status 串过同一张契约词表：canonical 五名恒可读、
+//                   自定义 label 串映射进来、未知串透传（封账门照旧如实报告）
 //   - typeOf        类型映射表：wayfinder:<type> label → Type: 行；spec 母票 → Type: spec
 //                   （封账门豁免的识别标记，ledger-core 的 closeBlockers 读它）
 //   - blockedByOf   阻塞映射表：native dependencies 或正文 Blocked by 行 → Blocked by: 行，
@@ -34,15 +36,15 @@
 // not_planned 是否折算为 wontfix 属 IO 薄层的适配决策，不在纯函数面发明第四行。
 
 const schema = require('./ledger-schema');
+const { CANONICAL_ROLES, LOCAL_CONTRACT } = require('./tracker-contracts');
 
-// triage label 词表（上游 setup-matt-pocock-skills 的 triage-labels.md 范本所列五个
-// canonical 角色；目标仓库可经其 docs/agents/triage-labels.md 自定义实际 label 串，
-// 本表暂按 canonical 名硬编码——解析方案见 ADR-0006）。
-// statusOf 的映射优先序（spec 只豁免 wontfix）：wontfix → closed → 其余 label 按本表序
-// 取最先命中——映射因此与 labels 数组序无关。
-const TRIAGE_LABELS = ['wontfix', 'needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human'];
+// 状态词表（ADR-0006：输入可变、拉取时钉死、输出固定）。输入侧 label 串的唯一来源是
+// 01 契约解析产物的 mapping.labelMap（role→label，按目标仓库 triage-labels.md 钉死）；
+// 本模块零硬编码 label 名——词表外无状态映射。输出侧是本包自己的协议词表（固定不可
+// 配置，spec「无硬编码的边界」）：canonical 五角色 + closedStatus 关闭词 + 未评估兜底。
+const DEFAULT_MAPPING = LOCAL_CONTRACT.mapping; // canonical 默认词表 = local 预设的映射面
 
-// 开放票且无任何 triage label 时的兜底：tracker 上未被评估的票，其如实的本地状态就是
+// 开放票且无任何词表命中时的兜底：tracker 上未被评估的票，其如实的本地状态就是
 // needs-triage（维护者待评估）。不落空串——parseTicketFile 会把空值读成 ''，让下游
 // （前沿扫描、封账门）面对一个非词表状态。
 const UNTRIAGED_FALLBACK = 'needs-triage';
@@ -60,21 +62,64 @@ const labelNames = (issue) =>
 const isClosed = (issue) => String(issue.state ?? '').trim().toLowerCase() === 'closed';
 
 // ------------------------------------------------------------------
-// 状态映射表
+// 状态词表映射（转写 + 票文件读取共用同一张契约词表）
 // ------------------------------------------------------------------
 
-// 优先序即 spec 状态映射的明文面：wontfix 是唯一获得 closed 豁免的 label（关成
-// not_planned 的票仍显 wontfix）；closed 压过其余一切 label——closed + 陈旧可派发
-// label（如 ready-for-agent）不得转写成开放态，否则会污染前沿；其后的 triage label
-// 按词表序保守取先，兜底见 UNTRIAGED_FALLBACK。
-function statusOf(issue) {
+// 契约的映射面：缺省 → canonical 默认（既有调用面零改动）；显式传入残缺契约 → 拒绝
+//（映射钉死在拉取时刻，词表残缺是接线缺陷，不静默落 canonical 掩盖）。
+function mappingOf(contract) {
+  if (contract == null) return DEFAULT_MAPPING;
+  const mapping = contract.mapping;
+  const labelMapOk =
+    mapping && typeof mapping === 'object' && mapping.labelMap && typeof mapping.labelMap === 'object' &&
+    CANONICAL_ROLES.every((r) => typeof mapping.labelMap[r] === 'string' && mapping.labelMap[r].trim());
+  if (!labelMapOk || typeof mapping.closedStatus !== 'string' || !mapping.closedStatus.trim()) {
+    throw new Error(
+      '状态词表契约非法：mapping.labelMap 须为 role→label 恰好五角色、mapping.closedStatus 须为非空串' +
+        '——传入 01 契约解析产物（resolveContract）的完整契约对象'
+    );
+  }
+  return mapping;
+}
+
+// 词表反查索引：label（小写归一）→ 担任的角色。label 匹配大小写不敏感（ADR-0006：
+// label 名跨大小写唯一，parseTriageLabels 同口径判重）；重复首见者胜（解析层已保证唯一）。
+function labelIndexOf(labelMap) {
+  const idx = new Map();
+  for (const [role, label] of Object.entries(labelMap)) {
+    const key = String(label).trim().toLowerCase();
+    if (key && !idx.has(key)) idx.set(key, role);
+  }
+  return idx;
+}
+
+// 优先序即 spec 状态映射的明文面（留在代码，不开放配置，ADR-0006）：wontfix 是唯一
+// 获得 closed 豁免的 label（关成 not_planned 的票仍显 wontfix）；closed 压过其余一切
+// label——closed + 陈旧可派发 label 不得转写成开放态，否则会污染前沿；其后的角色按
+// canonical 词表序保守取先，兜底见 UNTRIAGED_FALLBACK。词表来自契约（第二参数），
+// 缺省为 canonical 默认——行为只由契约词表决定，与 tracker 名无关。
+function statusOf(issue, { contract } = {}) {
+  const mapping = mappingOf(contract);
+  const idx = labelIndexOf(mapping.labelMap);
+  const roleOf = (name) => idx.get(name.toLowerCase());
   const labels = labelNames(issue);
-  if (labels.includes('wontfix')) return 'wontfix';
-  if (isClosed(issue)) return 'resolved';
-  for (const role of TRIAGE_LABELS) {
-    if (role !== 'wontfix' && labels.includes(role)) return role;
+  if (labels.some((l) => roleOf(l) === 'wontfix')) return 'wontfix';
+  if (isClosed(issue)) return mapping.closedStatus;
+  for (const role of CANONICAL_ROLES) {
+    if (role !== 'wontfix' && labels.some((l) => roleOf(l) === role)) return role;
   }
   return UNTRIAGED_FALLBACK;
+}
+
+// local 票文件 Status 读取过同一张词表（票 03）：canonical 五名恒可读（文件里手写的
+// canonical 名不因词表改名失效）；自定义 label 串映射进角色（大小写不敏感，与转写同口径）；
+// 缺行与未知串原样透传——下游（对账、封账门）照旧如实报告，不编造状态。
+function normalizeStatus(raw, { contract } = {}) {
+  const s = String(raw ?? '').trim();
+  if (!s) return raw == null ? raw : '';
+  if (CANONICAL_ROLES.includes(s)) return s;
+  const role = labelIndexOf(mappingOf(contract).labelMap).get(s.toLowerCase());
+  return role ?? s;
 }
 
 // ------------------------------------------------------------------
@@ -124,10 +169,10 @@ const transcribeBody = (issue) => String(issue.body ?? '').replace(/\r\n/g, '\n'
 
 // 工单票文件文本：与 local tracker 票文件同构（parseTicketFile 三个标签行 + H1 首题）。
 // 任务票无 Type 行（isTaskFile：缺 Type 即 task）；无正文时文件止于头部块，不落空节。
-function transcribeTicket(issue) {
+function transcribeTicket(issue, { contract } = {}) {
   if (!issue) throw new Error('缺少 issue——转写需要 tracker 的 issue 表示');
   const num = ticketNum(issue);
-  const status = statusOf(issue);
+  const status = statusOf(issue, { contract });
   const type = typeOf(issue);
   const blockedBy = blockedByOf(issue);
   const lines = [`# ${num}: ${String(issue.title ?? '').trim()}`, '', `**Status:** ${status}`];
@@ -150,7 +195,7 @@ function transcribeTicket(issue) {
 const SPEC_TITLE_PREFIX = /^Spec\s*[:：]\s*/i;
 const STATUS_META_LINE = /^\**\s*Status\s*:\**/;
 
-function transcribeSpec({ issue, source }) {
+function transcribeSpec({ issue, source, contract } = {}) {
   if (!issue) throw new Error('缺少 spec 母票——转写需要 tracker 的 spec issue 表示');
   const src = source ?? issue.url ?? issue.html_url ?? null;
   if (!src) {
@@ -163,7 +208,7 @@ function transcribeSpec({ issue, source }) {
     '',
     `Source: ${src}`,
     '',
-    `**Status:** ${statusOf(issue)}`,
+    `**Status:** ${statusOf(issue, { contract })}`,
     '',
     '**Type:** spec',
   ];
@@ -181,6 +226,7 @@ function transcribeSpec({ issue, source }) {
 
 module.exports = {
   statusOf,
+  normalizeStatus,
   typeOf,
   blockedByOf,
   transcribeTicket,
