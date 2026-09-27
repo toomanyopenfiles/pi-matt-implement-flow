@@ -96,6 +96,20 @@ function validateContract(c) {
       Array.isArray(mapping.blockingEdges) && mapping.blockingEdges.length > 0 && mapping.blockingEdges.every((e) => BLOCKING_EDGES.includes(e)),
       `契约 mapping.blockingEdges 必须是 ${BLOCKING_EDGES.join(' | ')} 的非空数组`
     );
+    // view/list JSON 形状（票 06 适配面声明）：tracker issue JSON → canonical 输入形态的
+    // 字段映射；state 词表（open/closed 识别词）与 login/body 子字段名在此显式声明。
+    const vs = mapping.viewShape;
+    check(
+      isObj(vs) && typeof vs.number === 'string' && vs.number.trim() &&
+        typeof vs.title === 'string' && vs.title.trim() && typeof vs.body === 'string' && vs.body.trim() &&
+        typeof vs.state === 'string' && vs.state.trim() &&
+        Array.isArray(vs.stateOpen) && vs.stateOpen.every((s) => typeof s === 'string' && s) &&
+        Array.isArray(vs.stateClosed) && vs.stateClosed.length > 0 && vs.stateClosed.every((s) => typeof s === 'string' && s) &&
+        typeof vs.assignees === 'string' && vs.assignees.trim() && typeof vs.assigneeLogin === 'string' && vs.assigneeLogin.trim() &&
+        typeof vs.comments === 'string' && vs.comments.trim() && typeof vs.commentBody === 'string' && vs.commentBody.trim() &&
+        Array.isArray(vs.urlKeys) && vs.urlKeys.length > 0 && vs.urlKeys.every((k) => typeof k === 'string' && k.trim()),
+      '契约 mapping.viewShape 非法——期望 number/title/body/state/stateOpen/stateClosed/assignees/assigneeLogin/comments/commentBody/urlKeys 的声明面（tracker issue JSON → 引擎 canonical 输入形态的字段映射）'
+    );
   }
 
   check(

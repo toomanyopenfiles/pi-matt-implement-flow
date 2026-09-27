@@ -130,13 +130,22 @@ function stringsOrEmpty(value, what) {
 // 正文 + marker：人类可读正文在首行，marker（隐藏 HTML 注释）附后，不干扰阅读。
 const withMarker = (body, kind, runId) => `${body}\n\n${syncMarker(runId, kind)}`;
 
-function planMergeActions(ticket, num, issue, runId) {
+function planMergeActions(ticket, num, issue, runId, closeWithComment) {
   const sha = ticket.mergeSha;
   const body = withMarker(`已合并（merge SHA：${sha}）`, 'merge', runId);
   const commented = hasSyncMarker(issue.comments, runId, 'merge');
   if (issue.state === 'open') {
-    // marker 已在（部分同步）→ 仅关票不重评；否则关票附评论
-    return [{ kind: 'close', num, body: commented ? null : body }];
+    // marker 已在（部分同步）→ 仅关票不重评；否则按关票能力生成动作集：
+    //   closeWithComment=true（github/local）→ 关票附评论（单步）；
+    //   closeWithComment=false（gitlab）→ note 先行再 close（先留评后关票，能力差异
+    //   不丢评论——票 06；等价序列由规划面生成，driver 拒照 close+body）。
+    if (commented) return [{ kind: 'close', num, body: null }];
+    return closeWithComment
+      ? [{ kind: 'close', num, body }]
+      : [
+          { kind: 'comment', num, body },
+          { kind: 'close', num, body: null },
+        ];
   }
   // tracker 已关 → 仅补评论（marker 已在 = 已同步，零动作）
   return commented ? [] : [{ kind: 'comment', num, body }];
@@ -145,7 +154,7 @@ function planMergeActions(ticket, num, issue, runId) {
 // spec 收尾：评论携带交付指引（closingNote，封账前已写入快照）后关闭。
 // 同样三档幂等：已关已评 → 零动作；未关已评 → 仅关票；已关未评 → 仅补评论。
 // 母票仍开放而快照无收尾评论 = 收尾协议未完成，拒绝放行（不猜一个评论去关票）。
-function planSpecActions(spec, issue, runId) {
+function planSpecActions(spec, issue, runId, closeWithComment) {
   const note = spec.closingNote;
   if (note == null) {
     if (issue.state === 'open') {
@@ -159,14 +168,21 @@ function planSpecActions(spec, issue, runId) {
   const body = withMarker(note, 'closing', runId);
   const commented = hasSyncMarker(issue.comments, runId, 'closing');
   if (issue.state === 'open') {
-    return [{ kind: 'close', num: spec.num, body: commented ? null : body }];
+    // 关票动作集按 closeWithComment 能力生成（票 06）：能力差异集中在规划面生成（数据前提）。
+    if (commented) return [{ kind: 'close', num: spec.num, body: null }];
+    return closeWithComment
+      ? [{ kind: 'close', num: spec.num, body }]
+      : [
+          { kind: 'comment', num: spec.num, body },
+          { kind: 'close', num: spec.num, body: null },
+        ];
   }
   return commented ? [] : [{ kind: 'comment', num: spec.num, body }];
 }
 
 // 封账前同步（seal）：合并票关票附 SHA、升级票留评保持开放、spec 母票收尾关闭。
 // 票动作按票号数值序（ADR-0004），spec 收尾固定殿后。
-function planSeal(snapshot, issues, runId) {
+function planSeal(snapshot, issues, runId, closeWithComment) {
   const actions = [];
   // 先验形态再规划：快照票号逐个归一、重复立即拒绝（验证档），不与动作生成交织
   const tickets = snapshot.tickets
@@ -184,7 +200,7 @@ function planSeal(snapshot, issues, runId) {
       }
       const issue = issues.get(num);
       if (!issue) reject(`tracker 缺快照票 ${num} 的状态——合并票需要同步关票`);
-      actions.push(...planMergeActions(t, num, issue, runId));
+      actions.push(...planMergeActions(t, num, issue, runId, closeWithComment));
     } else if (t.escalateReason != null) {
       if (typeof t.escalateReason !== 'string' || !t.escalateReason.trim()) {
         reject(`快照票 ${num} escalateReason 非法：${JSON.stringify(t.escalateReason)}`);
@@ -206,7 +222,7 @@ function planSeal(snapshot, issues, runId) {
     }
     const issue = issues.get(num);
     if (!issue) reject(`tracker 缺 spec 母票 ${num} 的状态——封账前同步需要母票状态`);
-    actions.push(...planSpecActions({ ...spec, num }, issue, runId));
+    actions.push(...planSpecActions({ ...spec, num }, issue, runId, closeWithComment));
   }
   return actions;
 }
@@ -268,7 +284,12 @@ function planTrackerSync(snapshot, tracker, options) {
       comments: stringsOrEmpty(raw.comments, `tracker 票 ${num} comments`),
     });
   }
-  return options.mode === 'seal' ? planSeal(snapshot, issues, runId) : planAbandon(snapshot, issues, options);
+  // 关票动作集由契约能力生成（票 06）：closeWithComment 声明了 close 面（能力差异
+  // 全走契约声明），缺省 = true（github/local 形态，既有用例零改动）。
+  const closeWithComment = options.closeWithComment !== false;
+  return options.mode === 'seal'
+    ? planSeal(snapshot, issues, runId, closeWithComment)
+    : planAbandon(snapshot, issues, options);
 }
 
 module.exports = { planTrackerSync, syncMarker, hasSyncMarker };

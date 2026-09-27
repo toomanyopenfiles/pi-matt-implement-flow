@@ -62,6 +62,21 @@ const LOCAL_CONTRACT = {
     closedStatus: 'resolved',
     typeSource: 'type-line',
     blockingEdges: ['inline'],
+    // local 无 tracker JSON——形状声明 canonical 形态自身（契约校验档要求字段在位；
+    // local 的快照/同步为无操作，不会真的肥到这上面）。
+    viewShape: {
+      number: 'number',
+      title: 'title',
+      body: 'body',
+      state: 'state',
+      stateOpen: ['open'],
+      stateClosed: ['closed'],
+      assignees: 'assignees',
+      assigneeLogin: 'login',
+      comments: 'comments',
+      commentBody: 'body',
+      urlKeys: ['url', 'html_url'],
+    },
   },
   ticketSet: {
     edges: ['init-list'],
@@ -117,6 +132,21 @@ const GITHUB_CONTRACT = {
     closedStatus: 'resolved',
     typeSource: 'wayfinder-label',
     blockingEdges: ['native', 'inline'],
+    // view/list JSON 形状（适配面）：跟踪器 issue JSON 产物 → 引擎 canonical 输入形态的
+    // 字段映射（票 06 起声明式契约化——字段名差异为数据，不是 if-tracker 分支）。
+    viewShape: {
+      number: 'number',
+      title: 'title',
+      body: 'body',
+      state: 'state',
+      stateOpen: ['open'],
+      stateClosed: ['closed'],
+      assignees: 'assignees',
+      assigneeLogin: 'login',
+      comments: 'comments',
+      commentBody: 'body',
+      urlKeys: ['url', 'html_url'],
+    },
   },
   ticketSet: {
     edges: ['sub-issues', 'parent-edges', 'init-list'],
@@ -172,6 +202,22 @@ const GITLAB_CONTRACT = {
     closedStatus: 'resolved',
     typeSource: 'wayfinder-label',
     blockingEdges: ['inline'], // free tier 无原生链接——Blocked by: 正文行
+    // view/list JSON 形状（适配面）：glab 语义的 field 映射——iid ≠ number、description ≠
+    // body、state 'opened' ≠ 'open'、notes ≠ comments、assignees[].username ≠ login、
+    // 引用原址是 web_url（票 06：GitLab 形态差异契约化，引擎据此适配零 if-tracker 分支）。
+    viewShape: {
+      number: 'iid',
+      title: 'title',
+      body: 'description',
+      state: 'state',
+      stateOpen: ['opened', 'open'],
+      stateClosed: ['closed'],
+      assignees: 'assignees',
+      assigneeLogin: 'username',
+      comments: 'notes',
+      commentBody: 'body',
+      urlKeys: ['web_url', 'url', 'html_url'],
+    },
   },
   ticketSet: {
     edges: ['parent-edges', 'init-list'], // 无 sub-issues：Parent 反查 + 票号清单兜底
