@@ -79,11 +79,19 @@ if (kind === 'view') {
 } else if (kind === 'edit') {
   if (!it) die('issue #' + num + ' not found');
   if (writeFail()) die('simulated write failure (edit ' + num + ')');
-  const ri = rest.indexOf('--remove-assignee');
-  const login = rest[ri + 1];
   const s = load();
-  s.issues[num].assignees = (s.issues[num].assignees ?? []).filter((a) => a !== login);
-  save(s);
+  const ai = rest.indexOf('--add-assignee');
+  if (ai !== -1) {
+    // 占坑写面（票 05 claim 子命令）：追加 assignee（幂等：已在位不重复）
+    const login = rest[ai + 1];
+    if (!(s.issues[num].assignees ?? []).includes(login)) s.issues[num].assignees = [...(s.issues[num].assignees ?? []), login];
+    save(s);
+  } else {
+    const ri = rest.indexOf('--remove-assignee');
+    const login = rest[ri + 1];
+    s.issues[num].assignees = (s.issues[num].assignees ?? []).filter((a) => a !== login);
+    save(s);
+  }
 } else {
   console.error('gh stub: unhandled issue subcommand: ' + kind);
   process.exit(64);
@@ -91,16 +99,23 @@ if (kind === 'view') {
 `;
 
 // --- fixture：运行时目录 + tracker 快照（编排器写到同步时点的产物形态）---
+// 票 05 契约化：fixture 带 setup 产物（docs/agents/issue-tracker.md = GitHub 范本）作判型
+// 输入——同步/占坑的契约模板与 Source 行形态解析的配置单源（可传 localDoc 换 local 范本）。
 
 const SHA_A = '0f3a9c41b7e2d5f8a6c1e4b9d2f7a3c5e8b1d4f6';
 
-function makeFixture(t) {
+function makeFixture(t, { trackerDoc = 'issue-tracker-github.md' } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-fixture-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'gh'), GH_STUB);
   fs.chmodSync(path.join(bin, 'gh'), 0o755);
+  if (trackerDoc !== null) {
+    fs.mkdirSync(path.join(dir, 'docs/agents'), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, 'fixtures', trackerDoc), path.join(dir, 'docs/agents/issue-tracker.md'));
+    fs.copyFileSync(path.join(__dirname, 'fixtures', 'triage-labels-canonical.md'), path.join(dir, 'docs/agents/triage-labels.md'));
+  }
   const runtime = path.join(dir, '.pi/matt-implement/demo');
   const tracker = path.join(runtime, 'tracker');
   fs.mkdirSync(path.join(tracker, 'issues'), { recursive: true });
@@ -515,4 +530,88 @@ test('sync gh 拉取失败：同步对象在 tracker 上缺失（如被删除）
   assert.match(r.stdout, /1102/);
   assert.match(r.stdout, /拉取失败/);
   assert.equal(callLog(f).filter((l) => !isViewCall(l)).length, 0);
+});
+
+// ====================================================================
+// 占坑（票 05 claim 子命令）：契约 claim 模板执行——先读状态再写入，冲突不猜测覆盖
+// ====================================================================
+
+test('claim 成功：先读状态无人占坑 → claim 模板执行，tracker 桩状态真实更新', (t) => {
+  const f = makeFixture(t);
+  stubState(f, { 3001: { state: 'open', assignees: [], comments: [] } });
+  const r = spawnSync(process.execPath, [LEDGER, 'claim', '--runtime-dir', f.runtime, '--spec', 'https://github.com/o/r/issues/3001'], {
+    cwd: f.dir,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${f.bin}${path.delimiter}${process.env.PATH}`, GH_STUB_STATE: f.stateFile, GH_STUB_LOG: f.logFile },
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /占坑/);
+  assert.match(r.stdout, /3001/);
+  assert.deepEqual(stateOf(f, 3001).assignees, ['@me'], 'tracker 桩状态：占坑落 assignee');
+  assert.ok(rawLog(f).includes('issue edit 3001 --add-assignee @me'), 'claim 走契约 claim 模板');
+  assert.ok(rawLog(f).includes('issue view 3001'), '先读状态再写入');
+});
+
+test('claim 冲突：他人已在位 → 拒绝并点名在位者，不覆盖（无 claim 写入）', (t) => {
+  const f = makeFixture(t);
+  stubState(f, { 3001: { state: 'open', assignees: ['alice'], comments: [] } });
+  const r = spawnSync(process.execPath, [LEDGER, 'claim', '--runtime-dir', f.runtime, '--spec', '#3001'], {
+    cwd: f.dir,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${f.bin}${path.delimiter}${process.env.PATH}`, GH_STUB_STATE: f.stateFile, GH_STUB_LOG: f.logFile },
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /占坑冲突/);
+  assert.match(r.stdout, /alice/);
+  assert.deepEqual(stateOf(f, 3001).assignees, ['alice'], '他人占坑零覆盖');
+  assert.equal(rawLog(f).match(/issue edit 3001 --add-assignee/g), null, '冲突路径无 claim 写入');
+});
+
+test('claim local 契约 / 缺 setup 产物 / 缺 --spec：显式停下不猜测', (t) => {
+  const runClaim = (f, args) =>
+    spawnSync(process.execPath, [LEDGER, 'claim', '--runtime-dir', f.runtime, ...args], {
+      cwd: f.dir,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${f.bin}${path.delimiter}${process.env.PATH}`, GH_STUB_STATE: f.stateFile, GH_STUB_LOG: f.logFile },
+    });
+
+  const local = makeFixture(t, { trackerDoc: 'issue-tracker-local.md' });
+  const rl = runClaim(local, ['--spec', '3001']);
+  assert.equal(rl.status, 1);
+  assert.match(rl.stdout, /tracker=local 无 tracker 写面/);
+
+  const noDoc = makeFixture(t, { trackerDoc: null });
+  const rn = runClaim(noDoc, ['--spec', '3001']);
+  assert.equal(rn.status, 1);
+  assert.match(rn.stdout, /setup-matt-pocock-skills/);
+
+  const f = makeFixture(t);
+  stubState(f, { 3001: { state: 'open', assignees: [], comments: [] } });
+  const missing = runClaim(f, []);
+  assert.equal(missing.status, 2, '用法拒绝（exit 2）');
+  assert.match(missing.stdout, /缺少必选参数 --spec/);
+  const bogus = runClaim(f, ['--spec', '3001', '--bogus', 'x']);
+  assert.equal(bogus.status, 2);
+  assert.match(bogus.stdout, /未知旗标 --bogus/);
+  assert.equal(callLog(f).length, 0, '拒绝面不触碰 tracker');
+});
+
+test('sync 拒绝：local 契约（快照/同步为无操作）——票文件即真相层', (t) => {
+  const f = makeFixture(t, { trackerDoc: 'issue-tracker-local.md' });
+  writeSpec(f);
+  const r = sync(f, [], withGh(f));
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /tracker=local 无需同步/);
+  assert.match(r.stdout, /本地票文件即真相层/);
+  assert.equal(callLog(f).length, 0, 'local 契约同步零 tracker 触碰');
+});
+
+test('sync 拒绝：缺 setup 产物 → 识别先于一切拉取，指引运行 /setup-matt-pocock-skills', (t) => {
+  const f = makeFixture(t, { trackerDoc: null });
+  writeSpec(f);
+  stubState(f, { 3001: { state: 'open', assignees: [], comments: [] } });
+  const r = sync(f, [], withGh(f));
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /setup-matt-pocock-skills/);
+  assert.equal(callLog(f).length, 0, '识别失败零网络');
 });

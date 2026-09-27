@@ -96,10 +96,17 @@ init（run 初始化，票 04——契约驱动）:
               # 无 marker 的历史评论（旧形态）视为未同步、照常推送一次。
               # 快照事实来自票文件 ## Comments 节：merge SHA: <sha>、escalate: <原因>；
               # spec.md 的 Comments 节里 closing: <交付指引>（票 07 对齐措辞）。
-              # gh 收发为 best-effort 薄 IO：先拉状态再规划、规划通过后才写入——
+              # 同步收发为 best-effort 薄 IO（契约命令模板执行）：先拉状态再规划、规划通过后才写入——
               # 拉取失败即整体中止（无半成品推送）；部分失败逐动作报告已完成/未完成，
               # 重跑安全（幂等规划只补未完成的动作）。同步成功后输出清理指引。
               # run 已封账或 PR 已标 ready 时拒绝执行（同步须在两时点之前）。
+
+占坑 (claim，run 的第一个 tracker 写动作，先于快照拉取——ADR-0003 锁实时):
+  claim --spec <契约声明的 spec 引用形态>
+              # 把 spec 母票认领到 @me（契约 claim 模板执行；tracker 侧的 feature 级并发锁）。
+              # 先读状态再写入：他人已在位 → 拒绝并点名在位者（不猜测覆盖他人占坑；
+              # 同一占坑者续跑该步幂等可跳过）。进度与合并同步归 sync；封账/放弃时释放。
+              # local 契约无 tracker 写面——占坑不存在（票文件即真相层）。
 
 说明:
   init     run 初始化（Round 0 唯一一次）：契约驱动——tracker 从 setup 产物自动识别；
@@ -109,8 +116,9 @@ init（run 初始化，票 04——契约驱动）:
   build    台账再生：四段 markdown（头部/表格/时间线/对账结论），确定性重建
   check    对账：账实差异核验，非零退出码 = 有差异；派发与合并前、compaction 后必跑；
            并对 final 事件的 runId 做 best-effort 平台证据核验（不可核验仅警告，不影响退出码）
-  sync     封账前单点同步：快照事实 → 03 规划 → gh 幂等执行（ticket 06，tracker=github 契约）；
+  sync     封账前单点同步：快照事实 → 03 规划 → 契约模板幂等执行（同步动作集由能力生成）；
            成功后打印清理指引（快照与 review bundle 清理、findings 与账本三件套留存）
+  claim    占坑：spec 母票认领到 @me（契约 claim 模板；先读状态再写入，冲突拒绝）
   时间不由 LLM 提供；自由文本统一 --note；校验拒绝时给出原因，修正后重试；
   与校验器分歧 → add anomaly --note "..." 并停下上报（无任何绕过旗标）。
 `;
@@ -853,13 +861,14 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
   return 0;
 }
 
-// --- 同步（票 06）：快照事实读取（sync-read-core）+ 同步规划（票 03）+ gh 薄 IO 执行 ---
+// --- 同步（票 06）：快照事实读取（sync-read-core）+ 同步规划（票 03）+ 契约模板执行（票 05 driver）---
 //
 // 时序即幂等保障：先拉 tracker 状态（拉取失败即整体中止）→ 纯规划（拒绝面全拦在此，
-// 零写入）→ 逐动作顺序执行。执行属票 03 动作集的一一对应：
-//   close    → gh issue close <num> [--comment <body>]
-//   comment  → gh issue comment <num> --body <body>
-//   unassign → gh issue edit <num> --remove-assignee <login>
+// 零写入）→ 逐动作顺序执行。执行按同步动作集与契约命令模板一一对应（票 05：
+// 取数/留评/关票/撤认领全走 driver，零硬编码 argv）：
+//   close    → contract.commands.close（body != null 时按 closeWithComment 能力追加收尾评论）
+//   comment  → contract.commands.comment
+//   unassign → contract.commands.unclaim
 // 幂等键（票 02）：每条同步评论携带隐藏机器 marker `<!-- matt-implement:<runId>:<kind> -->`
 //（runId = 本 run 的 --runtime-dir 目录名 feature slug；kind = 动作种类），重入判定只认
 // marker——人改写/翻译评论正文不影响重入；无 marker 的历史评论（旧形态）视为未同步、
@@ -872,14 +881,14 @@ function describeSyncAction(action) {
   return `unassign ${action.num}（${action.login}）`;
 }
 
-function executeSyncAction(action, repo) {
-  const num = String(Number(action.num)); // gh 的原生号：去归一化补零（'07' → '7'）
+// 同步动作 → 契约命令模板执行（票 05 driver；repo 作用旗由 driver 按模板形态前置）。
+function executeSyncAction(action, contract, repo) {
   if (action.kind === 'close') {
-    runGh(action.body ? ['-R', repo, 'issue', 'close', num, '--comment', action.body] : ['-R', repo, 'issue', 'close', num]);
+    driver.runCommand(contract, 'close', { num: action.num, body: action.body ?? null, repo });
   } else if (action.kind === 'comment') {
-    runGh(['-R', repo, 'issue', 'comment', num, '--body', action.body]);
+    driver.runCommand(contract, 'comment', { num: action.num, body: action.body, repo });
   } else if (action.kind === 'unassign') {
-    runGh(['-R', repo, 'issue', 'edit', num, '--remove-assignee', action.login]);
+    driver.runCommand(contract, 'unclaim', { num: action.num, login: action.login, repo });
   } else {
     throw new Error(`未知同步动作 kind：${JSON.stringify(action.kind)}`);
   }
@@ -982,13 +991,29 @@ function cmdSync({ runtimeDir, rest }) {
     return 1;
   }
 
-  // 快照读取（纯函数，fs 谓词注入）：快照缺失 → tracker=local 无需同步 / github 先拉取
+  // 契约先于一切网络动作（零半成品，与 snapshot-init 同一转接）：同步的命令模板与
+  // Source 行原址形态都由契约驱动；无法识别 → 显式停下不猜测不降级。
+  const resolution = resolveTrackerFromRepo(process.cwd());
+  if (!resolution.ok) {
+    out(`✗ 拒绝：`, ...resolution.errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+  const contract = resolution.contract;
+  if (!contract.commands.cli) {
+    // local 契约无 tracker 写面：票文件即真相，快照/同步为无操作（spec：local 零变化）。
+    out('✗ 拒绝：tracker=local 无需同步——本地票文件即真相层（快照/同步为无操作）。');
+    return 1;
+  }
+
+  // 快照读取（纯函数，fs 谓词注入；Source 行按契约原址形态判定）：快照缺失 →
+  // local 无需同步 / remote 契约先拉取。
   const snapshotRoot = path.join(runtimeDir, SNAPSHOT_DIR);
   const read = syncread.readSnapshot({
     trackerDir: snapshotRoot,
     readFile: (p) => fs.readFileSync(p, 'utf8'),
     listDir: (p) => fs.readdirSync(p),
     exists: (p) => fs.existsSync(p),
+    contract,
   });
   if (!read.ok) {
     if (read.errors[0]?.startsWith('快照不存在')) {
@@ -1018,21 +1043,13 @@ function cmdSync({ runtimeDir, rest }) {
   const views = [];
   for (const num of nums) {
     try {
-      const raw = runGh([
-        '-R',
-        read.source.repo,
-        'issue',
-        'view',
-        String(Number(num)),
-        '--json',
-        'number,state,assignees,comments',
-      ]);
+      const raw = driver.runCommand(contract, 'viewIssue', { num, repo: read.source.repo });
       views.push(JSON.parse(raw || 'null'));
     } catch (e) {
       out(
-        `✗ 同步未执行任何动作：gh issue view ${num} 拉取失败——${ghDetail(e)}`,
+        `✗ 同步未执行任何动作：issue view ${num} 拉取失败——${cliDetail(e)}`,
         '  同步先拉状态再规划、规划通过后才写入：拉取失败即整体中止，零写入（无半成品推送）；',
-        '  排查 gh 登录/网络（或确认该 issue 未被删除）后重跑。',
+        '  排查登录/网络（或确认该票未被删除）后重跑。',
       );
       return 1;
     }
@@ -1063,12 +1080,12 @@ function cmdSync({ runtimeDir, rest }) {
   const done = [];
   for (const action of actions) {
     try {
-      executeSyncAction(action, read.source.repo);
+      executeSyncAction(action, contract, read.source.repo);
       out(`  ✓ ${describeSyncAction(action)}`);
       done.push(action);
     } catch (e) {
       out(
-        `✗ 同步失败：${describeSyncAction(action)} 失败——${ghDetail(e)}`,
+        `✗ 同步失败：${describeSyncAction(action)} 失败——${cliDetail(e)}`,
         `  已完成（${done.length}/${actions.length}）：`,
         ...done.map((a) => `    ✓ ${describeSyncAction(a)}`),
         `  未完成（${actions.length - done.length}）：`,
@@ -1086,6 +1103,110 @@ function cmdSync({ runtimeDir, rest }) {
   return 0;
 }
 
+// --- 占坑（票 05）：契约 claim 模板的 run 第一写动作（tracker 侧的 feature 级并发锁）---
+//
+// 占坑是 run 在 tracker 上的第一个写动作（先于快照拉取，ADR-0003：锁实时、进度延迟）；
+// 进度与合并同步归 sync，封账/放弃时释放。本子命令只做契约模板执行的写面：
+// 先读 spec 母票状态（冲突不猜测覆盖）→ 无人占坑才执行 claim 模板；占坑约定的协商语义
+//（接管/改目标/协调）属 SKILL 叙事（票 07），不在脚本面。幂等：已在位 → 拒绝而非重复写。
+function cmdClaim({ runtimeDir, rest }) {
+  const errors = [];
+  const flags = {};
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (!tok.startsWith('--')) {
+      errors.push(`意外位置参数「${tok}」——参数一律用 --flag value 形式`);
+      continue;
+    }
+    let flag = tok.slice(2);
+    let value = null;
+    const eq = flag.indexOf('=');
+    if (eq !== -1) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else if (i + 1 < rest.length && !rest[i + 1].startsWith('--')) {
+      value = rest[++i];
+    } else {
+      errors.push(`旗标 --${flag} 缺少值`);
+      continue;
+    }
+    if (flag !== 'spec') {
+      errors.push(`未知旗标 --${flag}（claim 的参数集见 --help）；本脚本无任何绕过校验的旗标`);
+      continue;
+    }
+    if ('spec' in flags) {
+      errors.push('旗标 --spec 重复给出');
+      continue;
+    }
+    if (!String(value).trim()) {
+      errors.push('旗标 --spec 的值为空');
+      continue;
+    }
+    flags.spec = value;
+  }
+  if (!('spec' in flags)) {
+    errors.push('缺少必选参数 --spec <spec 引用>（契约声明的形态：GitHub：issue 号 / #号 / owner/repo#号 / issue URL）');
+  }
+  if (errors.length) {
+    out(`✗ 拒绝：`, ...errors.map((e) => `  - ${e}`));
+    return 2;
+  }
+
+  // 契约先于一切写动作（零半成品）：占坑写面由契约 claim 模板声明；local 契约无
+  // tracker 写面——占坑不存在（票文件即真相层）。
+  const resolution = resolveTrackerFromRepo(process.cwd());
+  if (!resolution.ok) {
+    out(`✗ 拒绝：`, ...resolution.errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+  const contract = resolution.contract;
+  if (!contract.commands.claim || !contract.commands.cli) {
+    out(
+      '✗ 拒绝：tracker=local 无 tracker 写面——占坑不存在（本地票文件即真相层，不经此命令）。'
+    );
+    return 1;
+  }
+  const specNum = tset.parseSpecRef(flags.spec, { contract });
+  if (!specNum) {
+    out(
+      `✗ 拒绝：spec 引用无法解析出票号：${JSON.stringify(flags.spec)}`,
+      '  spec 引用必须落在契约声明票形态内（GitHub：issue 号 / #号 / owner/repo#号 / issue URL）。'
+    );
+    return 1;
+  }
+
+  // 先读状态再写入（冲突检查不可用时不盲写）：占坑是并发锁的占有面，他人已在位即停下。
+  try {
+    const view = JSON.parse(driver.runCommand(contract, 'viewIssue', { num: specNum }) || '{}');
+    const assignees = (view?.assignees ?? []).map((a) => a?.login).filter((l) => typeof l === 'string' && l);
+    if (assignees.length) {
+      out(
+        `✗ 占坑冲突：spec ${specNum} 已在 tracker 上被认领（${assignees.join('、')}）——`,
+        '  占坑是 feature 级并发锁的占有面：不猜测覆盖他人占坑；',
+        '  若确为本 run 续跑（同一占坑者），该步幂等可直接跳过；',
+        '  若要接管或换目标：按占坑约定与在位者（或用户）确认后处理。'
+      );
+      return 1;
+    }
+  } catch (e) {
+    out(
+      `✗ 占坑失败：spec ${specNum} 状态读取失败——${cliDetail(e)}`,
+      '  先读状态再写入（冲突检查不可用时不盲写）：排查登录/网络/引用后重跑。'
+    );
+    return 1;
+  }
+  try {
+    driver.runCommand(contract, 'claim', { num: specNum });
+  } catch (e) {
+    out(`✗ 占坑失败：claim 执行失败——${cliDetail(e)}`, '  占坑未落（可安全重跑）。');
+    return 1;
+  }
+  out(
+    `✓ 占坑：spec ${specNum} 已认领到 @me（契约 claim 模板；tracker 侧的 feature 级并发锁，ADR-0003）。`
+  );
+  return 0;
+}
+
 // --- 入口 ---
 
 function main(argv) {
@@ -1098,7 +1219,7 @@ function main(argv) {
     return 0;
   }
   const command = argv[0];
-  if (!['add', 'build', 'check', 'snapshot-init', 'sync', 'init'].includes(command)) {
+  if (!['add', 'build', 'check', 'claim', 'snapshot-init', 'sync', 'init'].includes(command)) {
     out(`未知子命令：${command}`, USAGE);
     return 2;
   }
@@ -1121,6 +1242,7 @@ function main(argv) {
   runtimeDir = path.resolve(runtimeDir);
   if (command === 'init') return cmdInit({ runtimeDir, rest });
   if (command === 'add') return cmdAdd({ runtimeDir, rest });
+  if (command === 'claim') return cmdClaim({ runtimeDir, rest });
   if (command === 'build') return cmdBuild({ runtimeDir });
   if (command === 'snapshot-init') return cmdSnapshotInit({ runtimeDir, rest });
   if (command === 'sync') return cmdSync({ runtimeDir, rest });

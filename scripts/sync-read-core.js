@@ -6,7 +6,7 @@
 //      解析 Status/Type 行与 ## Comments 节里的同步事实（merge SHA / escalate 原因 /
 //      closing 交付指引）。run 期间编排器只写快照（ADR-0003：快照是待推送的真相），
 //      本层把这些事实交还规划器。
-//   ② gh issue view 产物 → tracker：gh 语义（大写 state、对象数组）归一为规划器
+//   ② tracker issue view 产物 → tracker：tracker 语义（大写 state、对象数组）归一为规划器
 //      的 tracker 状态（小写 open/closed、login/body 字符串数组）。
 //
 // 快照 Comments 事实约定（写入侧是编排流程文档，票 07 对齐措辞）：
@@ -162,8 +162,8 @@ function readSnapshot({ trackerDir, readFile, listDir, exists, contract }) {
   return { ok: true, tickets, spec, source: { repo: src.repo, url: src.url }, errors, warnings };
 }
 
-// gh issue view 产物数组 → planTrackerSync 的 tracker.issues。
-// gh 语义 → 规划器语义：state 大写归小写、assignees 对象取 login、comments 对象取 body；
+// tracker issue view 产物数组 → planTrackerSync 的 tracker.issues。
+// view 语义 → 规划器语义：state 大写归小写、assignees 对象取 login、comments 对象取 body；
 // 字段缺省为 []（规划器输入形态的缺省约定）。state 与票号形态合法性由规划器统一校验。
 function toTrackerIssues(views) {
   return (views ?? []).map((v) => ({

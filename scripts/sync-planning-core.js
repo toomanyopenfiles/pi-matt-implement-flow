@@ -19,10 +19,10 @@
 //   options: { mode: 'seal', runId } | { mode: 'abandon', claimant, reason, runId }
 //     - runId: 本 run 的稳定标识（幂等 marker 的 run 标识，必选；非法形态拒绝）
 //
-// 动作集（每个动作与一条 gh 调用一一对应，执行属票 06 的薄 IO）：
-//   { kind: 'close',    num, body }   → gh issue close <num> --comment <body>（body=null 不附评论）
-//   { kind: 'comment',  num, body }   → gh issue comment <num> --body <body>
-//   { kind: 'unassign', num, login }  → gh issue edit <num> --remove-assignee <login>
+// 动作集（每个动作由票 05 的通用 driver 按契约命令模板执行）：
+//   { kind: 'close',    num, body }   → contract.commands.close（body=null 不附评论）
+//   { kind: 'comment',  num, body }   → contract.commands.comment
+//   { kind: 'unassign', num, login }  → contract.commands.unclaim
 //
 // 幂等矩阵（每个动作三档，测试收敛于 planTrackerSync 的输入输出）：
 //   未同步   → 完整动作（关票附评论 / 留评 / 撤占坑+留评）
