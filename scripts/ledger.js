@@ -263,14 +263,13 @@ function collectTruth({ runtimeDir, events, contract }) {
     return { found: false, dir: dirs[0] ?? null };
   };
 
-  // gh PR 状态：best-effort，不可用 → null（台账标 unknown，不编造）
-  truth.probeGh = (branch) => {
+  // 收尾面 PR 状态：best-effort，不可用 → null（台账标 unknown，不编造）。
+  // 票 05 契约化：探测命令用契约 prProbe 模板（通用 driver 执行）；契约由 setup 产物
+  // 解析在调用点传入（不重复判型，判型失败不护道——台账标 unknown，不编造）。
+  truth.prProbe = (branch) => {
+    if (!contract || !contract.commands?.prProbe) return null;
     try {
-      const raw = execFileSync('gh', ['pr', 'list', '--head', branch, '--json', 'state,isDraft', '--limit', '1'], {
-        encoding: 'utf8',
-        timeout: 10000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const raw = driver.runCommand(contract, 'prProbe', { branch }, { runOptions: { timeout: 10000 } });
       const arr = JSON.parse(raw);
       if (!arr.length) return 'none';
       if (arr[0].isDraft) return 'opened-draft';
@@ -360,6 +359,7 @@ function atomicWrite(filePath, content) {
 // 范本认不出 → 「仅支持三种」，都停下不猜测不降级；词表违约指到文件+行+列+期望。
 const INIT_REQUIRED = ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand'];
 const INIT_OPTIONAL = ['reviewer', 'maxFixRounds', 'maxConcurrent', 'tickets'];
+
 
 // setup 产物 → tracker（契约驱动）：判型输入是 repo 内的两份上游文档。
 // 读取是纯 IO；解析/判型/词表全部在 tracker-contract-core（票 01，接缝①），
@@ -515,7 +515,7 @@ function recordEvent({ runtimeDir, type, payload }) {
     return 1;
   }
 
-  const truth = collectTruth({ runtimeDir, events });
+  const truth = collectTruth({ runtimeDir, events, contract: resolveTrackerFromRepo(process.cwd()).contract ?? null });
   if (!truth.head) {
     out('✗ 拒绝（未入账）：无法锚定写入时刻的 git HEAD——运行时目录不在含提交的 git 仓库内');
     return 1;
@@ -570,7 +570,7 @@ function collectOrReject({ runtimeDir, command }) {
     out(`✗ ${command} 失败：${loadError}`);
     return null;
   }
-  const truth = collectTruth({ runtimeDir, events });
+  const truth = collectTruth({ runtimeDir, events, contract: resolveTrackerFromRepo(process.cwd()).contract ?? null });
   const recon = core.reconcile({ events, truth });
   if (degraded) {
     recon.warnings.unshift('事件流缺失/为空——台账由真相层降级再生：平台态列标 unknown，不编造');
