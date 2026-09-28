@@ -9,7 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- GitHub Issues as a first-class tracker (`--tracker github`): the run keeps local-markdown
+- Tracker contracts (ADR-0007): the tracker is no longer a `--tracker` flag plus hard-coded
+  branches. At every tracker-touching ledger command the script reads the `/setup-matt-pocock-skills`
+  artifacts (`docs/agents/issue-tracker.md` + `triage-labels.md`), identifies the upstream
+  template (H1 heading + anchor phrases), and loads the matching contract preset — local /
+  github / gitlab are first-class, anything else is an explicit refusal (missing artifacts →
+  run `/setup-matt-pocock-skills`; unrecognized template → `仅支持 local / github / gitlab 三种`).
+  The engine runs off the contract object: command templates, view-shape adapters, sync action
+  sets (note-then-close where the host can't), ticket-set edges, and the triage label vocabulary
+  parsed from the repo's own `triage-labels.md` (ADR-0006, now implemented) — errors point at
+  file + line + column + expectation. GitLab is a first-class tracker: MR closing surface,
+  no sub-issues (parent back-reference + init-list fallback), self-hosted hosts identified by
+  the `/-/issues/N` path shape.
+- `docs/adr/0007-tracker-contract-presets.md` records the decision with all seven rejected
+  options (derived wizard, contract files, lazy caching, user-overridable presets, per-ticket
+  real-time sync, prose contract interpreter, ticket-number syntax loosening).
+- GitHub Issues as a first-class tracker: the run keeps local-markdown
   strength end to end. At init, `ledger snapshot-init` pulls the spec and every ticket into a
   local tracker snapshot (`.pi/matt-implement/<slug>/tracker/`, same shape as local ticket files)
   that dispatch, review, the ledger and reconciliation all read and write; the spec issue is
@@ -21,11 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ledger trio stay). Local-markdown runs behave exactly as before.
 - `ledger snapshot-init` — materializes the tracker into the snapshot: the spec with a `Source:`
   line for its tracker origin, one local-shaped file per ticket with native ticket numbers. An
-  existing snapshot is refused, never overwritten (the continuation guard); a failed `gh` fetch
-  leaves zero half-products.
+  existing snapshot is refused, never overwritten (the continuation guard); a failed host-CLI
+  fetch leaves zero half-products.
 - `ledger sync` — the pre-seal idempotent push described above; it refuses to sync a sealed run
-  or one whose PR is already marked ready, so PR closing keywords can never race it. A failed
-  sync must be recorded as `anomaly` before the run seals.
+  or one whose closing surface is already marked ready, so PR/MR closing keywords can never
+  race it. A failed sync must be recorded as `anomaly` before the run seals.
 - `init --tickets` freezes the run's ticket-set boundary — out-of-boundary dispatches are refused
   mid-run (the fallback layer of the three-step ticket-set resolution: sub-issues → `## Parent`
   back-reference → the init list).
@@ -44,7 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The issue tracker is now strictly a provided, per-repo artifact: the flow follows the target
   repo's `docs/agents/issue-tracker.md` (written by `/setup-matt-pocock-skills`) and, when it is
   missing, tells the user to run that skill — the implicit `.scratch/` local-markdown fallback
-  is gone.
+  is gone. There is no `--tracker` flag repeating the choice: the artifacts are the run's single
+  tracker configuration, resolved into a contract preset each command.
 - `docs/agents/issue-tracker.md` is no longer shipped in the npm package: it is target-repo
   configuration produced by `/setup-matt-pocock-skills`, not a package resource.
 - `audit-report/` now ships in the npm package (its test files stay out of the tarball), so npm
