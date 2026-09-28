@@ -32,9 +32,12 @@ mapping 面，`statusOf(issue, { contract })` 只认契约词表——label 映�
    （wontfix → closed → 词表序）留在代码，不开放配置。按**表头名**定位列（防插列错位
    造成静默错映射），label 匹配大小写不敏感（tracker label 名跨大小写唯一——GitHub
    词表形态亦如此，故沿用同口径）。
-2. **映射（拉取时钉死）**：`snapshot-init` 在转写前解析该文件得到 role→label 映射，
-   以参数传入纯函数（`statusOf(issue, labelMap)`，默认 canonical）；生效映射钉进快照，
-   保住"逐字节确定性"契约的可复现性。快照零覆盖拒绝，映射随快照只钉一次。
+2. **映射（拉取时刻钉死，按触点重判）**：每个 tracker 触点先按当下 setup 产物经
+   `resolveTrackerFromRepo` 重判（含 `parseTriageLabels` 解析词表），再把该产物派生的
+   role→label 映射以参数传入纯函数（`statusOf(issue, { contract })`，缺映射对象落
+   canonical）；映射在拉取时刻钉进已转写快照，保住"逐字节确定性"契约的可复现性，
+   但每个触点的判定结果不跨触点复用——产物变了，下一次触点按新产物重判（与
+   ADR-0007 否决契约解析惰性缓存同旨）。
 3. **输出词表（固定）**：本地 Status 枚举即账本状态机词表，任何配置不得改写。
 
 失败策略——**显式记录绝不忽略，无记录才假设默认**：

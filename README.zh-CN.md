@@ -39,7 +39,7 @@ tracker 不是旗标——它来自目标仓库的两份 setup 产物：`docs/ag
 |---|---|---|---|
 | local markdown（`.scratch/<feature>/`） | 一等公民 | 无 | 票文件即真相——快照、占坑、同步均无操作（显式拒绝，行为不变） |
 | GitHub Issues | 一等公民 | PR | 快照 + 封账前同步，sub-issues 与原生阻塞边 |
-| GitLab Issues | 一等公民 | MR | 快照 + 封账前同步，无 sub-issues（Parent 反查 + init 清单兑底），先留评后关票，自建实例按 `/-/issues/N` 路径形态识别 |
+| GitLab Issues | 一等公民 | MR | 快照 + 封账前同步，无 sub-issues（Parent 反查 + init 清单兜底），先留评后关票，自建实例按 `/-/issues/N` 路径形态识别 |
 | 其他 tracker | 显式不支持 | — | 不猜测、不降级——见下方识别失败语义 |
 
 识别失败都是显式停机，不是猜测或降级：**缺产物** → 运行 `/setup-matt-pocock-skills`；**范本认不出** → 脚本拒绝并报 `仅支持 local / github / gitlab 三种`（只支持这三种范本）。

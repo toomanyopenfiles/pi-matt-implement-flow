@@ -63,7 +63,7 @@ const LOCAL_CONTRACT = {
     typeSource: 'type-line',
     blockingEdges: ['inline'],
     // local 无 tracker JSON——形状声明 canonical 形态自身（契约校验档要求字段在位；
-    // local 的快照/同步为无操作，不会真的肥到这上面）。
+    // local 的快照/同步为无操作，不会真的落到这上面）。
     viewShape: {
       number: 'number',
       title: 'title',

@@ -42,7 +42,7 @@ append-only 的 JSONL 机器事实文件，一行一个结构化事件；每行�
 ### 对账（reconcile）
 
 通过脚本的 `check` 命令核验账实差异：把事件流 + 真相层（git、worktree 列表、票文件 Status、
-收尾面状态 best-effort——探测按契约能力，无收尾面即恒 unknown）与台账记录对照，发现漂移则逐条列出并以非零退出码报告。
+收尾面状态 best-effort——探测按契约能力，无收尾面、或有收尾面而无探测产物，恒 unknown）与台账记录对照，发现漂移则逐条列出并以非零退出码报告。
 对账门在每次派发与合并前执行；compaction 恢复时与台账再生（`build`）一同执行。
 
 ### 流程形态（flow shape）
