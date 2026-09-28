@@ -17,8 +17,8 @@
 5. **合并即跑全量测试**——每张 ticket 合入 feature 分支后立刻跑项目全量测试，集成问题当场暴露、当场修，而不是堆到最后。
 6. **整分支 final review**——全部 ticket 合完后，对整条 feature 分支再审一次，专门看单张 ticket 看不见的问题：跨文件漂移、组件互相矛盾、spec 里有要求却没有 ticket 承接、文档和实现对不上。
 7. **中断可续跑**——一次 run 的进度记录在仓库本地的运行目录里；会话中断或上下文被压缩后，从已记录的状态继续，不用凭记忆重来。
-8. **修不完不卡全局**——单张 ticket 修复次数用尽后，在 run 结束时交给你处理，其余 ticket 继续走。仓库有 GitHub 远端时，run 开始会开一个 draft PR，全部完成后标为可审查。
-9. **GitHub Issues 也是一等公民 tracker**——tracker 用 GitHub 时流程强度与 local markdown 相同：run 在初始化阶段把 spec 与全部工单拉取为本地 tracker 快照，派发、评审、账本、对账全链路读写本地路径；spec issue 先占坑，两个会话无法悄悄抢跑同一 feature；全部 tracker 进度攒到封账前一次幂等同步推送。local markdown 的 run 行为零变化。
+8. **修不完不卡全局**——单张 ticket 修复次数用尽后，在 run 结束时交给你处理，其余 ticket 继续走。契约声明了收尾面（PR 或 MR）时，run 开始会开一个 draft，全部完成后标为可审查；没有收尾面（local markdown）时，feature 分支本身就是交付物。
+9. **tracker 走契约：三种一等预设**——run 从 `/setup-matt-pocock-skills` 产物（`docs/agents/issue-tracker.md` + `triage-labels.md`）读取 tracker：脚本识别上游范本并加载对应契约预设——local markdown、GitHub Issues 或 GitLab Issues。远端 tracker 时流程强度与 local markdown 相同：run 在初始化阶段把 spec 与全部工单拉取为本地 tracker 快照，派发、评审、账本、对账全链路读写本地路径；spec issue 先占坑，两个会话无法悄悄抢跑同一 feature；全部 tracker 进度攒到封账前一次幂等同步推送。label 经 `triage-labels.md` 的自有词表映射，改名不会骗过封账门。local markdown 的 run 行为零变化。
 
 ## 环境要求
 
@@ -26,6 +26,23 @@
 - Matt Pocock 的 [engineering skills](https://github.com/mattpocock/skills/tree/main/skills/engineering)——上游三条命令（`/grill-with-docs` → `/to-spec` → `/to-tickets`）和各 agent 依赖的 `tdd`、`codebase-design`、`code-review`、`resolving-merge-conflicts` 都来自这里
 
 本包不替代上游流程，只接手实现阶段。
+
+- 远端 tracker 还需要 tracker 契约声明的宿主 CLI：GitHub 用 `gh`，GitLab 用 `glab`（安装并登录目标站点）。local markdown 不需要任何 CLI。
+
+## tracker 支持
+
+tracker 不是旗标——它来自目标仓库的两份 setup 产物：`docs/agents/issue-tracker.md` 与其旁边的
+`triage-labels.md`，都由 `/setup-matt-pocock-skills` 落盘。每个触碰 tracker 的命令里，脚本
+按范本判型（H1 标题行 + 锚点短语；正文可被用户编辑）并加载对应契约预设。
+
+| tracker | 支持度 | 收尾面 | 说明 |
+|---|---|---|---|
+| local markdown（`.scratch/<feature>/`） | 一等公民 | 无 | 票文件即真相——快照、占坑、同步均无操作（显式拒绝，行为不变） |
+| GitHub Issues | 一等公民 | PR | 快照 + 封账前同步，sub-issues 与原生阻塞边 |
+| GitLab Issues | 一等公民 | MR | 快照 + 封账前同步，无 sub-issues（Parent 反查 + init 清单兑底），先留评后关票，自建实例按 `/-/issues/N` 路径形态识别 |
+| 其他 tracker | 显式不支持 | — | 不猜测、不降级——见下方识别失败语义 |
+
+识别失败都是显式停机，不是猜测或降级：**缺产物** → 运行 `/setup-matt-pocock-skills`；**范本认不出** → 脚本拒绝并报 `仅支持 local / github / gitlab 三种`（只支持这三种范本）。
 
 ## 安装
 
@@ -82,7 +99,7 @@ npm test
 3. coder 完成后：先跑该票的测试门禁 →（若开启逐票 review）reviewer 做双轴 review → 没过就交回同一个 coder 修复，直到通过或达到修复上限。
 4. 合入 feature 分支，立刻跑全量测试；测试红了，就在 feature 分支上修集成问题。
 5. 重算下一批可做的 ticket，重复 2–4，直到全部完成或交给你处理。
-6. final-reviewer 审查整条分支；仓库有 GitHub 远端时，把 draft PR 标为可审查。
+6. final-reviewer 审查整条分支；契约声明了收尾面（PR 或 MR）时，把开始时开出的 draft 标为可审查。
 
 ```mermaid
 flowchart TD
@@ -92,7 +109,7 @@ flowchart TD
     D --> E{"还有 ticket 吗"}
     E -- 有 --> B
     E -- 没有 --> F["整分支 final review"]
-    F --> G["PR 标为可审查"]
+    F --> G["收尾面标为可审查"]
 ```
 
 修复次数用尽的 ticket 会进入待你处理的清单，不拦住后面的票。
@@ -162,11 +179,12 @@ flowchart TD
   notes.md           # 过程说明、需要记住的决定（给人看）
   reviews/           # 各轮 review 用的 diff
   findings/          # review 意见，以及合并后全量测试失败时的记录
+  tracker/           # tracker 快照：远端 tracker（GitHub / GitLab）拉取来的 spec 与工单（仅远端 run）
 ```
 
 - 路径已写入 `.gitignore`，不会进版本库。这是运行数据，不是缓存——run 进行中或还打算续跑时，不要删。
 - `ledger.md` 和 `events.jsonl` 由流程维护，不要手工修改；想留备注写到 `notes.md`。
-- 跑完后如果只关心 feature 分支 / PR，目录可以留作记录，也可以自行清理。
+- 跑完后如果只关心 feature 分支 / PR / MR，目录可以留作记录，也可以自行清理。
 
 ## 审计报告
 
