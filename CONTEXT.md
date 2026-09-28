@@ -42,7 +42,7 @@ append-only 的 JSONL 机器事实文件，一行一个结构化事件；每行�
 ### 对账（reconcile）
 
 通过脚本的 `check` 命令核验账实差异：把事件流 + 真相层（git、worktree 列表、票文件 Status、
-gh PR 状态 best-effort）与台账记录对照，发现漂移则逐条列出并以非零退出码报告。
+收尾面状态 best-effort——探测按契约能力，无收尾面即恒 unknown）与台账记录对照，发现漂移则逐条列出并以非零退出码报告。
 对账门在每次派发与合并前执行；compaction 恢复时与台账再生（`build`）一同执行。
 
 ### 流程形态（flow shape）
@@ -64,10 +64,26 @@ gh PR 状态 best-effort）与台账记录对照，发现漂移则逐条列出�
 ### tracker
 
 spec 与工单的落点系统，形态由**目标仓库**的 `docs/agents/issue-tracker.md`
-（`/setup-matt-pocock-skills` 落盘的产物，上游 github / gitlab / local 三范本之一）
-定义：local markdown（`.scratch/<feature>/`）或 GitHub Issues。票号一律采用 tracker 原生编号（local 为文件序号
-补零两位，GitHub 为 issue number）；定位一次 run 的 spec 的标识是 spec 引用——local 传
-spec 文件路径，GitHub 传 issue 号/URL。
+（`/setup-matt-pocock-skills` 落盘的产物，上游 local / github / gitlab 三范本之一）
+定义，但本包不直接读它的散文：运行时按范本判型选中一份随包发布的**契约预设**
+（「tracker 契约」词条），此后一切 tracker 行为吃契约对象。票号一律采用 tracker 原生
+编号（local 为文件序号补零两位，github 为 issue number，gitlab 为 IID）；定位一次
+run 的 spec 的标识是 spec 引用——具体合法形态由契约声明引用（local 传 spec 文件路径，
+github 传 issue 号/URL，gitlab 传 IID/URL）。范本判不出的 tracker 显式不支持
+（仅 local / github / gitlab 三种），不猜测、不降级、不派生向导。
+
+### tracker 契约（tracker contract）
+
+两份 setup 产物（issue-tracker.md 判型 + triage-labels.md 解析）在拉取时刻解析出的
+机器契约对象：六维声明面——范本判据、标识与引用（票号/spec 引用/原址语法）、表示映射
+（label→canonical 五角色、closed→本地 Status、type 来源、阻塞边来源）、票集边来源、
+能力声明（占坑强度、closeWithComment、收尾面 PR/MR/none）与操作面命令模板、幂等
+（marker＋载体）与生命周期策略。契约预设是随包发布的**数据不是代码分支**：引擎只读
+契约对象，代码里零 per-tracker 分支；支持一个新 tracker = 新增一份预设数据 + 范本
+判据，不碰引擎代码。「无硬编码」的边界随此划定——**零 per-tracker 代码分支**是可达
+目标；契约 schema、内部状态机、canonical 输出词表、本地投影布局是本包自己的协议，
+仍编译在代码里（追求"纯散文即可配置"即散文解释器，推翻 ADR-0001 的裁定面，显式不做；
+全文见 ADR-0007）。三预设 = local / github / gitlab；其他范本（other）显式不支持。
 
 ### tracker 快照（tracker snapshot）
 
@@ -81,7 +97,9 @@ run 初始化时把 tracker 上的 spec 与全部工单拉取到运行时目录
 
 封账前把 tracker 快照的状态差异批量推送到 tracker 本体的单点动作：合并的票关票并附
 merge SHA、升级的票留评保持开放、spec 收尾关闭。同步必须发生在封账**之前**（封账后
-事件流拒写，同步失败将无从记账），并设计为幂等可重入。
+事件流拒写，同步失败将无从记账），并设计为幂等可重入。同步的每个动作接契约命令模板
+执行（GitLab 的关票收评能力差异 = note 先行的等价序列）；重入判定只认隐藏机器
+marker，人改写评论正文后重跑不重复推送。local 契约无同步——票文件即真相，不走此步。
 
 ### 占坑（claim the spec）
 
