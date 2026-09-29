@@ -457,21 +457,25 @@ function checkBriefsNoReportDuties(skillText, coderAgentText) {
   if (section === null) return ['SKILL.md is missing the "## Briefs" section'];
   const problems = [];
   const normalized = normalizeWhitespace(section);
-  for (const token of ['acceptanceReport', 'structured_output', 'outputSchema', '## Acceptance Contract']) {
-    if (normalized.includes(token)) {
-      problems.push(`SKILL.md briefs still carry a report duty: ${token} — the model never hand-writes reports`);
-    }
-  }
+  problems.push(
+    ...presentForbidden(
+      normalized,
+      ['acceptanceReport', 'structured_output', 'outputSchema', '## Acceptance Contract'],
+      (token) => `SKILL.md briefs still carry a report duty: ${token} — the model never hand-writes reports`
+    )
+  );
   if (!normalized.includes('commit everything')) {
     problems.push('SKILL.md briefs lost the "commit everything" close-out duty');
   }
   if (coderAgentText !== undefined) {
     const coderNorm = normalizeWhitespace(coderAgentText);
-    for (const token of ['acceptanceReport', 'structured_output', 'outputSchema', 'SIBLING']) {
-      if (coderNorm.includes(token)) {
-        problems.push(`agents/coder.md still carries the old contract wording: ${token}`);
-      }
-    }
+    problems.push(
+      ...presentForbidden(
+        coderNorm,
+        ['acceptanceReport', 'structured_output', 'outputSchema', 'SIBLING'],
+        (token) => `agents/coder.md still carries the old contract wording: ${token}`
+      )
+    );
     if (!coderNorm.includes('No handwritten reports')) {
       problems.push('agents/coder.md is missing the "No handwritten reports" clause');
     }
@@ -507,19 +511,17 @@ function checkHardRulesRetained(skillText) {
   const section = sectionBetween(skillText, '## Hard rules', null);
   if (section === null) return ['SKILL.md is missing the "## Hard rules" section'];
   const normalized = normalizeWhitespace(section);
-  const problems = [];
-  for (const anchor of [
-    'ticket-NN',
-    'Fix budget then escalate',
-    'blocked',
-    'approved',
-    'Never hand-write or edit the ledger or the event stream',
-  ]) {
-    if (!normalized.includes(anchor)) {
-      problems.push(`SKILL.md hard rules lost an existing clause: ${anchor}`);
-    }
-  }
-  return problems;
+  return missingAnchors(
+    normalized,
+    [
+      'ticket-NN',
+      'Fix budget then escalate',
+      'blocked',
+      'approved',
+      'Never hand-write or edit the ledger or the event stream',
+    ],
+    (anchor) => `SKILL.md hard rules lost an existing clause: ${anchor}`
+  );
 }
 
 // —— 断锚 7：无隔离修复者（集成修复者 / 终审修复者）挂纯判定 gate

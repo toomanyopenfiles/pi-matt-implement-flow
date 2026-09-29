@@ -65,19 +65,23 @@ test('--print-schema 打印字段表与 schema：恰 4 字段、全 required、c
 // 用法拒绝：缺参/未知旗标（exit 2，先于一切 git/测试动作）
 // ====================================================================
 
-test('缺 --base 或 --test-command 或未知旗标：用法拒绝 exit 2', (t) => {
+test('缺 --base 或 --test-command 或未知旗标：用法拒绝（非零退出，无独立判死码）', (t) => {
   const repo = makeGitRepo(t);
   const missingBase = runReport(['--test-command', 'printf ok\n'], { cwd: repo.dir });
-  assert.equal(missingBase.status, 2);
+  assert.equal(missingBase.status, 1);
   assert.match(missingBase.stdout, /--base/);
 
   const missingCmd = runReport(['--base', repo.base], { cwd: repo.dir });
-  assert.equal(missingCmd.status, 2);
+  assert.equal(missingCmd.status, 1);
   assert.match(missingCmd.stdout, /--test-command/);
 
   const bogus = runReport(['--base', repo.base, '--test-command', 'printf ok\n', '--bogus', 'x'], { cwd: repo.dir });
-  assert.equal(bogus.status, 2);
+  assert.equal(bogus.status, 1);
   assert.match(bogus.stdout, /未知旗标 --bogus/);
+
+  const help = runReport(['--base', repo.base, '--test-command', 'printf ok\n', '--help'], { cwd: repo.dir });
+  assert.equal(help.status, 1);
+  assert.match(help.stdout, /未知旗标 --help/);
 });
 
 // ====================================================================
@@ -119,15 +123,16 @@ test('条件①-非零：测试命令退出码非零 → exit 1 并点名退出�
   assert.match(r.stdout, /exit 3/);
 });
 
-test('条件①-超时：测试命令超时 → exit 1 并点名超时', (t) => {
+test('MECHANICAL_REPORT_TIMEOUT_MS 环境旋钮不存在：同名变量被忽略，固定超时生效', (t) => {
   const repo = makeGitRepo(t);
   commitChange(repo, 'b.txt', 'work\n');
-  const r = runReport(['--base', repo.base, '--test-command', 'sleep 5'], {
+  // 旧旋钮语义下 1ms 超时会把 sleep 0.2 判死；旋钮删除后命令正常跑完 exit 0。
+  const r = runReport(['--base', repo.base, '--test-command', 'sleep 0.2 && printf ok\n'], {
     cwd: repo.dir,
-    env: { MECHANICAL_REPORT_TIMEOUT_MS: '200' },
+    env: { MECHANICAL_REPORT_TIMEOUT_MS: '1' },
   });
-  assert.equal(r.status, 1);
-  assert.match(r.stdout, /超时/);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).validationOutput, ['ok']);
 });
 
 test('条件②：测试输出为空 → exit 1', (t) => {
@@ -204,6 +209,17 @@ test('--test-command 不透明透传：管道与多词命令原样进 shell', (t
   const report = JSON.parse(r.stdout);
   assert.equal(report.testResult, `${cmd} — exit 0, b`);
   assert.deepEqual(report.validationOutput, ['b']);
+});
+
+test('stdout 无结尾换行时不与 stderr 首行黏合（verbatim 行边界保持）', (t) => {
+  const repo = makeGitRepo(t);
+  commitChange(repo, 'b.txt', 'work\n');
+  const cmd = `${process.execPath} -e "process.stdout.write('out-last'); console.error('err-first')"`;
+  const r = runReport(['--base', repo.base, '--test-command', cmd], { cwd: repo.dir });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const report = JSON.parse(r.stdout);
+  assert.deepEqual(report.validationOutput, ['out-last', 'err-first']);
+  assert.equal(report.testResult, `${cmd} — exit 0, err-first`);
 });
 
 test('stderr 输出同样进入测试证据（合并采集）', (t) => {

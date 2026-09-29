@@ -295,7 +295,7 @@ test('breakage simulation: the environment-survey step going missing is flagged'
 
 const skillText = readText(PKG_ROOT, 'SKILL.md');
 const coderAgentText = readText(PKG_ROOT, 'agents/coder.md');
-const { REPORT_SCHEMA, FIELD_TABLE } = require('./mechanical-report.js');
+const { REPORT_CONTRACT } = require('./mechanical-report.js');
 
 test('anchor-1: coder dispatch carries a typed gate (command/output-json/schema/timeoutMs), no acceptance object or outputSchema', () => {
   assert.deepEqual(checkCoderDispatchTypedGate(skillText), []);
@@ -303,7 +303,7 @@ test('anchor-1: coder dispatch carries a typed gate (command/output-json/schema/
 
 test('anchor-2: dispatch schema copy is verbatim-identical to the ticket-01 source (module export cross-check)', () => {
   assert.deepEqual(
-    checkDispatchSchemaMatchesSource(skillText, { fields: FIELD_TABLE, schema: REPORT_SCHEMA }),
+    checkDispatchSchemaMatchesSource(skillText, REPORT_CONTRACT),
     []
   );
 });
@@ -376,17 +376,14 @@ test('breakage simulation: the old acceptance-object dispatch shape is flagged (
 });
 
 test('breakage simulation: a drifted schema copy is flagged (anchor-2)', () => {
-  const driftedSchema = { ...REPORT_SCHEMA, required: ['headSha', 'testResult', 'changedFiles'] };
+  const driftedSchema = { ...REPORT_CONTRACT.schema, required: ['headSha', 'testResult', 'changedFiles'] };
   const fixture = '### Each round\n```json\n' + JSON.stringify(driftedSchema, null, 2) + '\n```\n';
-  const problems = checkDispatchSchemaMatchesSource(fixture, { fields: FIELD_TABLE, schema: REPORT_SCHEMA });
+  const problems = checkDispatchSchemaMatchesSource(fixture, REPORT_CONTRACT);
   assert.ok(problems.some((p) => p.includes('drifted') || p.includes('required list')));
 });
 
 test('breakage simulation: a missing schema copy is flagged (anchor-2)', () => {
-  const problems = checkDispatchSchemaMatchesSource('### Each round\nno fences here\n', {
-    fields: FIELD_TABLE,
-    schema: REPORT_SCHEMA,
-  });
+  const problems = checkDispatchSchemaMatchesSource('### Each round\nno fences here\n', REPORT_CONTRACT);
   assert.equal(problems.length, 1);
   assert.match(problems[0], /no fenced ```json schema copy/);
 });
