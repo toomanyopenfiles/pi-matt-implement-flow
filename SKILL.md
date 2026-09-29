@@ -114,26 +114,21 @@ const results = await runs.all([
     agent: "pi-matt-implement-flow.coder",
     task: `<coder brief — see Briefs>`,
     worktree: true,
-    acceptance: {
-      level: "verified",
-      criteria: [
-        "Implement the requested change without widening scope",
-        "Return evidence sufficient for an independent acceptance review"
-      ],
-      evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "no-staged-files"],
-      report: "on",
-      verify: [{ id: "gate", command: "npm test", timeoutMs: 600000 }]
-    },
-    outputSchema: {
-      type: "object",
-      properties: {
-        headSha: { type: "string" },
-        branch: { type: "string" },
-        commits: { type: "array", items: { type: "object", properties: { sha: { type: "string" }, message: { type: "string" } }, required: ["sha", "message"] } },
-        testResult: { type: "string" },
-        seams: { type: "array", items: { type: "string" } }
+    gate: {
+      command: "node <this-package>/scripts/mechanical-report.js --base <baseCommit> --test-command \"<testCommand>\"",
+      output: "json",
+      schema: {
+        type: "object",
+        required: ["headSha", "testResult", "changedFiles", "validationOutput"],
+        properties: {
+          headSha: { type: "string" },
+          testResult: { type: "string" },
+          changedFiles: { type: "array", items: { type: "string" } },
+          validationOutput: { type: "array", items: { type: "string" } }
+        },
+        additionalProperties: false
       },
-      required: ["headSha", "branch", "commits", "testResult", "seams"]
+      timeoutMs: 600000
     }
   }
   // ...one entry per claimed ticket, up to N
@@ -141,22 +136,57 @@ const results = await runs.all([
 return results.map(r => ({ key: r.key, ok: r.ok, runId: r.runId ?? null, structured: r.structuredOutput ?? null, artifacts: r.artifactPaths ?? null }));
 ```
 
+The `schema` in the dispatch above is a copy of the mechanical-report contract. Its single source of truth is `scripts/mechanical-report.js` (`REPORT_SCHEMA`, self-describing via `--print-schema`) — the copy must stay verbatim-identical (the self-check cross-compares them; drift fails the suite):
+
+```json
+{
+  "type": "object",
+  "required": [
+    "headSha",
+    "testResult",
+    "changedFiles",
+    "validationOutput"
+  ],
+  "properties": {
+    "headSha": {
+      "type": "string"
+    },
+    "testResult": {
+      "type": "string"
+    },
+    "changedFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "validationOutput": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+```
+
 Record each child as a `dispatch` event（记账：`--ticket --key --run-id`，`--worktree` 取自 handoff manifest 的 `artifacts`）— the fix loop, the fallback, and compaction recovery all read them from the event stream. If the tree was dirty at dispatch, the whole call fails with a worktree-admission error: fix the tree, do not retry blindly.
 
-- **Why an explicit `acceptance` object instead of the `gate` shorthand** (they are mutually exclusive): it pins the evidence contract at dispatch time instead of letting the platform infer it from task wording.
-- **`report: "on"`** moves the report-format checks into the final `structured_output` call — a missing or malformed `acceptanceReport` fails the tool call and the coder retries in-session, instead of the whole run being rejected after the child is gone; it also injects the exact report field list into the coder's prompt, so field names are no longer guessed.
-- **Gate timeout**: the platform's verify-command default is a fixed 120 s — too short for full suites in a cold worktree, and the constant is not configurable; the dispatch pins `timeoutMs: 600000` (10 min) per verify entry.
-- **Remaining limit**: evidence *completeness* (e.g. a present-but-empty `validationOutput`) is still checked only at run settlement — that is what the `## Acceptance Contract` block in the brief covers. `outputSchema` is required for `report: "on"` (the dispatch above already has it).
-- **The fix loop** needs no acceptance of its own: a retained resume replays the stored contract, so the follow-up brief only has to ask for the full report again.
+- **Why a typed `gate` instead of an `acceptance` object** (they are mutually exclusive — a child has exactly one structured-output source): the report is assembled host-side, after the child ends, by a script from git truth plus a real test run — double-encoding and dropped fields are structurally impossible. The gate's stdout becomes the structured output and its exit code is the verdict, so you never parse model prose to decide a run.
+- **stdout contract**: the gate command must print a single JSON document of at most 12,000 characters; empty, truncated, non-JSON, or schema-mismatched output fails the gate fail-closed. The script keeps itself inside the limit (over-long output is truncated and marked, never fatal).
+- **Gate timeout**: the platform's verify default is a fixed 120 s — too short for full suites in a cold worktree, and the constant is not configurable; the dispatch pins `timeoutMs: 600000` (10 min) on the gate object.
+- **Mutual exclusion (iron rule)**: `gate`, a non-`false` `acceptance` object, and `outputSchema` are three-way exclusive — the coder dispatch carries the gate and neither of the other two (`acceptance: false` counts as omitted, which is what the read-only reviewer dispatch below uses).
+- **The fix loop** runs the same gate by hand (below): a gate is rejected on a retained resume, so you execute the identical script command in the retained worktree — the same standard every round, no second track.
 
 ### Verify each finished ticket
 
 When a coder reports, first make its work mergeable, then review:
 
-1. **Anchor the ticket branch** (git truth, not the report): `git branch ticket-<NN> <headSha>`. If `headSha` is missing or unreachable, go into the coder's retained worktree, run `git status --porcelain` there, commit anything left (`ticket <NN>: orchestrator checkpoint`), and use that SHA.
+1. **Anchor the ticket branch** (git truth, not the report): `git branch ticket-<NN> <headSha>` (the `<headSha>` is the gate report's — mechanical truth, not model prose). If `headSha` is missing or unreachable, go into the coder's retained worktree, run `git status --porcelain` there, commit anything left (`ticket <NN>: orchestrator checkpoint`), and use that SHA.
 2. **Write the review bundle**: `git diff <baseCommit>...refs/heads/ticket-<NN>` (three-dot) plus `git log --oneline` into `.pi/matt-implement/<slug>/reviews/<NN>-r<k>.diff`.
-3. **Record `settled`**（记账：`--ticket --round --head-sha --worktree --gate` 一句门禁摘要）— the ticket's headSha and worktree are now anchored in the event stream.
-4. **Dispatch the reviewer** for that ticket — only when the run's init snapshot has `reviewer=on` (the default). With `reviewer=off`, skip this step and the fix loop entirely and go straight to the merge: the platform acceptance gate and the post-merge integration suite are the remaining per-ticket defenses, and the whole-branch final-reviewer still runs at the end:
+3. **Record `settled`**（记账：`--ticket --round --head-sha --worktree --gate` 一句门禁摘要）— the ticket's headSha and worktree are now anchored in the event stream; the `--gate` summary is the fresh gate report's `testResult` line.
+4. **Dispatch the reviewer** for that ticket — only when the run's init snapshot has `reviewer=on` (the default). With `reviewer=off`, skip this step and the fix loop entirely and go straight to the merge: the platform gate and the post-merge integration suite are the remaining per-ticket defenses, and the whole-branch final-reviewer still runs at the end:
 
 ```js
 const results = await runs.all([
@@ -197,10 +227,15 @@ const r = await runs.run("fix-01-r2", { resume: "<coderRunId>", task: `<fix foll
 return { ok: r.ok, structured: r.structuredOutput ?? null };
 ```
 
-Three rules the platform forces:
+Two rules the platform forces:
 
-- `gate` is rejected on a retained resume — **you** run the full suite in the coder's retained worktree (`cd <coderWorktree> && <testCommand>`) and treat the result as the gate.
-- The resumed child replays its stored acceptance contract: the follow-up brief must tell it to report the full structured output again (`value` + `acceptanceReport`).
+- A gate is rejected on a retained resume — so **you** hand-run the round's gate yourself: in the coder's retained worktree, execute the **same full script command** as the first round (`--base` is always the ticket base):
+
+```sh
+cd <coderWorktree> && node <this-package>/scripts/mechanical-report.js --base <ticketBase> --test-command "<testCommand>"
+```
+
+Its stdout is that round's report and its exit code is that round's gate; the `settled` `--gate` summary for the round comes from the fresh report's `testResult`, same source as round one.
 - Judge the fix by **git truth** (new HEAD SHA on the coder's branch), never by run status — a rejected run may still contain the finished work.
 
 Then `git branch -f ticket-<NN> <newSha>`, rebuild the bundle, and dispatch a fresh review round. If the resume fails because the retained worktree is gone, fall back to a fresh coder with `worktree: true, baseRef: "refs/heads/ticket-<NN>"` — the ticket branch carries the accumulated commits; record that fallback as a `fix` event too (new `--key`，`--resume-run-id` = the run it replaces).
@@ -210,7 +245,17 @@ Then `git branch -f ticket-<NN> <newSha>`, rebuild the bundle, and dispatch a fr
 Serially, in the main checkout on the feature branch — merges never run in parallel with each other:
 
 1. `git merge --no-ff -m "Merge ticket-<NN>: <title>" ticket-<NN>` — the message **must** contain the `ticket-<NN>` token (hard rule below; the ledger script cross-checks merges by it). On a conflict, follow the `resolving-merge-conflicts` skill.
-2. Run the full suite. Red means an integration problem no ticket-level review could see: save the failing output to `findings/integration-<NN>.md` and dispatch **one** coder **without isolation** (omit `worktree`) on the feature branch. Only one such fixer at a time.
+2. Run the full suite. Red means an integration problem no ticket-level review could see: save the failing output to `findings/integration-<NN>.md` and dispatch **one** coder **without isolation** (omit `worktree`) on the feature branch, guarded by a pure-verdict gate (command plus timeout only — no `output`/`schema`, zero report because zero consumers):
+
+```js
+await runs.run("fix-integration-<NN>", {
+  agent: "pi-matt-implement-flow.coder",
+  task: `<integration fixer brief — see Briefs>`,
+  gate: { command: "<testCommand>", timeoutMs: 600000 }
+});
+```
+
+A red gate → one more fix round; two consecutive reds stop and escalate to the user — a stuck loop must not spin in place. Only one such fixer at a time.
 3. Record `merge`（记账：`--ticket --head-sha --merge-sha`）— the script verifies the merge commit exists, sits on the feature branch, and carries the token. Then close the ticket on its truth-layer file: `Status: resolved` with the merge commit SHA in the closing comment — on the snapshot's copy that is an appended `merge SHA: <merge-sha>` line under `## Comments` (the pre-seal sync turns it into the closing comment, ordering note-then-close when the contract's `closeWithComment` is false); on the ticket file itself when the files are the truth layer, per the tracker doc.
 4. Recommit or ignore any tracker dirt (see Preconditions), then remove the reviewer worktree if one exists (`reviewer=off` runs have none) and `git branch -D ticket-<NN>`; after the ticket is closed the coder's retained worktree goes too (its resume value is spent).
 
@@ -220,7 +265,7 @@ Recompute the frontier. While tickets remain: top the dispatch back up to N. Don
 
 1. Write the whole-branch bundle `git diff <feature-base>...HEAD` and dispatch `pi-matt-implement-flow.final-reviewer` with `worktree: true, baseRef: "refs/heads/feat/<slug>", acceptance: false` and a verdict schema of `ready | ready_with_fixes | not_ready`.
 2. **Record the verdict**（记账 `final`）: write the findings to `.pi/matt-implement/<feature-slug>/findings/final-r<k>.md` (`<k>` = final-review round), then record — `node <this-package>/scripts/ledger.js add final --runtime-dir .pi/matt-implement/<feature-slug> --final-verdict <ready|ready_with_fixes|not_ready> --run-id <runId> [--findings .pi/matt-implement/<feature-slug>/findings/final-r<k>.md]`. It is a run-level event (no `--ticket`); the final-reviewer's dispatch is not recorded separately — `--run-id` carries it, the same shape as a ticket reviewer's `--rev-run-id`. Every round of final review is one `final` event, and the **latest** verdict is the branch's readiness — never an earlier round's.
-3. **With fixes**: one coder without isolation fixes every finding, commit; re-run the final review only if the changes are substantial — a re-run is a new round, so it gets its own `final` event. **Not ready**: escalate to the user with the review pointers. If the user calls the run off, record `close` (封账) as usual — the seal gate (封账门) lets a user's give-up through at warning level, and its enforcement belongs to the script, not to this file. When the run holds a claim (占坑), before that `close` run the give-up path of the sync — `node <this-package>/scripts/ledger.js sync --runtime-dir .pi/matt-implement/<slug> --mode abandon --claimant <占坑用户名> --reason <放弃说明>` — so the claim is unassigned and the tracker is left an explanatory comment, not a phantom claim; the claimant is the one the claim used.
+3. **With fixes**: dispatch one coder without isolation to fix every finding, guarded by the same pure-verdict gate (`gate: { command: "<testCommand>", timeoutMs: 600000 }` — no `output`/`schema`); commit on the feature branch. A red gate → one more fix round; two consecutive reds stop and escalate to the user with the review pointers. Re-run the final review only if the changes are substantial — a re-run is a new round, so it gets its own `final` event. **Not ready**: escalate to the user with the review pointers. If the user calls the run off, record `close` (封账) as usual — the seal gate (封账门) lets a user's give-up through at warning level, and its enforcement belongs to the script, not to this file. When the run holds a claim (占坑), before that `close` run the give-up path of the sync — `node <this-package>/scripts/ledger.js sync --runtime-dir .pi/matt-implement/<slug> --mode abandon --claimant <占坑用户名> --reason <放弃说明>` — so the claim is unassigned and the tracker is left an explanatory comment, not a phantom claim; the claimant is the one the claim used.
 4. **Pre-seal sync** — after the last `final` verdict is in, and before the closing surface is ever marked ready: write the run's closing into the snapshot's `spec.md` (`closing: <交付指引>` under `## Comments` — the delivery note the closing comment will carry), then `node <this-package>/scripts/ledger.js sync --runtime-dir .pi/matt-implement/<slug>`: merged tickets close with their merge SHAs, escalated tickets get their comments and stay open, the spec closes with the delivery note. The sync is idempotent — after a partial failure, re-running plans only the still-missing actions. **A failed sync must not seal the run**: record `anomaly --note "sync failed: ..."` and stop to report — after `close` the event stream rejects every write, so a tracker failure can only be accounted for while the run is still open. The script itself refuses to sync a sealed run or one whose closing surface is already `ready`; the sync always precedes `pr --state ready`, so the closing keywords can never race-close a ticket the sync hasn't handled yet. Runs whose truth layer is the local files have no sync step: the local ticket files are the tracker already (zero change).
 5. **Clean up after a green sync** — the cleanup disciplines are per-runtime-file category, per the glossary, not per tracker: the **tracker snapshot** (a third category of its own, not a transfer artifact) and the **transfer artifacts** spent by the sync — the review bundles — are removed once the sync lands (`rm -rf .pi/matt-implement/<slug>/tracker/` and `reviews/`). Keep `findings/` (the event stream references those paths) and the ledger三件套 (`events.jsonl` / `ledger.md` / `notes.md`) for good. The sync command prints this checklist — execute it as printed.
 6. Push. Mark the closing surface ready — a PR ready for review, an MR ready — or report the branch name when there is no remote or the contract declares no closing surface; record `pr --state ready` when a closing surface exists.
@@ -233,7 +278,7 @@ Report: tickets closed with their merge SHAs, the closing surface link or branch
 
 Fill the angle brackets; send nothing else.
 
-**Path rule for all briefs**: any path that does not physically exist inside the recipient's worktree (everything gitignored — `.scratch/`, `.pi/`, `data/`, …) is given as an absolute main-repo path and marked read-only. The rule covers all four brief templates below; there are no special cases for isolation shape. When the run reads a tracker snapshot, the ticket and spec paths in every brief are the snapshot's copies under `.pi/matt-implement/<slug>/tracker/` — same rule, same read-only marking.
+**Path rule for all briefs**: any path that does not physically exist inside the recipient's worktree (everything gitignored — `.scratch/`, `.pi/`, `data/`, …) is given as an absolute main-repo path and marked read-only. The rule covers all five brief templates below; there are no special cases for isolation shape. When the run reads a tracker snapshot, the ticket and spec paths in every brief are the snapshot's copies under `.pi/matt-implement/<slug>/tracker/` — same rule, same read-only marking.
 
 ### Coder brief
 
@@ -250,17 +295,7 @@ brief are absolute main-repo paths (read-only). Everything you edit and commit s
 inside your own worktree. Other tickets under .scratch/ and anything else in the main
 repo are context, not scope — never implement them.
 
-You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report headSha, commits, test result, and seams.
-
-## Acceptance Contract
-Your final structured_output call must have TWO SIBLING top-level keys (never nested):
-- value: { headSha, branch, commits, testResult, seams }
-- acceptanceReport: { criteriaSatisfied, changedFiles, testsAddedOrUpdated, commandsRun, validationOutput, residualRisks, noStagedFiles }
-Rules:
-- validationOutput carries the VERBATIM key lines of the gate command you ran (e.g. "274 passed in 40.35s") — never null, never empty, never a paraphrase; an empty validationOutput fails the run.
-- testsAddedOrUpdated lists every test file you created or modified; use [] only when none.
-- criteriaSatisfied[].id must match the criteria above, answered with concrete proof.
-- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence from the dispatched set (changed-files, tests-added, commands-run, validation-output, no-staged-files) rejects the run; `residualRisks` is advisory and never a rejection cause.
+You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report the headSha and branch by context pointer. You write no report — the typed gate assembles it mechanically from git truth and a real test run after you finish (so keep the tree fully committed: a dirty tree or an empty diff fails the gate).
 ```
 
 ### Reviewer brief
@@ -268,7 +303,7 @@ Rules:
 ```
 Ticket 07 (ticket file: <absolute main-repo path>). Spec: <absolute main-repo path>.
 Review bundle: <absolute main-repo path>/.pi/matt-implement/<slug>/reviews/07-r1.diff (three-dot diff + commit list against base <sha>).
-Implementer's report: headSha <sha>; seams: <...>; test: `npm test` — 2 pass 0 fail (platform-gate evidence).
+Implementer's report: the typed-gate report (`headSha` <sha>, `testResult` <one-line summary>) — mechanical gate evidence.
 Your worktree is checked out at refs/heads/ticket-07 — the post-change tree. Read the changed files there; review-bundle and findings paths are main-repo paths (read-only).
 
 Run your two-axis process and return the structured verdict.
@@ -278,14 +313,21 @@ Run your two-axis process and return the structured verdict.
 
 ```
 Review round <k> found issues: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/<NN>-r<k>.md.
-Fix them in your worktree, rerun the full suite, commit everything, and report exactly as before — the full structured output with value and acceptanceReport as SIBLING top-level keys (never nested), every dispatched `## Acceptance Contract` evidence field filled: validationOutput with the real rerun output (verbatim pass/fail lines, never null), testsAddedOrUpdated listing any test files touched ([] only if none).
+Fix them in your worktree, rerun the full suite, commit everything, and report the new headSha by context pointer. No report duties — the orchestrator hand-runs the gate for this round (see Fix loop).
 ```
 
 ### Integration fixer (no isolation)
 
 ```
 The full suite is red after merging ticket <NN>: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/integration-<NN>.md.
-You are on the feature branch in the main checkout; this is an integration problem ticket-level reviews could not see. Fix it, run the full suite, commit on the feature branch.
+You are on the feature branch in the main checkout; this is an integration problem ticket-level reviews could not see. Fix it, run the full suite, commit on the feature branch, and report the new headSha by context pointer. No report duties — a pure-verdict gate re-runs the suite after you finish.
+```
+
+### Final fixer (no isolation)
+
+```
+The final review found issues: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/final-r<k>.md.
+You are on the feature branch in the main checkout; fix every finding, run the full suite, commit on the feature branch, and report the new headSha by context pointer. No report duties — a pure-verdict gate re-runs the suite after you finish.
 ```
 
 ## Hard rules
