@@ -6,7 +6,7 @@
 //      解析 Status/Type 行与 ## Comments 节里的同步事实（merge SHA / escalate 原因 /
 //      closing 交付指引）。run 期间编排器只写快照（ADR-0003：快照是待推送的真相），
 //      本层把这些事实交还规划器。
-//   ② gh issue view 产物 → tracker：gh 语义（大写 state、对象数组）归一为规划器
+//   ② tracker issue view 产物 → tracker：tracker 语义（大写 state、对象数组）归一为规划器
 //      的 tracker 状态（小写 open/closed、login/body 字符串数组）。
 //
 // 快照 Comments 事实约定（写入侧是编排流程文档，票 07 对齐措辞）：
@@ -22,6 +22,7 @@
 // 点名原因），不在读取层发明猜测性缺省。
 
 const { normalizeTicket } = require('./ledger-schema');
+const { parseTrackerUrl } = require('./tracker-set-core');
 
 // 与 ledger.js parseTicketFile 的 grab 同一宽容形态：**Status:** x 与 Status: x 皆读
 const META_LINE = (label) => new RegExp(`^\\**\\s*${label}\\s*:\\**\\s*(.*)$`, 'mi');
@@ -59,30 +60,30 @@ function parseCommentsFacts(text) {
 }
 
 // spec.md 文本 → { num, repo, url } | null：Source 行记录 tracker 原址（票 05 转写产物），
-// 母票号与 owner/repo 都从该行来——同步按它定位收尾对象与 gh -R，不依赖 cwd 的 git remote。
-// 解析不出（缺行 / 非 GitHub issue URL）返回 null，调用方按拒绝处理（不猜）。
-function parseSourceLine(text) {
+// 母票号与 owner/repo 都从该行来——同步按它定位收尾对象与仓库作用旗，不依赖 cwd 的
+// git remote。原址形态由契约判定（票 05 接缝②）：URL kind 按 identity.sourceUrl
+// （GitHub 契约下与既有 /github.com/… 行为等价；自建实例按路径识别，不认域名）；
+// 解析不出（缺行 / 形态不符）返回 null，调用方按拒绝处理（不猜）。
+function parseSourceLine(text, { contract } = {}) {
   if (text == null) return null;
   const m = /^Source:\s*(\S+)\s*$/m.exec(String(text));
   if (!m) return null;
   const url = m[1];
-  const u = /github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/(\d{1,6})/.exec(url);
-  if (!u) return null;
-  const num = normalizeTicket(u[3]);
-  if (!num) return null;
-  return { num, repo: `${u[1]}/${u[2]}`, url };
+  const parsed = parseTrackerUrl(url, { contract });
+  if (!parsed) return null;
+  return { num: parsed.num, repo: parsed.repo, url };
 }
 
 // 快照目录 → planTrackerSync 的 snapshot 输入。
 // 返回 { ok, tickets, spec, source, errors, warnings }：
 //   ok=true   —— tickets: [{ num, status, type, mergeSha, escalateReason }]（数值序），
 //                spec: { num, type, closingNote }（spec.md 缺 Type 行时 type=null），
-//                source: { repo, url }（spec.md 的 Source 行——gh 收发的 -R 固定于此）
+//                source: { repo, url }（spec.md 的 Source 行——同步收发由此固定仓库作用旗）
 //   ok=false  —— 快照缺失 / spec.md 缺失或 Source 不可解析 / issues 目录缺失：
 //                tickets 与 spec 为空，errors 点名原因——调用方不得进入规划。
 // 无数字前缀的杂散文件跳过并警告（与账本枚举同一先例）；快照票号重复不在本层去重
 // ——原样交给规划器拒绝（单一校验点）。
-function readSnapshot({ trackerDir, readFile, listDir, exists }) {
+function readSnapshot({ trackerDir, readFile, listDir, exists, contract }) {
   const errors = [];
   const warnings = [];
   if (!exists?.(trackerDir)) {
@@ -95,6 +96,9 @@ function readSnapshot({ trackerDir, readFile, listDir, exists }) {
       warnings,
     };
   }
+  // 契约注入（票 05）：Source 行按契约原址形态判定（GitHub 契约下行为等价）；
+  // 缺省 = 未经判型调用面的既有口径。
+  const contractContext = { contract };
   let specText = null;
   try {
     specText = readFile(`${trackerDir}/spec.md`);
@@ -109,9 +113,9 @@ function readSnapshot({ trackerDir, readFile, listDir, exists }) {
   }
   if (errors.length) return { ok: false, tickets: [], spec: null, source: null, errors, warnings };
 
-  const src = parseSourceLine(specText);
+  const src = parseSourceLine(specText, contractContext);
   if (!src) {
-    errors.push('spec.md 缺合法的 Source 行（GitHub issue URL）——无法定位 spec 母票与 tracker 原址');
+    errors.push('spec.md 缺合法的 Source 行（按契约原址形态判定）——无法定位 spec 母票与 tracker 原址');
     return { ok: false, tickets: [], spec: null, source: null, errors, warnings };
   }
   const grabSpec = (label) => {
@@ -158,16 +162,66 @@ function readSnapshot({ trackerDir, readFile, listDir, exists }) {
   return { ok: true, tickets, spec, source: { repo: src.repo, url: src.url }, errors, warnings };
 }
 
-// gh issue view 产物数组 → planTrackerSync 的 tracker.issues。
-// gh 语义 → 规划器语义：state 大写归小写、assignees 对象取 login、comments 对象取 body；
-// 字段缺省为 []（规划器输入形态的缺省约定）。state 与票号形态合法性由规划器统一校验。
-function toTrackerIssues(views) {
+// tracker issue 产物数组 → 引擎 canonical issue 形态（票 06 接缝②适配面）。
+// tracker issue list 产物（snapshot-init 取数）与 view 产物（sync/claim 拉状态）同被本层归一：
+// 字段名从契约 mapping.viewShape 取（差异是数据不是代码）——number/title/body/state 字段、
+// state 识别词表（stateOpen/stateClosed → 'open'|'closed' 二值；词表外照实透传）、
+// 原址取 urlKeys 首个命中。契约未声明 viewShape → canonical 字面（引擎 canonical 输入形态
+// 即缺省形状；GitHub 契约下与票 05 逐字面读 number/title/body/state/labels/url 的既有口径
+// 行为等价——纯透传）。labels / subIssues / blockedBy 原样传递（适配层不猜不编造）。
+const CANONICAL_VIEW_SHAPE = {
+  number: 'number', title: 'title', body: 'body', state: 'state',
+  stateOpen: ['open'], stateClosed: ['closed'],
+  assignees: 'assignees', assigneeLogin: 'login',
+  comments: 'comments', commentBody: 'body',
+  urlKeys: ['url', 'html_url'],
+};
+
+function viewShapeOf(contract) {
+  return contract?.mapping?.viewShape ?? CANONICAL_VIEW_SHAPE;
+}
+
+function stateMappingOf(vs) {
+  const openSet = new Set(vs.stateOpen.map((s) => String(s).trim().toLowerCase()));
+  const closedSet = new Set(vs.stateClosed.map((s) => String(s).trim().toLowerCase()));
+  return (raw) => {
+    const s = String(raw ?? '').trim().toLowerCase();
+    if (closedSet.has(s)) return 'closed';
+    if (openSet.has(s)) return 'open';
+    return s; // 词表外照实透传——形态合法性由下游（规划器/转写）判定，不猜测
+  };
+}
+
+function adaptTrackerIssues(views, { contract } = {}) {
+  const vs = viewShapeOf(contract);
+  const stateOf = stateMappingOf(vs);
   return (views ?? []).map((v) => ({
-    num: normalizeTicket(v?.number),
-    state: String(v?.state ?? '').trim().toLowerCase(),
-    assignees: (v?.assignees ?? []).map((a) => a?.login).filter((l) => typeof l === 'string' && l),
-    comments: (v?.comments ?? []).map((c) => c?.body).filter((b) => typeof b === 'string' && b),
+    number: v?.[vs.number] ?? null,
+    title: v?.[vs.title] ?? null,
+    body: v?.[vs.body] ?? null,
+    state: stateOf(v?.[vs.state]),
+    labels: v?.labels ?? [],
+    subIssues: v?.subIssues,
+    blockedBy: v?.blockedBy,
+    url: vs.urlKeys.map((k) => v?.[k]).find((u) => typeof u === 'string' && u) ?? null,
   }));
 }
 
-module.exports = { parseCommentsFacts, parseSourceLine, readSnapshot, toTrackerIssues };
+// view 产物 → planTrackerSync 的 tracker.issues（规划器输入形态）。
+// closedSet 优先（state 词表内判定）；票号形态合法性由规划器统一校验。
+function toTrackerIssues(views, { contract } = {}) {
+  const vs = viewShapeOf(contract);
+  const stateOf = stateMappingOf(vs);
+  return (views ?? []).map((v) => ({
+    num: normalizeTicket(v?.[vs.number]),
+    state: stateOf(v?.[vs.state]),
+    assignees: (v?.[vs.assignees] ?? [])
+      .map((a) => a?.[vs.assigneeLogin])
+      .filter((l) => typeof l === 'string' && l),
+    comments: (v?.[vs.comments] ?? [])
+      .map((c) => c?.[vs.commentBody])
+      .filter((b) => typeof b === 'string' && b),
+  }));
+}
+
+module.exports = { parseCommentsFacts, parseSourceLine, readSnapshot, adaptTrackerIssues, toTrackerIssues };

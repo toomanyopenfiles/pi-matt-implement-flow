@@ -2,8 +2,10 @@
 'use strict';
 
 // ledger CLI — 机械台账的子命令（唯一写面）。
-// 分层：薄 IO 壳（git/gh/票文件读取 + 原子写）+ 纯判定核心（ledger-schema / ledger-core /
-// tracker-set-core / snapshot-core / sync-read-core / sync-planning-core）。
+// 分层：薄 IO 壳（git/tracker CLI/票文件读取 + 原子写）+ 纯判定核心（ledger-schema / ledger-core /
+// tracker-set-core / snapshot-core / sync-read-core / sync-planning-core）；
+// tracker 收发一律按契约命令模板执行的通用 driver（tracker-driver，票 05）——
+// 本层零 per-tracker 分支与零硬编码 argv。
 //
 //   add <type>   校验 → 盖时间戳/序号/HEAD 锚点 → append 事件流 → 自动再生台账
 //   build        由事件流 + 真相层全量再生台账（全文打到 stdout，供 compaction 恢复读取）
@@ -19,8 +21,11 @@ const os = require('node:os');
 const path = require('node:path');
 const schema = require('./ledger-schema');
 const core = require('./ledger-core');
+const contractCore = require('./tracker-contract-core');
+const driver = require('./tracker-driver');
 const snapshot = require('./snapshot-core');
 const tset = require('./tracker-set-core');
+const syncCore = require('./tracker-sync-core');
 const syncread = require('./sync-read-core');
 const syncplan = require('./sync-planning-core');
 
@@ -33,17 +38,24 @@ const SNAPSHOT_DIR = 'tracker';
 const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事件流 / 派生台账三层，LLM 永不手写台账）
 
 用法:
+  node ledger.js init --runtime-dir <dir> --branch <branch> --branch-base <base> --baseline-sha <sha>
+               --spec <spec 文件路径> --test-command <cmd> [--reviewer on|off] [--max-fix-rounds N]
+               [--max-concurrent N] [--tickets 01,02,1042]
   node ledger.js add <type> --runtime-dir <dir> [--flag value ...]
   node ledger.js build --runtime-dir <dir>
   node ledger.js check --runtime-dir <dir>
 
+init（run 初始化，票 04——契约驱动）:
+  # Round 0 的第一条（也是唯一一条可以入账的 init）:tracker 不再手工声明——按目标仓库
+  # 的 setup 产物（docs/agents/issue-tracker.md + triage-labels.md）自动识别 tracker 并
+  # 选中契约预设；识别结果（tracker 字段）照旧入账，事件格式零迁移。
+  # 缺 setup 产物 → 指引运行 /setup-matt-pocock-skills；范本认不出 → 贴出「仅支持
+  # local / github / gitlab 三种」并列出支持面——两者都是显式停下，不猜测不降级。
+  # --tracker 旗标已废除（配置单源是 setup 产物，不再重复声明）。票集边界 --tickets、
+  # 流程形态快照 --reviewer/--max-fix-rounds/--max-concurrent 与既往 init 同参同对：
+  # 流程形态冻结后校验按其执行；票集边界冻结后，边界外的票号记账被拒。
+
 事件类型与参数集 (add):
-  init        --branch --branch-base --baseline-sha --spec --test-command --tracker(local|github|gitlab)
-              [--reviewer on|off] [--max-fix-rounds N] [--max-concurrent N] [--tickets 01,02,1042]
-              # 流程形态快照（flow shape）：本 run 是否逐票评审 / 每票修复预算 / 并发 coder 数；
-              # 省略 = 默认形态 on / 2 / 3。快照冻结后，verdict/fix/merge 校验均按它执行。
-              # --tickets（票集边界，票 04）：本 run 的票号清单（票集解析三层兜底的兜底层）；
-              # init 时冻结——此后边界外的票号记账被拒（中途偷加票被拒）。省略 = 无冻结边界。
   dispatch    --ticket --key --run-id [--worktree] [--note]
   settled     --ticket --round --head-sha [--worktree] [--gate] [--note]
   verdict     --ticket --round --verdict(approved|changes_requested) [--findings] [--rev-run-id] [--note]
@@ -59,35 +71,53 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
   pr          --state(opened-draft|ready) [--url] [--note]
   close       [--note]
 
-快照初始化 (snapshot-init，tracker=github):
-  snapshot-init --spec <issue号|#号|owner/repo#号|issueURL> [--tickets 01,02,1042]
+快照初始化 (snapshot-init，契约驱动——tracker 由 setup 产物自动识别):
+  snapshot-init --spec <契约声明的 spec 引用形态> [--tickets 01,02,1042]
               # init 阶段一条命令：拉取 spec 与全部工单（含原生 sub-issues 与 blocked_by
-              # 依赖边），转写为 tracker 快照
+              # 依赖边，能力由契约声明），转写为 tracker 快照
               # （<runtime-dir>/tracker/spec.md 带 Source: 行 + tracker/issues/<号>-<slug>.md，
-              # 与 local 票文件同构，账本零形态分叉）。票集来自票 04 的三层解析；
+              # 与 local 票文件同构，账本零形态分叉）。票集边界此后由契约兜底链驱动；
               # spec 母票带 Type: spec 豁免标记。快照已存在时拒绝执行（续跑保护：既有内容
-              # 零覆盖，续跑绝不重拉）；gh 收发为 best-effort 薄 IO——失败报错清晰、
-              # 不产生半成品（临时目录整体改名，全部成功才落盘）。
+              # 零覆盖，续跑绝不重拉）；取数（issue 集合/sub-issues/依赖边/仓库标识探测）全都
+              # 走契约命令模板（票 05 通用 driver）——失败报错清晰、
+              # 不产生半成品（临时目录整体改名，全部成功才落盘）。local 契约无需快照。
+              # 缺 setup 产物 → 指引运行 /setup-matt-pocock-skills，停下不降级。
 
-同步 (sync，tracker=github，时点固定在封账之前、pr --state ready 之前):
+同步 (sync，封账前、pr --state ready 之前):
   sync [--mode seal|abandon] [--claimant <login>] [--reason <放弃说明>]
               # 把 tracker/ 快照的待推送状态幂等推送到 tracker 本体（票 06；执行 03 的
               # 同步规划）。seal（缺省）：合并票关票附 merge SHA、escalate 票留评保持开放、
               # spec 母票收尾关闭；abandon：撤占坑（--claimant）+ 留评说明（--reason）。
+              # 幂等键（票 02）：每条同步评论携带隐藏机器 marker
+              # \`<!-- matt-implement:<runId>:<kind> -->\`（runId = 本 run 的运行目录名，
+              # kind = merge|escalate|closing|abandon；HTML 注释，tracker 上人类不可见）。
+              # 重入判定只认 marker：人改写/翻译/追加评论正文后重跑不重复推送；
+              # 无 marker 的历史评论（旧形态）视为未同步、照常推送一次。
               # 快照事实来自票文件 ## Comments 节：merge SHA: <sha>、escalate: <原因>；
               # spec.md 的 Comments 节里 closing: <交付指引>（票 07 对齐措辞）。
-              # gh 收发为 best-effort 薄 IO：先拉状态再规划、规划通过后才写入——
+              # 同步收发为 best-effort 薄 IO（契约命令模板执行）：先拉状态再规划、规划通过后才写入——
               # 拉取失败即整体中止（无半成品推送）；部分失败逐动作报告已完成/未完成，
               # 重跑安全（幂等规划只补未完成的动作）。同步成功后输出清理指引。
               # run 已封账或 PR 已标 ready 时拒绝执行（同步须在两时点之前）。
 
+占坑 (claim，run 的第一个 tracker 写动作，先于快照拉取——ADR-0003 锁实时):
+  claim --spec <契约声明的 spec 引用形态>
+              # 把 spec 母票认领到 @me（契约 claim 模板执行；tracker 侧的 feature 级并发锁）。
+              # 先读状态再写入：他人已在位 → 拒绝并点名在位者（不猜测覆盖他人占坑；
+              # 同一占坑者续跑该步幂等可跳过）。进度与合并同步归 sync；封账/放弃时释放。
+              # local 契约无 tracker 写面——占坑不存在（票文件即真相层）。
+
 说明:
+  init     run 初始化（Round 0 唯一一次）：契约驱动——tracker 从 setup 产物自动识别；
+           识别结果（tracker 字段）照旧入账，事件格式零迁移；缺/认不出 setup 产物
+           分别指引运行 /setup-matt-pocock-skills / 贴出仅支持三种，停下不降级
   add      记账：脚本盖权威时间戳/单调序号/版本/git HEAD 锚点，append 后自动再生台账
   build    台账再生：四段 markdown（头部/表格/时间线/对账结论），确定性重建
   check    对账：账实差异核验，非零退出码 = 有差异；派发与合并前、compaction 后必跑；
            并对 final 事件的 runId 做 best-effort 平台证据核验（不可核验仅警告，不影响退出码）
-  sync     封账前单点同步：快照事实 → 03 规划 → gh 幂等执行（ticket 06，tracker=github）；
+  sync     封账前单点同步：快照事实 → 03 规划 → 契约模板幂等执行（同步动作集由能力生成）；
            成功后打印清理指引（快照与 review bundle 清理、findings 与账本三件套留存）
+  claim    占坑：spec 母票认领到 @me（契约 claim 模板；先读状态再写入，冲突拒绝）
   时间不由 LLM 提供；自由文本统一 --note；校验拒绝时给出原因，修正后重试；
   与校验器分歧 → add anomaly --note "..." 并停下上报（无任何绕过旗标）。
 `;
@@ -124,7 +154,7 @@ function sessionDirName(repoPath) {
 
 // --- 真相层采集（只读）---
 
-function collectTruth({ runtimeDir, events }) {
+function collectTruth({ runtimeDir, events, contract }) {
   fs.mkdirSync(runtimeDir, { recursive: true }); // 首次记账时目录尚不存在；git -C 需要它已存在
   const git = (args) => {
     try {
@@ -240,14 +270,13 @@ function collectTruth({ runtimeDir, events }) {
     return { found: false, dir: dirs[0] ?? null };
   };
 
-  // gh PR 状态：best-effort，不可用 → null（台账标 unknown，不编造）
-  truth.probeGh = (branch) => {
+  // 收尾面 PR 状态：best-effort，不可用 → null（台账标 unknown，不编造）。
+  // 票 05 契约化：探测命令用契约 prProbe 模板（通用 driver 执行）；契约由 setup 产物
+  // 解析在调用点传入（不重复判型，判型失败不护道——台账标 unknown，不编造）。
+  truth.prProbe = (branch) => {
+    if (!contract || !contract.commands?.prProbe) return null;
     try {
-      const raw = execFileSync('gh', ['pr', 'list', '--head', branch, '--json', 'state,isDraft', '--limit', '1'], {
-        encoding: 'utf8',
-        timeout: 10000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const raw = driver.runCommand(contract, 'prProbe', { branch }, { runOptions: { timeout: 10000 } });
       const arr = JSON.parse(raw);
       if (!arr.length) return 'none';
       if (arr[0].isDraft) return 'opened-draft';
@@ -270,7 +299,7 @@ function collectTruth({ runtimeDir, events }) {
       const m = /^(\d+)/.exec(name);
       if (!m) continue;
       const num = schema.normalizeTicket(m[1]);
-      const parsed = parseTicketFile(fs.readFileSync(path.join(issuesDir, name), 'utf8'));
+      const parsed = parseTicketFile(fs.readFileSync(path.join(issuesDir, name), 'utf8'), { contract });
       truth.tickets.push({ num, file: name, ...parsed });
     }
     // 票号数值排序（ADR-0004）：混位数下文件名字典序会乱（'1042-…' 排在 '02-…' 前面），
@@ -297,8 +326,11 @@ function collectTruth({ runtimeDir, events }) {
   return truth;
 }
 
-// 票文件解析：Status / Type / Blocked by 行 + 首题（兼容 **Status:** x 与 Status: x 两种写法）
-function parseTicketFile(text) {
+// 票文件解析：Status / Type / Blocked by 行 + 首题（兼容 **Status:** x 与 Status: x 两种写法）。
+// Status 读取过状态词表（票 03，与转写同一张契约词表）：canonical 五名恒可读、自定义
+// label 串映射进角色；contract 由调用方注入（票 04 接线），缺省 = canonical 默认——
+// local 模式现状行为零变化。
+function parseTicketFile(text, { contract } = {}) {
   const grab = (label) => {
     const m = new RegExp(`^\\**\\s*${label}\\s*:\\**\\s*(.*)$`, 'mi').exec(text);
     return m ? m[1].replace(/\*+/g, '').trim() : null;
@@ -311,7 +343,7 @@ function parseTicketFile(text) {
   const type = grab('Type');
   return {
     title,
-    status: grab('Status'),
+    status: syncCore.normalizeStatus(grab('Status'), { contract }),
     type: type ? type.trim().toLowerCase() : null,
     blockedBy,
   };
@@ -327,11 +359,147 @@ function atomicWrite(filePath, content) {
 
 // --- 子命令 ---
 
+// init 子命令（票 04）：契约驱动的 run 初始化——Round 0 的首条（也是唯一一条）init。
+// 与 add 的唯一区分：tracker 不是旗标而是识别结果——setup 产物判型选契约预设；
+// 事件里 tracker 字段照旧（零迁移），载荷参数集与既往 init 事件完全一致。
+// 识别先于一切写入（零半成品）：缺 setup 产物 → 指引运行 /setup-matt-pocock-skills；
+// 范本认不出 → 「仅支持三种」，都停下不猜测不降级；词表违约指到文件+行+列+期望。
+const INIT_REQUIRED = ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand'];
+const INIT_OPTIONAL = ['reviewer', 'maxFixRounds', 'maxConcurrent', 'tickets'];
+
+
+// setup 产物 → tracker（契约驱动）：判型输入是 repo 内的两份上游文档。
+// 读取是纯 IO；解析/判型/词表全部在 tracker-contract-core（票 01，接缝①），
+// 本层只做「读文件 → 调解析 → 贴错误」的转接，不重复任何判型逻辑。
+const TRACKER_DOC = 'docs/agents/issue-tracker.md';
+const TRIAGE_DOC = 'docs/agents/triage-labels.md';
+
+function resolveTrackerFromRepo(repoRoot) {
+  const trackerPath = path.resolve(repoRoot, TRACKER_DOC);
+  const triagePath = path.resolve(repoRoot, TRIAGE_DOC);
+  if (!fs.existsSync(trackerPath)) {
+    return {
+      ok: false,
+      tracker: null,
+      errors: [
+        `缺少 issue tracker setup 产物：${TRACKER_DOC}——先运行 /setup-matt-pocock-skills 落盘 setup 产物，再重跑`,
+      ],
+      warnings: [],
+    };
+  }
+  const issueTracker = fs.readFileSync(trackerPath, 'utf8');
+  const triageLabels = fs.existsSync(triagePath) ? fs.readFileSync(triagePath, 'utf8') : null;
+  const resolved = contractCore.resolveContract({
+    issueTracker,
+    triageLabels,
+    issueTrackerFile: TRACKER_DOC,
+    triageLabelsFile: TRIAGE_DOC,
+  });
+  if (!resolved.ok) {
+    return { ok: false, tracker: null, contract: null, errors: [...resolved.errors], warnings: [...resolved.warnings] };
+  }
+  // 票 05：契约对象随识别结果一并回传（快照/同步的命令模板、兜底链、形态、拉取上限
+  // 的唯一来源）——init 只用 tracker 字段，其余消费方不再重复判型。
+  return { ok: true, tracker: resolved.contract.tracker, contract: resolved.contract, warnings: [...resolved.warnings] };
+}
+
+function cmdInit({ runtimeDir, rest }) {
+  const errors = [];
+  const collected = {};
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (!tok.startsWith('--')) {
+      errors.push(`意外位置参数「${tok}」——参数一律用 --flag value 形式（flags 式，非裸 JSON）`);
+      continue;
+    }
+    let flag = tok.slice(2);
+    let value = null;
+    const eq = flag.indexOf('=');
+    if (eq !== -1) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else if (i + 1 < rest.length && !rest[i + 1].startsWith('--')) {
+      value = rest[++i];
+    } else {
+      errors.push(`旗标 --${flag} 缺少值`);
+      continue;
+    }
+    const key = schema.FLAG_TO_KEY[flag];
+    if (!key) {
+      if (flag === 'tracker') {
+        // 硬枚举分支删除的显式拒面（票 04）：--tracker 双轨废除，识别是唯一来源，
+        // 文案点名替代面（setup 产物）助一轮内修正。
+        errors.push(
+          '未知旗标 --tracker：tracker 由 setup 产物自动识别，不再手工声明——' +
+            '配置单源是 docs/agents/issue-tracker.md（/setup-matt-pocock-skills 落盘）'
+        );
+      } else {
+        errors.push(`未知旗标 --${flag}（init 的参数集见 --help）；本脚本无任何绕过校验的旗标`);
+      }
+      continue;
+    }
+    if (!INIT_REQUIRED.includes(key) && !INIT_OPTIONAL.includes(key)) {
+      errors.push(`旗标 --${flag} 不属于 init 的参数集`);
+      continue;
+    }
+    if (key in collected) {
+      errors.push(`旗标 --${flag} 重复给出`);
+      continue;
+    }
+    if (!String(value).trim()) {
+      errors.push(`旗标 --${flag} 的值为空`);
+      continue;
+    }
+    collected[key] = value;
+  }
+  const missing = INIT_REQUIRED.filter((key) => !(key in collected));
+  if (missing.length) {
+    errors.push(
+      `缺少必选参数 ${missing.map((key) => `--${schema.KEY_TO_FLAG[key]}`).join(' ')}` +
+        '——tracker 不在此列：由 setup 产物自动识别'
+    );
+  }
+  if (errors.length) {
+    out(`✗ 拒绝（未入账）：`, ...errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+
+  // 识别先于一切写入（零半成品，与 snapshot-init 的续跑保护同哲学）：缺 setup 产物 →
+  // 指引运行 /setup-matt-pocock-skills；范本认不出 → 「仅支持三种」；词表违约指到
+  // 文件+行+列+期望——都停下不猜测不降级。
+  const resolution = resolveTrackerFromRepo(process.cwd());
+  if (!resolution.ok) {
+    out(`✗ 拒绝（未入账）：`, ...resolution.errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+  for (const w of resolution.warnings) out(`⚠ ${w}`);
+
+  // tracker 字段来自识别结果——载荷与其他字段同一扇 schema 门过 init 载荷档
+  //（枚举 / SHA / 正整数 / tickets 清单档与既往零差异，事件格式零迁移）。
+  const { payload: validated, errors: schemaErrors } = schema.validateInitPayload({
+    ...collected,
+    tracker: resolution.tracker,
+  });
+  if (schemaErrors.length) {
+    out(`✗ 拒绝（未入账）：`, ...schemaErrors.map((e) => `  - ${e}`));
+    return 1;
+  }
+
+  return recordEvent({ runtimeDir, type: 'init', payload: validated });
+}
+
 function cmdAdd({ runtimeDir, rest }) {
   const type = rest[0];
+  if (type === 'init') {
+    out(
+      '✗ 拒绝：add init 已废除（票 04）——run 初始化移入 init 子命令（契约驱动：' +
+        'tracker 由 setup 产物自动识别，不再以旗标手工声明）；用法见 --help'
+    );
+    return 1;
+  }
   if (!type || !schema.EVENT_TYPES[type]) {
     out(
-      `✗ 拒绝：未知事件类型 ${type ?? '(缺失)'}——可选：${Object.keys(schema.EVENT_TYPES).join(', ')}`
+      `✗ 拒绝：未知事件类型 ${type ?? '(缺失)'}——可选：${Object.keys(schema.EVENT_TYPES).filter((k) => k !== 'init').join(', ')}（add 不再收 init：run 初始化用 init 子命令）`
     );
     return 1;
   }
@@ -340,7 +508,13 @@ function cmdAdd({ runtimeDir, rest }) {
     out(`✗ 拒绝（未入账）：`, ...errors.map((e) => `  - ${e}`));
     return 1;
   }
+  return recordEvent({ runtimeDir, type, payload });
+}
 
+// 共享入账路径（add 与 init 子命令的唯一写点）：loadEvents → collectTruth → gateAdd →
+// 盖信封 append → 自动再生台账。init 事件也走 gateAdd（init-only 状态机执法面不变：
+// 只能是第一条事件、baselineSha 需在 git 中存在、spec 文件需存在）。
+function recordEvent({ runtimeDir, type, payload }) {
   const eventsPath = path.join(runtimeDir, EVENTS_FILE);
   const { events, loadError } = loadEvents(eventsPath);
   if (loadError) {
@@ -348,7 +522,7 @@ function cmdAdd({ runtimeDir, rest }) {
     return 1;
   }
 
-  const truth = collectTruth({ runtimeDir, events });
+  const truth = collectTruth({ runtimeDir, events, contract: resolveTrackerFromRepo(process.cwd()).contract ?? null });
   if (!truth.head) {
     out('✗ 拒绝（未入账）：无法锚定写入时刻的 git HEAD——运行时目录不在含提交的 git 仓库内');
     return 1;
@@ -388,7 +562,7 @@ function cmdAdd({ runtimeDir, rest }) {
   const ledgerPath = path.join(runtimeDir, LEDGER_FILE);
   atomicWrite(ledgerPath, md);
 
-  const what = payload.ticket ? `ticket=${payload.ticket}` : type;
+  const what = payload.ticket ? `ticket=${payload.ticket}` : type === 'init' ? `tracker=${payload.tracker}` : type;
   out(
     `✓ recorded seq=${seq} ${type} ${what}`,
     ...warnings.map((w) => `⚠ ${w}`),
@@ -403,7 +577,7 @@ function collectOrReject({ runtimeDir, command }) {
     out(`✗ ${command} 失败：${loadError}`);
     return null;
   }
-  const truth = collectTruth({ runtimeDir, events });
+  const truth = collectTruth({ runtimeDir, events, contract: resolveTrackerFromRepo(process.cwd()).contract ?? null });
   const recon = core.reconcile({ events, truth });
   if (degraded) {
     recon.warnings.unshift('事件流缺失/为空——台账由真相层降级再生：平台态列标 unknown，不编造');
@@ -448,77 +622,60 @@ function cmdCheck({ runtimeDir }) {
   return 0;
 }
 
-// --- 快照初始化（票 05）：gh 收发 best-effort 薄 IO + 布局纯函数（snapshot-core）---
+// --- 快照初始化（票 05 契约化）：按契约命令模板执行的通用 driver 取数 + 布局纯函数
+//（snapshot-core）。取数面（issue 集合 / sub-issues / 原生依赖边 / 仓库标识探测）全部走
+// contract.commands 的模板（tracker-driver），本层零 per-tracker 分支与零硬编码 argv——
+// 失败语义（best-effort 警告不拦快照 / 硬失败零落盘）与迁移前等价，命令形态由契约声明。
 
-// spec 引用 → owner/repo（供 gh -R 与 sub_issues REST 路径）：与 parseSpecRef 同源的两种
-// 带前缀形态；纯 issue 号 / #号不携带 repo（gh 按 cwd 的 git remote 解析，不猜）。
-function repoFromSpecRef(specRef) {
-  const s = String(specRef ?? '').trim();
-  let m = /^([\w.-]+)\/([\w.-]+)#\d{1,6}$/.exec(s);
-  if (m) return `${m[1]}/${m[2]}`;
-  m = /github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/\d{1,6}/.exec(s);
-  if (m) return `${m[1]}/${m[2]}`;
-  return null;
-}
-
-const ghDetail = (e) =>
+const cliDetail = (e) =>
   (String(e?.stderr ?? '').trim() || String(e?.message ?? '').trim()).split('\n')[0] ||
   `退出码 ${e?.status ?? '未知'}`;
 
-function runGh(args) {
-  return execFileSync('gh', args, {
-    encoding: 'utf8',
-    timeout: 120000,
-    // 大仓的 issue list（--limit 1000 含正文）远超默认 1MB buffer——ENOBUFS 是真实
-    // 失败面（手工验证 golang/go 时撞过），按薄 IO 的量级给足。
-    maxBuffer: 256 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-}
-
-// cwd 仓库的 owner/repo（best-effort）：仅用于 sub_issues 拉取；失败不拦快照——
-// 票集边界还有 ## Parent 反查与 --tickets 两层兜底。
-function ghRepoView(warnings) {
+// cwd 仓库的 owner/repo（best-effort，契约 repoView 模板）：仅供 REST 路径模板的 <repo>
+// 占位；失败不拦快照——票集边界还有 ## Parent 反查与 --tickets 两层兜底。contract
+// 未声明 repoView（能力缺席）→ 探测不执行（调用方由 spec 引用自带 repo 或走兜底）。
+function cliRepoView(contract, warnings) {
+  if (!contract?.commands?.repoView) return null;
   try {
-    const name = JSON.parse(runGh(['repo', 'view', '--json', 'nameWithOwner']) || '{}')?.nameWithOwner;
+    const name = JSON.parse(driver.runCommand(contract, 'repoView') || '{}')?.nameWithOwner;
     return name ? String(name) : null;
   } catch (e) {
-    warnings.push(`gh repo view 失败（best-effort 跳过）：${ghDetail(e)}——sub-issues 拉取跳过，票集边界走 ## Parent 反查或 --tickets`);
+    warnings.push(`仓库标识探测失败（best-effort 跳过）：${cliDetail(e)}——sub-issues 拉取跳过，票集边界走 ## Parent 反查或 --tickets`);
     return null;
   }
 }
 
 // spec issue 的原生 sub-issues（票 04 层 ① 的数据源，best-effort）：REST 端点一次拉取，
-// 失败仅警告不拦快照——三层兜底链的设计初衷就是层 ① 可缺席。
-function ghSubIssues(repo, specNum, issues, warnings) {
+// 失败仅警告不拦快照——兜底链的设计初衷就是层 ① 可缺席。
+function cliSubIssues(contract, repo, specNum, issues, warnings) {
   try {
-    const raw = runGh(['api', `repos/${repo}/issues/${Number(specNum)}/sub_issues`]);
+    const raw = driver.runCommand(contract, 'subIssues', { repo, num: specNum });
     const subs = (JSON.parse(raw || '[]') ?? [])
       .map((it) => schema.normalizeTicket(it?.number))
       .filter(Boolean);
     const specIssue = issues.find((it) => schema.normalizeTicket(it?.number) === specNum);
     if (specIssue) specIssue.subIssues = subs;
   } catch (e) {
-    warnings.push(`spec ${specNum} 的 sub-issues 拉取失败（best-effort 跳过）：${ghDetail(e)}`);
+    warnings.push(`spec ${specNum} 的 sub-issues 拉取失败（best-effort 跳过）：${cliDetail(e)}`);
   }
 }
 
 // 票的原生依赖边（integration-05 缺陷 1）：转写纯函数 blockedByOf 早已支持 issue.blockedBy
-// 注入，但快照的 gh 收发此前没有拉取 dependencies——纯 IO 接线缺失，转写产物 Blocked by
+// 注入，但快照的收发此前没有拉取 dependencies——纯 IO 接线缺失，转写产物 Blocked by
 // 落占位 —。接线：票集边界先解析（纯函数，确定拉取对象、不给全仓发请求），逐票 REST 拉
 // blocked_by 解析为票号注入；best-effort：单票失败仅警告，该票退回正文 Blocked by 行/占位 —
 //（与 sub-issues 同一待遇，失败不产生半成品快照）。
-function ghBlockedBy(repo, nums, issues, warnings) {
+function cliBlockedBy(contract, repo, nums, issues, warnings) {
   for (const num of nums) {
     try {
-      const raw = runGh(['api', `repos/${repo}/issues/${Number(num)}/dependencies/blocked_by`]);
+      const raw = driver.runCommand(contract, 'blockedBy', { repo, num });
       const blockers = (JSON.parse(raw || '[]') ?? [])
         .map((it) => schema.normalizeTicket(it?.number))
         .filter(Boolean);
       const tk = issues.find((it) => schema.normalizeTicket(it?.number) === num);
       if (tk) tk.blockedBy = blockers;
     } catch (e) {
-      warnings.push(`票 ${num} 的原生依赖边拉取失败（best-effort 跳过）：${ghDetail(e)}`);
+      warnings.push(`票 ${num} 的原生依赖边拉取失败（best-effort 跳过）：${cliDetail(e)}`);
     }
   }
 }
@@ -583,8 +740,8 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
   if (!('spec' in flags)) {
     errors.push('缺少必选参数 --spec <spec 引用>（GitHub：issue 号 / #号 / owner/repo#号 / issue URL）');
   }
-  // --tickets 与 add init 同名旗标共用 schema.ticketSetList 单一转换点：归一 + 去重 +
-  // 数值排序，非法形态（空段/非数字/越界）在旗标层拒绝——不与 add init 双轨校验。
+  // --tickets 与 init 子命令同名旗标共用 schema.ticketSetList 单一转换点：归一 + 去重 +
+  // 数值排序，非法形态（空段/非数字/越界）在旗标层拒绝——不与 init 子命令双轨校验。
   let initTickets;
   if ('tickets' in flags) {
     initTickets = schema.ticketSetList(flags.tickets);
@@ -613,33 +770,51 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
   }
 
   const warnings = [];
-  const specNum = tset.parseSpecRef(flags.spec);
+  // 契约先于一切网络动作（零半成品）：配置单源是 setup 产物——快照取数/占位/引擎参数
+  // （命令模板、兜底链、引用形态、拉取上限）全部由它派生；无法识别 → 显式停下不猜测，
+  // 与 init 子命令同一转接（resolveTrackerFromRepo）。
+  const resolution = resolveTrackerFromRepo(process.cwd());
+  if (!resolution.ok) {
+    out(`✗ 拒绝：`, ...resolution.errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+  for (const w of resolution.warnings) out(`⚠ ${w}`);
+  const contract = resolution.contract;
+  if (!contract.commands.cli) {
+    // local 契约无 tracker 写面：票文件即真相，快照/同步为无操作（spec：local 零变化）。
+    out(
+      '✗ 拒绝：tracker=local 无需快照——本地票文件即真相层，不经此命令（快照/同步为无操作）。'
+    );
+    return 1;
+  }
+
+  const specNum = tset.parseSpecRef(flags.spec, { contract });
   let issues = [];
   if (specNum) {
-    const repo = repoFromSpecRef(flags.spec) ?? ghRepoView(warnings);
+    const repo = tset.repoOfSpecRef(flags.spec, { contract }) ?? cliRepoView(contract, warnings);
     try {
-      const args = ['issue', 'list', '--state', 'all', '--limit', '1000', '--json', 'number,title,body,state,labels,url'];
-      if (repo) args.push('-R', repo);
-      issues = JSON.parse(runGh(args) || '[]') ?? [];
-      // 单拉无分页（真分页 defer 到 hardening 票）：行数恰达上限即如实警告——已达上限，
-      // 拉取可能不全；不在拉取处硬拒，缺口由票集解析的缺票诊断点名后重跑。
-      if (issues.length >= 1000) {
-        warnings.push('gh issue list 拉取行数恰达 --limit 1000 上限——已达上限，拉取可能不全；票集若缺票，核对 tracker 状态后重跑');
+      const raw = driver.runCommand(contract, 'listIssues', { repo });
+      issues = syncread.adaptTrackerIssues(JSON.parse(raw || '[]') ?? [], { contract });
+      // 单拉无分页（真分页 defer 到 hardening 票）：行数恰达契约模板声明的上限即如实
+      // 警告——已达上限，拉取可能不全；不在拉取处硬拒，缺口由票集解析的缺票诊断点名后重跑。
+      const limit = driver.listLimit(contract);
+      if (limit != null && issues.length >= limit) {
+        warnings.push(`拉取行数恰达 --limit ${limit} 上限——已达上限，拉取可能不全；票集若缺票，核对 tracker 状态后重跑`);
       }
     } catch (e) {
       out(
-        `✗ 快照初始化失败：gh issue list 拉取失败——${ghDetail(e)}`,
-        '  快照未落盘（tracker/ 未创建）——gh 收发为 best-effort 薄 IO：失败不产生半成品，',
-        '  排查 gh 登录/网络/引用后重跑（幂等：快照不存在时重跑即全新拉取）。'
+        `✗ 快照初始化失败：issue 集合拉取失败——${cliDetail(e)}`,
+        '  快照未落盘（tracker/ 未创建）——取数为 best-effort 薄 IO：失败不产生半成品，',
+        '  排查登录/网络/引用后重跑（幂等：快照不存在时重跑即全新拉取）。'
       );
       return 1;
     }
     if (repo) {
-      ghSubIssues(repo, specNum, issues, warnings);
+      cliSubIssues(contract, repo, specNum, issues, warnings);
       // 原生依赖边（integration-05 缺陷 1）：边界先解析（纯函数），仅对边界内的票拉
       // blocked_by 注入——planSnapshot 的转写才吃得到 native 来源。
-      const boundary = tset.resolveTicketSet({ issues, specRef: flags.spec, initTickets });
-      if (boundary.ok) ghBlockedBy(repo, boundary.tickets, issues, warnings);
+      const boundary = tset.resolveTicketSet({ issues, specRef: flags.spec, initTickets, contract });
+      if (boundary.ok) cliBlockedBy(contract, repo, boundary.tickets, issues, warnings);
     }
   }
 
@@ -647,13 +822,17 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
     issues,
     specRef: flags.spec,
     initTickets,
+    contract,
   });
   if (!plan.ok) {
     out(`✗ 快照初始化失败：`, ...plan.errors.map((e) => `  - ${e}`));
-    // 提示只在「引用本身解析不出」（local 路径 / 散文）且形态像文件路径时给——
-    // 引用可解析但不在集合（拉取不全）的场景贴 tracker=local 提示会误导。
-    if (!specNum && /[\\/]|\.md$/.test(String(flags.spec).trim())) {
-      out('  提示：tracker=local 无需快照——本地票文件即真相层，不经此命令');
+    // 提示只在「引用本身解析不出」且形态像 spec 引用时给——引用可解析但不在集合
+    //（拉取不全）的场景无提示会误导；形态清单贴出契约声明面，帮一轮内修正。
+    if (!specNum) {
+      out(
+        '  提示：spec 引用必须落在契约声明票形态内（GitHub：issue 号 / #号 / owner/repo#号 / issue URL）——',
+        '  local 契约无需快照（本地票文件即真相层）。'
+      );
     }
     return 1;
   }
@@ -681,15 +860,19 @@ function cmdSnapshotInit({ runtimeDir, rest }) {
   return 0;
 }
 
-// --- 同步（票 06）：快照事实读取（sync-read-core）+ 同步规划（票 03）+ gh 薄 IO 执行 ---
+// --- 同步（票 06）：快照事实读取（sync-read-core）+ 同步规划（票 03）+ 契约模板执行（票 05 driver）---
 //
 // 时序即幂等保障：先拉 tracker 状态（拉取失败即整体中止）→ 纯规划（拒绝面全拦在此，
-// 零写入）→ 逐动作顺序执行。执行属票 03 动作集的一一对应：
-//   close    → gh issue close <num> [--comment <body>]
-//   comment  → gh issue comment <num> --body <body>
-//   unassign → gh issue edit <num> --remove-assignee <login>
-// 部分失败即停：报告已完成/未完成逐动作清单；重跑从拉取重新开始，规划器按 tracker
-// 已有痕迹只补未完成的动作——已关不重关、已评论不重复。
+// 零写入）→ 逐动作顺序执行。执行按同步动作集与契约命令模板一一对应（票 05：
+// 取数/留评/关票/撤认领全走 driver，零硬编码 argv）：
+//   close    → contract.commands.close（body != null 时按 closeWithComment 能力追加收尾评论）
+//   comment  → contract.commands.comment
+//   unassign → contract.commands.unclaim
+// 幂等键（票 02）：每条同步评论携带隐藏机器 marker `<!-- matt-implement:<runId>:<kind> -->`
+//（runId = 本 run 的 --runtime-dir 目录名 feature slug；kind = 动作种类），重入判定只认
+// marker——人改写/翻译评论正文不影响重入；无 marker 的历史评论（旧形态）视为未同步、
+// 照常推送一次。部分失败即停：报告已完成/未完成逐动作清单；重跑从拉取重新开始，
+// 规划器按 tracker 已有 marker 痕迹只补未完成的动作——已关不重关、已评论不重复。
 
 function describeSyncAction(action) {
   if (action.kind === 'close') return `close ${action.num}${action.body ? '（附评论）' : ''}`;
@@ -697,14 +880,14 @@ function describeSyncAction(action) {
   return `unassign ${action.num}（${action.login}）`;
 }
 
-function executeSyncAction(action, repo) {
-  const num = String(Number(action.num)); // gh 的原生号：去归一化补零（'07' → '7'）
+// 同步动作 → 契约命令模板执行（票 05 driver；repo 作用旗由 driver 按模板形态前置）。
+function executeSyncAction(action, contract, repo) {
   if (action.kind === 'close') {
-    runGh(action.body ? ['-R', repo, 'issue', 'close', num, '--comment', action.body] : ['-R', repo, 'issue', 'close', num]);
+    driver.runCommand(contract, 'close', { num: action.num, body: action.body ?? null, repo });
   } else if (action.kind === 'comment') {
-    runGh(['-R', repo, 'issue', 'comment', num, '--body', action.body]);
+    driver.runCommand(contract, 'comment', { num: action.num, body: action.body, repo });
   } else if (action.kind === 'unassign') {
-    runGh(['-R', repo, 'issue', 'edit', num, '--remove-assignee', action.login]);
+    driver.runCommand(contract, 'unclaim', { num: action.num, login: action.login, repo });
   } else {
     throw new Error(`未知同步动作 kind：${JSON.stringify(action.kind)}`);
   }
@@ -769,6 +952,10 @@ function parseSyncFlags(rest) {
 function cmdSync({ runtimeDir, rest }) {
   const { flags, errors } = parseSyncFlags(rest);
   const mode = flags.mode ?? 'seal';
+  // 同步幂等 marker 的 run 标识（票 02）：一次 run 的稳定身份标识 = feature slug
+  //（--runtime-dir 的目录名，即事件流与快照所在的运行目录）。同名同分支重跑
+  // 同一 slug 会命中旧 marker、不重复推送；目录名不含 < > 换行等界定性字符。
+  const runId = path.basename(runtimeDir).trim();
   if (mode !== 'seal' && mode !== 'abandon') {
     errors.push(`--mode 非法：${JSON.stringify(flags.mode ?? '')}——应为 seal | abandon（缺省 seal）`);
   }
@@ -803,13 +990,29 @@ function cmdSync({ runtimeDir, rest }) {
     return 1;
   }
 
-  // 快照读取（纯函数，fs 谓词注入）：快照缺失 → tracker=local 无需同步 / github 先拉取
+  // 契约先于一切网络动作（零半成品，与 snapshot-init 同一转接）：同步的命令模板与
+  // Source 行原址形态都由契约驱动；无法识别 → 显式停下不猜测不降级。
+  const resolution = resolveTrackerFromRepo(process.cwd());
+  if (!resolution.ok) {
+    out(`✗ 拒绝：`, ...resolution.errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+  const contract = resolution.contract;
+  if (!contract.commands.cli) {
+    // local 契约无 tracker 写面：票文件即真相，快照/同步为无操作（spec：local 零变化）。
+    out('✗ 拒绝：tracker=local 无需同步——本地票文件即真相层（快照/同步为无操作）。');
+    return 1;
+  }
+
+  // 快照读取（纯函数，fs 谓词注入；Source 行按契约原址形态判定）：快照缺失 →
+  // local 无需同步 / remote 契约先拉取。
   const snapshotRoot = path.join(runtimeDir, SNAPSHOT_DIR);
   const read = syncread.readSnapshot({
     trackerDir: snapshotRoot,
     readFile: (p) => fs.readFileSync(p, 'utf8'),
     listDir: (p) => fs.readdirSync(p),
     exists: (p) => fs.existsSync(p),
+    contract,
   });
   if (!read.ok) {
     if (read.errors[0]?.startsWith('快照不存在')) {
@@ -839,21 +1042,13 @@ function cmdSync({ runtimeDir, rest }) {
   const views = [];
   for (const num of nums) {
     try {
-      const raw = runGh([
-        '-R',
-        read.source.repo,
-        'issue',
-        'view',
-        String(Number(num)),
-        '--json',
-        'number,state,assignees,comments',
-      ]);
+      const raw = driver.runCommand(contract, 'viewIssue', { num, repo: read.source.repo });
       views.push(JSON.parse(raw || 'null'));
     } catch (e) {
       out(
-        `✗ 同步未执行任何动作：gh issue view ${num} 拉取失败——${ghDetail(e)}`,
+        `✗ 同步未执行任何动作：issue view ${num} 拉取失败——${cliDetail(e)}`,
         '  同步先拉状态再规划、规划通过后才写入：拉取失败即整体中止，零写入（无半成品推送）；',
-        '  排查 gh 登录/网络（或确认该 issue 未被删除）后重跑。',
+        '  排查登录/网络（或确认该票未被删除）后重跑。',
       );
       return 1;
     }
@@ -864,8 +1059,10 @@ function cmdSync({ runtimeDir, rest }) {
   try {
     actions = syncplan.planTrackerSync(
       { tickets: read.tickets, spec: read.spec },
-      { issues: syncread.toTrackerIssues(views) },
-      mode === 'abandon' ? { mode, claimant: flags.claimant, reason: flags.reason } : { mode },
+      { issues: syncread.toTrackerIssues(views, { contract }) },
+      mode === 'abandon'
+        ? { mode, claimant: flags.claimant, reason: flags.reason, runId, closeWithComment: contract.capabilities?.closeWithComment }
+        : { mode, runId, closeWithComment: contract.capabilities?.closeWithComment },
     );
   } catch (e) {
     out(`✗ ${e.message}`, '  同步规划拒绝即零推送——修正快照事实后重跑。');
@@ -882,12 +1079,12 @@ function cmdSync({ runtimeDir, rest }) {
   const done = [];
   for (const action of actions) {
     try {
-      executeSyncAction(action, read.source.repo);
+      executeSyncAction(action, contract, read.source.repo);
       out(`  ✓ ${describeSyncAction(action)}`);
       done.push(action);
     } catch (e) {
       out(
-        `✗ 同步失败：${describeSyncAction(action)} 失败——${ghDetail(e)}`,
+        `✗ 同步失败：${describeSyncAction(action)} 失败——${cliDetail(e)}`,
         `  已完成（${done.length}/${actions.length}）：`,
         ...done.map((a) => `    ✓ ${describeSyncAction(a)}`),
         `  未完成（${actions.length - done.length}）：`,
@@ -905,6 +1102,115 @@ function cmdSync({ runtimeDir, rest }) {
   return 0;
 }
 
+// --- 占坑（票 05）：契约 claim 模板的 run 第一写动作（tracker 侧的 feature 级并发锁）---
+//
+// 占坑是 run 在 tracker 上的第一个写动作（先于快照拉取，ADR-0003：锁实时、进度延迟）；
+// 进度与合并同步归 sync，封账/放弃时释放。本子命令只做契约模板执行的写面：
+// 先读 spec 母票状态（冲突不猜测覆盖）→ 无人占坑才执行 claim 模板；占坑约定的协商语义
+//（接管/改目标/协调）属 SKILL 叙事（票 07），不在脚本面。幂等：已在位 → 拒绝而非重复写。
+function cmdClaim({ runtimeDir, rest }) {
+  const errors = [];
+  const flags = {};
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i];
+    if (!tok.startsWith('--')) {
+      errors.push(`意外位置参数「${tok}」——参数一律用 --flag value 形式`);
+      continue;
+    }
+    let flag = tok.slice(2);
+    let value = null;
+    const eq = flag.indexOf('=');
+    if (eq !== -1) {
+      value = flag.slice(eq + 1);
+      flag = flag.slice(0, eq);
+    } else if (i + 1 < rest.length && !rest[i + 1].startsWith('--')) {
+      value = rest[++i];
+    } else {
+      errors.push(`旗标 --${flag} 缺少值`);
+      continue;
+    }
+    if (flag !== 'spec') {
+      errors.push(`未知旗标 --${flag}（claim 的参数集见 --help）；本脚本无任何绕过校验的旗标`);
+      continue;
+    }
+    if ('spec' in flags) {
+      errors.push('旗标 --spec 重复给出');
+      continue;
+    }
+    if (!String(value).trim()) {
+      errors.push('旗标 --spec 的值为空');
+      continue;
+    }
+    flags.spec = value;
+  }
+  if (!('spec' in flags)) {
+    errors.push('缺少必选参数 --spec <spec 引用>（契约声明的形态：GitHub：issue 号 / #号 / owner/repo#号 / issue URL）');
+  }
+  if (errors.length) {
+    out(`✗ 拒绝：`, ...errors.map((e) => `  - ${e}`));
+    return 2;
+  }
+
+  // 契约先于一切写动作（零半成品）：占坑写面由契约 claim 模板声明；local 契约无
+  // tracker 写面——占坑不存在（票文件即真相层）。
+  const resolution = resolveTrackerFromRepo(process.cwd());
+  if (!resolution.ok) {
+    out(`✗ 拒绝：`, ...resolution.errors.map((e) => `  - ${e}`));
+    return 1;
+  }
+  const contract = resolution.contract;
+  if (!contract.commands.claim || !contract.commands.cli) {
+    out(
+      '✗ 拒绝：tracker=local 无 tracker 写面——占坑不存在（本地票文件即真相层，不经此命令）。'
+    );
+    return 1;
+  }
+  const specNum = tset.parseSpecRef(flags.spec, { contract });
+  if (!specNum) {
+    out(
+      `✗ 拒绝：spec 引用无法解析出票号：${JSON.stringify(flags.spec)}`,
+      '  spec 引用必须落在契约声明票形态内（GitHub：issue 号 / #号 / owner/repo#号 / issue URL）。'
+    );
+    return 1;
+  }
+  // 仓库解析与 snapshot-init 同口径：引用自带 repo 优先，否则按契约 repoView 模板探测
+  //（best-effort；跨仓引用必须打到契约仓，不能落在 cwd）。
+  const repo = tset.repoOfSpecRef(flags.spec, { contract }) ?? cliRepoView(contract, []);
+
+  // 先读状态再写入（冲突检查不可用时不盲写）：占坑是并发锁的占有面，他人已在位即停下。
+  // view 字段名从契约 viewShape 适配（票 06）——GitLab 的 assignees[].username 与 GitHub 的
+  //  assignees[].login 同过一张契约表，零 if-tracker。
+  try {
+    const raw = driver.runCommand(contract, 'viewIssue', { num: specNum, repo });
+    const assignees = syncread.toTrackerIssues([JSON.parse(raw || '{}')], { contract })[0]?.assignees ?? [];
+    if (assignees.length) {
+      out(
+        `✗ 占坑冲突：spec ${specNum} 已在 tracker 上被认领（${assignees.join('、')}）——`,
+        '  占坑是 feature 级并发锁的占有面：不猜测覆盖他人占坑；',
+        '  若确为本 run 续跑（同一占坑者），该步幂等可直接跳过；',
+        '  若要接管或换目标：按占坑约定与在位者（或用户）确认后处理。'
+      );
+      return 1;
+    }
+  } catch (e) {
+    out(
+      `✗ 占坑失败：spec ${specNum} 状态读取失败——${cliDetail(e)}`,
+      '  先读状态再写入（冲突检查不可用时不盲写）：排查登录/网络/引用后重跑。'
+    );
+    return 1;
+  }
+  try {
+    driver.runCommand(contract, 'claim', { num: specNum, repo });
+  } catch (e) {
+    out(`✗ 占坑失败：claim 执行失败——${cliDetail(e)}`, '  占坑未落（可安全重跑）。');
+    return 1;
+  }
+  out(
+    `✓ 占坑：spec ${specNum} 已认领到 @me（契约 claim 模板；tracker 侧的 feature 级并发锁，ADR-0003）。`
+  );
+  return 0;
+}
+
 // --- 入口 ---
 
 function main(argv) {
@@ -917,7 +1223,7 @@ function main(argv) {
     return 0;
   }
   const command = argv[0];
-  if (!['add', 'build', 'check', 'snapshot-init', 'sync'].includes(command)) {
+  if (!['add', 'build', 'check', 'claim', 'snapshot-init', 'sync', 'init'].includes(command)) {
     out(`未知子命令：${command}`, USAGE);
     return 2;
   }
@@ -938,7 +1244,9 @@ function main(argv) {
     return 2;
   }
   runtimeDir = path.resolve(runtimeDir);
+  if (command === 'init') return cmdInit({ runtimeDir, rest });
   if (command === 'add') return cmdAdd({ runtimeDir, rest });
+  if (command === 'claim') return cmdClaim({ runtimeDir, rest });
   if (command === 'build') return cmdBuild({ runtimeDir });
   if (command === 'snapshot-init') return cmdSnapshotInit({ runtimeDir, rest });
   if (command === 'sync') return cmdSync({ runtimeDir, rest });

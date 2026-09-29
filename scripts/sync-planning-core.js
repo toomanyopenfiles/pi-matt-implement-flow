@@ -16,17 +16,26 @@
 //   tracker.issues: [{ num, state: 'open' | 'closed', assignees: string[], comments: string[] }]
 //     - state 用 gh 语义的小写 'open'/'closed'（大写原始值由读取层归一）
 //     - assignees / comments 缺省为 []
-//   options: { mode: 'seal' } | { mode: 'abandon', claimant: string, reason: string }
+//   options: { mode: 'seal', runId } | { mode: 'abandon', claimant, reason, runId }
+//     - runId: 本 run 的稳定标识（幂等 marker 的 run 标识，必选；非法形态拒绝）
 //
-// 动作集（每个动作与一条 gh 调用一一对应，执行属票 06 的薄 IO）：
-//   { kind: 'close',    num, body }   → gh issue close <num> --comment <body>（body=null 不附评论）
-//   { kind: 'comment',  num, body }   → gh issue comment <num> --body <body>
-//   { kind: 'unassign', num, login }  → gh issue edit <num> --remove-assignee <login>
+// 动作集（每个动作由票 05 的通用 driver 按契约命令模板执行）：
+//   { kind: 'close',    num, body }   → contract.commands.close（body=null 不附评论）
+//   { kind: 'comment',  num, body }   → contract.commands.comment
+//   { kind: 'unassign', num, login }  → contract.commands.unclaim
 //
 // 幂等矩阵（每个动作三档，测试收敛于 planTrackerSync 的输入输出）：
 //   未同步   → 完整动作（关票附评论 / 留评 / 撤占坑+留评）
 //   部分同步 → 只补缺的一半（评论已在而未关 → 仅关票不重评；已关而评论缺 → 仅补评论）
 //   已同步   → 零动作
+// 幂等键（票 02）：隐藏机器 marker `<!-- matt-implement:<runId>:<kind> -->`——同步写到
+// tracker 的每条评论以它收尾（HTML 注释，渲染不可见；run 标识 + 动作种类），重入判定
+// **只认 marker**：人类改写 / 翻译 / 追加评论正文不影响判定。中文自然语言文本包含判定
+// 废除，不留双轨。历史无 marker 评论（旧 run 形态）一律视为未同步、照常推送一次——
+// 推送即携带 marker，此后重跑归入 marker 判重（迁移语义：一次性重复，非静默丢失）。
+// runId 由调用方传入（CLI 取 --runtime-dir 的目录名，即 feature slug——同一次 run 的
+// 稳定标识）；kind 是动作种类词表：merge | escalate | closing | abandon，与四类同步
+// 写入（合并关票 / 升级留评 / spec 收尾 / 放弃撤占坑）一一对应。
 // 合并事实优先于升级事实：已合并的票只关票附 SHA，不再补升级评论（无接手人需要上下文）。
 // 升级票只留评、不产生任何状态动作——「保持开放」是动作的缺席，不是一条 reopen 指令。
 // 非 spec 母票 Status 为 resolved 而无 mergeSha、wontfix 等无合并事实的收尾不在本规划器
@@ -38,17 +47,68 @@ function reject(reason) {
   throw new Error(`同步规划拒绝：${reason}`);
 }
 
-// 评论幂等标记：空白归一后的包含判定——重跑规划不产生重复评论，
-// 人工在已推送评论后追加文字也不改判（包含即视为已同步）。
-function normalizeText(s) {
-  return String(s).replace(/\s+/g, ' ').trim();
+// ------------------------------------------------------------------
+// 同步幂等机器 marker（票 02）：同步评论的幂等键。
+// ------------------------------------------------------------------
+
+// 形态：<!-- matt-implement:<runId>:<kind> -->——HTML 注释，tracker 渲染上人类不可见，
+// 照常出现在评论源文里。run 标识 + 动作种类二元组即幂等键：同一 run 的同一动作
+// 已推过即视为已同步。
+// runId 或任一 kind 中出现界定性字符（冒号 / 注释箭头 / 尖括号 / 换行）都可能在含
+// marker 的正文里伪造另一个 marker，构造点即拒绝——不是猜测，是 marker 语法的闭合性。
+const MARKER_PART_BAD = /[<>\r\n:]|-->|^\s|\s$/;
+
+function checkMarkerPart(value, what) {
+  if (typeof value !== 'string' || !value.trim() || MARKER_PART_BAD.test(value)) {
+    reject(`marker ${what} 非法：${JSON.stringify(value ?? null)}——须为非空且不含 < > 回车 或 --> 的字符串`);
+  }
+  return value;
 }
 
-function hasCommented(comments, marker) {
-  const m = normalizeText(marker);
-  if (!m) return false;
-  return comments.some((c) => normalizeText(c).includes(m));
+// runId / kind 合法性，判定点与构造点同一校验档。导出给 CLI 入口复用（同一转换点）。
+function checkRunId(runId) {
+  return checkMarkerPart(runId, 'runId');
 }
+
+function ensureKind(kind) {
+  return checkMarkerPart(kind, 'kind');
+}
+
+// 动作种类（kind）词表：四类同步写入一一对应。词表本身是模块私有约定，判型不依赖；
+// 与 tracker 形态无关（后续的契约预设只换命令模板，kind 词表不变）。
+
+// run 标识 + 动作种类 → 隐藏机器 marker 行。
+function syncMarker(runId, kind) {
+  checkRunId(runId);
+  ensureKind(kind);
+  return `<!-- matt-implement:${runId}:${kind} -->`;
+}
+
+// marker 判定只认完整注释形态 <!-- matt-implement:<runId>:<kind> -->：裸 needle 子串
+// （人类引用或无意露出的「matt-implement:…」文字）不算 marker——marker 得是注释形态。
+const MARKER_RE = (runId, kind) =>
+  new RegExp(`<!--\\s*matt-implement:\\s*${escapeRe(runId)}:\\s*${escapeRe(kind)}\\s*-->`);
+
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// comments 中是否已有（runId, kind）的 marker。幂等判定只认 marker：
+// 人类改写 / 翻译 / 追加评论正文不影响判定；无 marker 的历史评论（旧 run 形态）
+// 一律视为未同步、照常推送一次——语义见本文件头注。
+function hasSyncMarker(comments, runId, kind) {
+  checkRunId(runId);
+  ensureKind(kind);
+  const re = MARKER_RE(runId, kind);
+  for (const c of comments ?? []) {
+    if (typeof c === 'string' && re.test(c)) return true;
+  }
+  return false;
+}
+
+// 评论幂等（票 02）：幂等键是隐藏机器 marker——幂等判定只认 marker，
+// 中文自然语言文本包含判定废除。正文（merge SHA / 升级原因 / 交付指引 / 放弃说明）
+// 只面向 tracker 上的人类，不参与任何判定；判重不依赖文本包含（无双重判定遗留）。
 
 // git SHA 形态：7–40 位十六进制（短 SHA 到完整 SHA 都允许，按原文携带）
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
@@ -67,22 +127,34 @@ function stringsOrEmpty(value, what) {
   return value;
 }
 
-function planMergeActions(ticket, num, issue) {
+// 正文 + marker：人类可读正文在首行，marker（隐藏 HTML 注释）附后，不干扰阅读。
+const withMarker = (body, kind, runId) => `${body}\n\n${syncMarker(runId, kind)}`;
+
+function planMergeActions(ticket, num, issue, runId, closeWithComment) {
   const sha = ticket.mergeSha;
-  const body = `已合并（merge SHA：${sha}）`;
-  const commented = hasCommented(issue.comments, sha);
+  const body = withMarker(`已合并（merge SHA：${sha}）`, 'merge', runId);
+  const commented = hasSyncMarker(issue.comments, runId, 'merge');
   if (issue.state === 'open') {
-    // 评论已在（部分同步）→ 仅关票不重评；否则关票附评论
-    return [{ kind: 'close', num, body: commented ? null : body }];
+    // marker 已在（部分同步）→ 仅关票不重评；否则按关票能力生成动作集：
+    //   closeWithComment=true（github/local）→ 关票附评论（单步）；
+    //   closeWithComment=false（gitlab）→ note 先行再 close（先留评后关票，能力差异
+    //   不丢评论——票 06；等价序列由规划面生成，driver 拒照 close+body）。
+    if (commented) return [{ kind: 'close', num, body: null }];
+    return closeWithComment
+      ? [{ kind: 'close', num, body }]
+      : [
+          { kind: 'comment', num, body },
+          { kind: 'close', num, body: null },
+        ];
   }
-  // tracker 已关 → 仅补评论（已含 SHA = 已同步，零动作）
+  // tracker 已关 → 仅补评论（marker 已在 = 已同步，零动作）
   return commented ? [] : [{ kind: 'comment', num, body }];
 }
 
 // spec 收尾：评论携带交付指引（closingNote，封账前已写入快照）后关闭。
 // 同样三档幂等：已关已评 → 零动作；未关已评 → 仅关票；已关未评 → 仅补评论。
 // 母票仍开放而快照无收尾评论 = 收尾协议未完成，拒绝放行（不猜一个评论去关票）。
-function planSpecActions(spec, issue) {
+function planSpecActions(spec, issue, runId, closeWithComment) {
   const note = spec.closingNote;
   if (note == null) {
     if (issue.state === 'open') {
@@ -93,16 +165,24 @@ function planSpecActions(spec, issue) {
   if (typeof note !== 'string' || !note.trim()) {
     reject(`spec 母票收尾评论（closingNote）非法：${JSON.stringify(note)}`);
   }
+  const body = withMarker(note, 'closing', runId);
+  const commented = hasSyncMarker(issue.comments, runId, 'closing');
   if (issue.state === 'open') {
-    const commented = hasCommented(issue.comments, note);
-    return [{ kind: 'close', num: spec.num, body: commented ? null : note }];
+    // 关票动作集按 closeWithComment 能力生成（票 06）：能力差异集中在规划面生成（数据前提）。
+    if (commented) return [{ kind: 'close', num: spec.num, body: null }];
+    return closeWithComment
+      ? [{ kind: 'close', num: spec.num, body }]
+      : [
+          { kind: 'comment', num: spec.num, body },
+          { kind: 'close', num: spec.num, body: null },
+        ];
   }
-  return hasCommented(issue.comments, note) ? [] : [{ kind: 'comment', num: spec.num, body: note }];
+  return commented ? [] : [{ kind: 'comment', num: spec.num, body }];
 }
 
 // 封账前同步（seal）：合并票关票附 SHA、升级票留评保持开放、spec 母票收尾关闭。
 // 票动作按票号数值序（ADR-0004），spec 收尾固定殿后。
-function planSeal(snapshot, issues) {
+function planSeal(snapshot, issues, runId, closeWithComment) {
   const actions = [];
   // 先验形态再规划：快照票号逐个归一、重复立即拒绝（验证档），不与动作生成交织
   const tickets = snapshot.tickets
@@ -120,15 +200,15 @@ function planSeal(snapshot, issues) {
       }
       const issue = issues.get(num);
       if (!issue) reject(`tracker 缺快照票 ${num} 的状态——合并票需要同步关票`);
-      actions.push(...planMergeActions(t, num, issue));
+      actions.push(...planMergeActions(t, num, issue, runId, closeWithComment));
     } else if (t.escalateReason != null) {
       if (typeof t.escalateReason !== 'string' || !t.escalateReason.trim()) {
         reject(`快照票 ${num} escalateReason 非法：${JSON.stringify(t.escalateReason)}`);
       }
       const issue = issues.get(num);
       if (!issue) reject(`tracker 缺快照票 ${num} 的状态——升级票需要同步留评`);
-      if (!hasCommented(issue.comments, t.escalateReason)) {
-        actions.push({ kind: 'comment', num, body: `已升级上报：${t.escalateReason}` });
+      if (!hasSyncMarker(issue.comments, runId, 'escalate')) {
+        actions.push({ kind: 'comment', num, body: withMarker(`已升级上报：${t.escalateReason}`, 'escalate', runId) });
       }
       // 保持开放：不产生任何状态动作
     }
@@ -142,7 +222,7 @@ function planSeal(snapshot, issues) {
     }
     const issue = issues.get(num);
     if (!issue) reject(`tracker 缺 spec 母票 ${num} 的状态——封账前同步需要母票状态`);
-    actions.push(...planSpecActions({ ...spec, num }, issue));
+    actions.push(...planSpecActions({ ...spec, num }, issue, runId, closeWithComment));
   }
   return actions;
 }
@@ -150,6 +230,7 @@ function planSeal(snapshot, issues) {
 // 放弃路径（abandon）：撤占坑（移除占坑者 assignee）+ 留评说明；先评论后撤占，
 // 部分失败重跑各自续作。放弃只处理占坑面——合并事实的关票由封账同步负责，不在本档。
 function planAbandon(snapshot, issues, options) {
+  const runId = checkRunId(options.runId);
   const claimant = options.claimant;
   const reason = options.reason;
   if (typeof claimant !== 'string' || !claimant.trim()) {
@@ -163,8 +244,8 @@ function planAbandon(snapshot, issues, options) {
   const issue = issues.get(num);
   if (!issue) reject(`tracker 缺 spec 母票 ${num} 的状态——撤占坑需要母票状态`);
   const actions = [];
-  if (!hasCommented(issue.comments, reason)) {
-    actions.push({ kind: 'comment', num, body: `本 run 已放弃：${reason}` });
+  if (!hasSyncMarker(issue.comments, runId, 'abandon')) {
+    actions.push({ kind: 'comment', num, body: withMarker(`本 run 已放弃：${reason}`, 'abandon', runId) });
   }
   if (issue.assignees.includes(claimant)) {
     actions.push({ kind: 'unassign', num, login: claimant });
@@ -184,6 +265,12 @@ function planTrackerSync(snapshot, tracker, options) {
   if (options.mode !== 'seal' && options.mode !== 'abandon') {
     reject(`mode 非法：${JSON.stringify(options.mode ?? null)}——应为 'seal' | 'abandon'`);
   }
+  // 幂等键（票 02）：run 标识必选——marker <!-- matt-implement:<runId>:<kind> --> 的
+  // 中段；合法性在 syncMarker/hasSyncMarker 的构造与判定点统一校验。
+  if (typeof options.runId !== 'string' || !options.runId.trim()) {
+    reject('options.runId 必选：同步幂等 marker 的 run 标识（本 run 的稳定标识，各写入各自携带）');
+  }
+  const runId = options.runId;
   const issues = new Map();
   for (const raw of tracker.issues) {
     const num = ticketKey(raw?.num, 'tracker');
@@ -197,7 +284,12 @@ function planTrackerSync(snapshot, tracker, options) {
       comments: stringsOrEmpty(raw.comments, `tracker 票 ${num} comments`),
     });
   }
-  return options.mode === 'seal' ? planSeal(snapshot, issues) : planAbandon(snapshot, issues, options);
+  // 关票动作集由契约能力生成（票 06）：closeWithComment 声明了 close 面（能力差异
+  // 全走契约声明），缺省 = true（github/local 形态，既有用例零改动）。
+  const closeWithComment = options.closeWithComment !== false;
+  return options.mode === 'seal'
+    ? planSeal(snapshot, issues, runId, closeWithComment)
+    : planAbandon(snapshot, issues, options);
 }
 
-module.exports = { planTrackerSync };
+module.exports = { planTrackerSync, syncMarker, hasSyncMarker };

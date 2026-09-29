@@ -8,7 +8,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSpecRef, parseParentEdge, resolveTicketSet } = require('./tracker-set-core.js');
+const { parseSpecRef, repoOfSpecRef, parseParentEdge, resolveTicketSet } = require('./tracker-set-core.js');
 
 // --- fixture：tracker 的 issue 集合表示（number / body / subIssues）---
 
@@ -190,4 +190,84 @@ test('Parent 边解析：无 ## Parent 节返回 null（没有边）；空节返
   assert.deepEqual(parseParentEdge('## Parent\n'), []);
   assert.equal(parseParentEdge(null), null);
   assert.equal(parseParentEdge(undefined), null);
+});
+
+// ====================================================================
+// 契约参数化（票 05 接缝②）：引用形态与兜底链由契约数据驱动，不再按 tracker 形态分叉
+// ====================================================================
+
+const { GITHUB_CONTRACT, GITLAB_CONTRACT, LOCAL_CONTRACT } = require('./tracker-contracts');
+const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
+
+test('引用形态参数化（GitHub 契约）：四形态同过一个转换点，域外 URL 显式解析不出', () => {
+  assert.equal(parseSpecRef('1234', { contract: GITHUB_CONTRACT }), '1234');
+  assert.equal(parseSpecRef('#1042', { contract: GITHUB_CONTRACT }), '1042');
+  assert.equal(parseSpecRef('o/r#205', { contract: GITHUB_CONTRACT }), '205');
+  assert.equal(parseSpecRef('https://github.com/o/r/issues/7', { contract: GITHUB_CONTRACT }), '07');
+  assert.equal(parseSpecRef('https://example.com/x/issues/7', { contract: GITHUB_CONTRACT }), null, '域外 URL 不认');
+});
+
+test('引用形态参数化（语法即数据）：historical 契约声明什么形态，引擎就认什么形态', () => {
+  assert.equal(parseSpecRef('1042', { contract: RENAMED_CONTRACT }), '1042');
+  assert.equal(parseSpecRef('#1042', { contract: RENAMED_CONTRACT }), '1042');
+  assert.equal(parseSpecRef('https://example.test/o/r/issues/3001', { contract: RENAMED_CONTRACT }), '3001');
+  assert.equal(parseSpecRef('https://gitlab.example/o/r/issues/3001', { contract: RENAMED_CONTRACT }), null, 'host 以外的 host 不认');
+});
+
+test('引用形态参数化（kind=path 的契约）：spec 引用是文件路径，不经票号解析', () => {
+  for (const ref of ['42', '#42', '.scratch/demo/spec.md']) {
+    assert.equal(parseSpecRef(ref, { contract: LOCAL_CONTRACT }), null, `ref=${JSON.stringify(ref)}`);
+  }
+});
+
+test('repoOfSpecRef：形态里票号前的命名段联为主——纯票号/#号不携带（走 repoView 探测）', () => {
+  assert.equal(repoOfSpecRef('o/r#205'), 'o/r');
+  assert.equal(repoOfSpecRef('https://github.com/o/r/issues/7'), 'o/r');
+  assert.equal(repoOfSpecRef('#1042'), null);
+  assert.equal(
+    repoOfSpecRef('https://gitlab.dev/ns/proj/-/issues/3001', { contract: GITLAB_CONTRACT }),
+    'ns/proj',
+    '契约 host=null：初始段的既有 host 也收（路径形态识别，不认域名）'
+  );
+});
+
+test('兜底链由契约驱动：init-list-only 契约整层跳过 sub-issues 与 Parent（数据在场也不合并）', () => {
+  const edges = ['sub-issues', 'parent-edges', 'init-list'];
+  const chainA = { ...RENAMED_CONTRACT, ticketSet: { edges: ['init-list'] } };
+  const issues = [
+    issue(100, 'spec 正文', [101]),
+    issue(101, '## Parent\n#100'),
+    issue(102, '## Parent\n#100'),
+  ];
+  const r = resolveTicketSet({ issues, specRef: '100', initTickets: ['102'], contract: chainA });
+  assert.equal(r.ok, true, r.errors.join(';'));
+  assert.equal(r.source, 'init-list', 'sub-issues 未声明 → 层 ① 不生效；Parent 未声明 → 层 ② 不生效');
+  assert.deepEqual(r.tickets, ['102']);
+  assert.ok(!edges.includes('phantom'), '签名锚');
+});
+
+test('兜底链由契约驱动：gitlab 链（无 sub-issues）Parent 反查定界；皆空诊断按链内层点名', () => {
+  const issues = [
+    issue(100, 'spec 正文', [105, 106, 107]), // 数据在场的 sub-issues 也不进边界（能力未声明）
+    issue(105, '## Parent\n#100'),
+    issue(106, '## Parent\n#100'),
+    issue(107, '## Parent\n#100'),
+  ];
+  const r = resolveTicketSet({ issues, specRef: '100', contract: GITLAB_CONTRACT });
+  assert.equal(r.ok, true, r.errors.join(';'));
+  assert.equal(r.source, 'parent-edges');
+  assert.deepEqual(r.tickets, ['105', '106', '107']);
+
+  const empty = resolveTicketSet({ issues: [issue(100, 'spec')], specRef: '100', contract: GITLAB_CONTRACT });
+  assert.equal(empty.ok, false);
+  const why = empty.errors.join('\n');
+  assert.match(why, /Parent/, '链内层点名');
+  assert.match(why, /init/, '链内层点名');
+  assert.doesNotMatch(why, /sub-issues/, '未声明的能力不进入诊断（票 05：诊断按契约兜底链生成）');
+});
+
+test('兜底链缺省 = 既有三层口径：不传契约的调用面行为零变化', () => {
+  const issues = [issue(100, 'spec 正文', [101]), issue(101, '## Parent\n#100')];
+  const r = resolveTicketSet({ issues, specRef: '100' });
+  assert.equal(r.source, 'sub-issues');
 });

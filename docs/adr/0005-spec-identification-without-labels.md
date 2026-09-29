@@ -9,7 +9,8 @@
 
 封账门的 spec 母票豁免、`init --spec` 映射、终审"引用 spec 行"都需要一个"哪个 issue
 是 spec"的识别信号。上游 `to-spec` 发布 spec issue 只打 `ready-for-agent`，与工单无从
-区分；GitHub 版 `issue-tracker.md` 范本（上游 `setup-matt-pocock-skills/issue-tracker-github.md`）也没有 spec 约定节。约束：不改上游 skill。
+划分；远端范本（GitHub 版 `issue-tracker.md`，上游
+`setup-matt-pocock-skills/issue-tracker-github.md`）也没有 spec 约定节。约束：不改上游 skill。
 
 ## Decision
 
@@ -23,5 +24,6 @@
 
 - 票集边界三层兜底：spec issue 的 sub-issues → `## Parent` 反查 → init 票号清单
   （防中途偷加票，顺带冻结 run 的票集边界）。
-- spec issue 的 GitHub 来源 URL 记于快照 `spec.md` 头部 `Source:` 行，同步动作由此
+- spec issue 的来源 URL（GitHub issue URL 或 GitLab Self-hosted 路径，按范本契约的
+  sourceUrl 形态）记于快照 `spec.md` 头部 `Source:` 行，同步动作由此
   解析收尾对象；将来若上游为 spec 增加了原生标记，识别层可无痛切换。

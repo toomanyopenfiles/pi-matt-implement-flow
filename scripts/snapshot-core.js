@@ -19,6 +19,8 @@
 const { normalizeTicket } = require('./ledger-schema');
 const { resolveTicketSet } = require('./tracker-set-core');
 const { transcribeSpec, transcribeTicket } = require('./tracker-sync-core');
+const { listLimit } = require('./tracker-driver');
+const { GITHUB_CONTRACT } = require('./tracker-contracts');
 
 // 标题 → 文件名 slug（确定性；无 locale、无随机）
 function slugify(title) {
@@ -39,18 +41,19 @@ function ticketFileRel(num, title) {
 // ------------------------------------------------------------------
 
 // 输入：tracker 的 issue 集合表示（gh 拉取产物，票 04 的调用方契约）+ spec 引用 +
-// 可选 init 票号清单（兜底层，与 add init --tickets 同一清单）。
+// 可选 init 票号清单（兜底层，与 init 子命令 --tickets 同一清单）+ 可选契约（01 解析产物；
+// 票 03：缺省 = canonical 默认词表，转写状态映射按契约 mapping.labelMap / closedStatus）。
 // 返回 { ok, specNum, source, spec, tickets, errors, warnings }：
 //   ok=true   —— spec: { rel, text, source（tracker 原址 URL）}；tickets: [{num, rel, text}]
 //                （spec.md 在前，票按数值序）；source 为票集解析命中的层。
 //   ok=false  —— 票集边界不可定 / 转写拒绝（如缺 Source）：spec 为 null、tickets 为空、
 //                errors 点名原因——调用方不得落盘。
-function planSnapshot({ issues, specRef, initTickets } = {}) {
+function planSnapshot({ issues, specRef, initTickets, contract } = {}) {
   const errors = [];
   const warnings = [];
   const list = Array.isArray(issues) ? issues : [];
 
-  const set = resolveTicketSet({ issues: list, specRef, initTickets });
+  const set = resolveTicketSet({ issues: list, specRef, initTickets, contract });
   warnings.push(...set.warnings);
   if (!set.ok) {
     return {
@@ -71,9 +74,12 @@ function planSnapshot({ issues, specRef, initTickets } = {}) {
     if (n && !byNum.has(n)) byNum.set(n, it);
   }
 
+  // 拉取上限取自契约 listIssues 模板（--limit 后随值）；缺省 = 既有 github 形态口径；
+  // 模板未声明 → 不点名上限数值。
+  const limit = listLimit(contract ?? GITHUB_CONTRACT);
   // 边界票号不在拉取集合中是用户可见事实，不是内部不变量：--tickets 清单笔误/越界
-  //（用户输入）与 gh issue list --limit 1000 截断（拉取不全）都会造成缺口——诊断点名
-  // 两种成因与重跑前置，不伪装成程序错误。
+  //（用户输入）与拉取上限截断（拉取不全）都会造成缺口——诊断点名两种成因与重跑前置，
+  // 不伪装成程序错误。
   const missing = set.tickets.filter((num) => !byNum.has(num));
   if (missing.length) {
     errors.push(
@@ -81,7 +87,9 @@ function planSnapshot({ issues, specRef, initTickets } = {}) {
         (set.source === 'init-list'
           ? '--tickets 清单笔误或越界（用户输入），'
           : '票集边界指向了未被拉到的票，') +
-        '或 gh issue list --limit 1000 截断导致拉取不全；核对票号与 tracker 状态后重跑'
+        '或拉取' +
+        (limit == null ? '取数上限截断' : `恰达 --limit ${limit} 取数上限截断`) +
+        '导致拉取不全；核对票号与 tracker 状态后重跑'
     );
     return {
       ok: false,
@@ -96,12 +104,12 @@ function planSnapshot({ issues, specRef, initTickets } = {}) {
 
   try {
     const specIssue = byNum.get(set.specNum);
-    const spec = transcribeSpec({ issue: specIssue });
+    const spec = transcribeSpec({ issue: specIssue, contract });
     // transcribeSpec 不回传 Source 值——从同一 issue 再取一次（同源，无第二真相面）
     const sourceUrl = specIssue.url ?? specIssue.html_url ?? null;
     const tickets = set.tickets.map((num) => {
       const issue = byNum.get(num);
-      return { num, rel: ticketFileRel(num, issue.title), text: transcribeTicket(issue) };
+      return { num, rel: ticketFileRel(num, issue.title), text: transcribeTicket(issue, { contract }) };
     });
     return {
       ok: true,

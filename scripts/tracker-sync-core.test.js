@@ -9,6 +9,13 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const sync = require('./tracker-sync-core');
 const schema = require('./ledger-schema');
+const { LOCAL_CONTRACT, GITHUB_CONTRACT, GITLAB_CONTRACT } = require('./tracker-contracts');
+const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
+
+// 状态映射矩阵（spec 接缝②参数化）：同一套用例喂三预设 + 合成改名词表契约，
+// 断言全部落在同一套 canonical 输出词表——引擎只吃契约词表，不改 tracker 名。
+const VOCABULARIES = [LOCAL_CONTRACT, GITHUB_CONTRACT, GITLAB_CONTRACT, RENAMED_CONTRACT];
+const label = (c, role) => c.mapping.labelMap[role]; // 契约自己的 label 串（角色 → label）
 
 // --- 合成 issue fixture（gh issue JSON 的手工等价物）---
 
@@ -24,6 +31,150 @@ const issue = (over = {}) => ({
 // ====================================================================
 // 状态映射表（Status: 行）
 // ====================================================================
+
+test('状态映射矩阵（三预设 + 合成改名词表参数化）：wontfix label → wontfix，closed 豁免同走词表', (t) => {
+  for (const c of VOCABULARIES) {
+    assert.equal(sync.statusOf(issue({ labels: [label(c, 'wontfix')] }), { contract: c }), 'wontfix', c.tracker);
+    assert.equal(
+      sync.statusOf(issue({ state: 'CLOSED', labels: [label(c, 'wontfix')] }), { contract: c }),
+      'wontfix',
+      `${c.tracker}：closed 不掩盖 wontfix（唯一 closed 豁免）`
+    );
+    assert.equal(
+      sync.statusOf(issue({ state: 'CLOSED', labels: [label(c, 'ready-for-agent'), label(c, 'wontfix')] }), { contract: c }),
+      'wontfix',
+      `${c.tracker}：wontfix 与其他 triage label 并存时仍优先`
+    );
+  }
+});
+
+test('状态映射矩阵：closed → closedStatus（词表映射），压过其余一切 triage label', (t) => {
+  for (const c of VOCABULARIES) {
+    assert.equal(sync.statusOf(issue({ state: 'CLOSED' }), { contract: c }), c.mapping.closedStatus, c.tracker);
+    assert.equal(sync.statusOf(issue({ state: 'closed' }), { contract: c }), c.mapping.closedStatus, `${c.tracker}：state 大小写不敏感`);
+    assert.equal(
+      sync.statusOf(issue({ state: 'CLOSED', labels: [label(c, 'ready-for-agent')] }), { contract: c }),
+      c.mapping.closedStatus,
+      `${c.tracker}：closed + 陈旧可派发 label 不得转写成开放态`
+    );
+    assert.equal(
+      sync.statusOf(issue({ state: 'CLOSED', labels: [label(c, 'ready-for-agent'), label(c, 'needs-info')] }), { contract: c }),
+      c.mapping.closedStatus,
+      `${c.tracker}：多 label 并存同样压不过 closed`
+    );
+  }
+});
+
+test('状态映射矩阵：五角色按契约词表逐项映射，按词表序取优先（与 labels 数组序无关）', (t) => {
+  for (const c of VOCABULARIES) {
+    for (const role of ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human']) {
+      assert.equal(sync.statusOf(issue({ labels: [label(c, role)] }), { contract: c }), role, `${c.tracker}：${role}`);
+    }
+    assert.equal(
+      sync.statusOf(issue({ labels: [label(c, 'ready-for-agent'), label(c, 'needs-info')] }), { contract: c }),
+      'needs-info',
+      `${c.tracker}：保守侧优先（needs-info 压过 ready-for-agent）`
+    );
+    assert.equal(
+      sync.statusOf(issue({ labels: [label(c, 'needs-info'), label(c, 'ready-for-agent')] }), { contract: c }),
+      'needs-info',
+      `${c.tracker}：映射与 labels 数组序无关`
+    );
+  }
+});
+
+test('状态映射矩阵：契约词表外的 label 不误映射——开放票落 needs-triage 兜底（canonical 词表下行为零变化）', (t) => {
+  for (const c of VOCABULARIES) {
+    assert.equal(sync.statusOf(issue(), { contract: c }), 'needs-triage', c.tracker);
+    assert.equal(sync.statusOf(issue({ labels: ['bug', 'p2'] }), { contract: c }), 'needs-triage', c.tracker);
+    assert.equal(sync.statusOf(issue({ labels: [{ name: label(c, 'ready-for-agent') }] }), { contract: c }), 'ready-for-agent', `${c.tracker}：{name} 对象数组形态`);
+  }
+  // 改名词表下，canonical 字面名只是词表外的普通 label（tracker 上不该再出现），
+  // 不得被误认成任何角色——ADR-0006：映射钉死在拉取时刻。
+  assert.equal(
+    sync.statusOf(issue({ labels: ['ready-for-agent'] }), { contract: RENAMED_CONTRACT }),
+    'needs-triage',
+    '改名词表下 canonical 字面名不误映射（词表外的 label 走兜底）'
+  );
+});
+
+test('状态映射：label 匹配大小写不敏感（ADR-0006：label 名跨大小写唯一）', (t) => {
+  assert.equal(
+    sync.statusOf(issue({ labels: ['AFK-OK'] }), { contract: RENAMED_CONTRACT }),
+    'ready-for-agent',
+    '改名词表：混合大小写的自定义 label 照常映射'
+  );
+  assert.equal(
+    sync.statusOf(issue({ labels: [{ name: 'Archived' }] }), { contract: RENAMED_CONTRACT }),
+    'wontfix',
+    '改名词表： wontfix 角色的 label 大小写变体同样获得 closed 豁免'
+  );
+});
+
+test('状态映射：无契约参数 → canonical 默认（既有调用面零改动、行为零变化）', (t) => {
+  assert.equal(sync.statusOf(issue({ state: 'CLOSED' })), 'resolved');
+  assert.equal(sync.statusOf(issue({ labels: ['ready-for-agent'] })), 'ready-for-agent');
+  assert.equal(sync.statusOf(issue({ labels: ['wontfix'] })), 'wontfix');
+});
+
+test('拒绝面：传入的契约缺状态词表（mapping 面残缺）→ 显式拒绝，不静默落 canonical', (t) => {
+  assert.throws(() => sync.statusOf(issue(), { contract: { tracker: 'broken' } }), /词表/);
+  assert.throws(
+    () => sync.statusOf(issue(), { contract: { mapping: { labelMap: { wontfix: 'x' }, closedStatus: 'resolved' } } }),
+    /词表/,
+    'labelMap 缺角色同样拒绝（恰好五角色是契约 schema）'
+  );
+});
+
+test('状态读取（local 票文件 Status 行过同一映射）：canonical 五名恒可读', (t) => {
+  for (const c of VOCABULARIES) {
+    for (const role of ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix']) {
+      assert.equal(sync.normalizeStatus(role, { contract: c }), role, `${c.tracker}：${role}`);
+    }
+  }
+  // 改名词表下 canonical 五名仍按自身可读（恒可读语义：文件里手写的 canonical 名不因词表改名失效）
+  assert.equal(
+    sync.normalizeStatus('wontfix', { contract: RENAMED_CONTRACT }),
+    'wontfix',
+    '改名词表下 Status: wontfix 仍读作 wontfix'
+  );
+});
+
+test('状态读取：自定义 label 串映射进来（与转写同一张词表，大小写不敏感）', (t) => {
+  for (const c of VOCABULARIES) {
+    for (const role of ['needs-triage', 'needs-info', 'ready-for-agent', 'ready-for-human', 'wontfix']) {
+      assert.equal(sync.normalizeStatus(label(c, role), { contract: c }), role, `${c.tracker}：${role}`);
+    }
+  }
+  assert.equal(sync.normalizeStatus('Human-Own-It', { contract: RENAMED_CONTRACT }), 'ready-for-human', '大小写变体照常映射');
+  assert.equal(sync.normalizeStatus('resolved', { contract: RENAMED_CONTRACT }), 'resolved', 'closed 词（closedStatus）原样可读');
+});
+
+test('状态读取：缺行 / 未知串透传——对账与封账门照旧如实报告，不编造状态', (t) => {
+  assert.equal(sync.normalizeStatus(null, { contract: RENAMED_CONTRACT }), null);
+  assert.equal(sync.normalizeStatus('', { contract: RENAMED_CONTRACT }), '');
+  assert.equal(sync.normalizeStatus('done', { contract: RENAMED_CONTRACT }), 'done');
+  assert.equal(sync.normalizeStatus('done'), 'done', '无契约参数（canonical 默认）下未知串同样透传');
+  assert.equal(sync.normalizeStatus('ready-for-agent'), 'ready-for-agent', 'canonical 默认下五名恒可读');
+});
+
+test('封账门链路（合成改名词表）：wontfix 改名后票文件 Status 过映射判 wontfix，不再误报未闭环', (t) => {
+  // ADR-0006 的原始痛点：wontfix label 改名后，封账门把改名票当未闭环炸响。
+  // 链路：票文件 Status 串 → normalizeStatus（契约词表）→ canonical → closeBlockers。
+  const core = require('./ledger-core');
+  const raw = sync.normalizeStatus('archived', { contract: RENAMED_CONTRACT });
+  assert.equal(raw, 'wontfix');
+  const blockers = core.closeBlockers({
+    events: [],
+    truth: { tickets: [{ num: '05', file: '05-x.md', status: raw, type: 'task' }] },
+  });
+  assert.deepEqual(blockers, [], '改名 wontfix 票不阻塞封账');
+  const unmapped = core.closeBlockers({
+    events: [],
+    truth: { tickets: [{ num: '05', file: '05-x.md', status: 'archived', type: 'task' }] },
+  });
+  assert.equal(unmapped.length, 1, '未过词表映射的原始串（直喂封账门）照旧阻塞——映射是必经面');
+});
 
 test('状态映射：closed → Status: resolved；开放票按 triage label 映射', (t) => {
   assert.equal(sync.statusOf(issue({ state: 'CLOSED' })), 'resolved');
@@ -310,6 +461,34 @@ test('spec 转写：source 缺省时回退 issue.url / issue.html_url；两者�
   });
   assert.match(withHtmlUrl, /^Source: https:\/\/github\.com\/acme\/repo\/issues\/1040$/m);
   assert.throws(() => sync.transcribeSpec({ issue: issue({ url: null, html_url: null }) }), /Source/);
+});
+
+// ====================================================================
+// 状态词表参数化：转写与快照吃同一张契约词表（票 03）
+// ====================================================================
+
+test('工单转写：契约词表下 label→canonical——改名词表的票转写后仍是 canonical Status 行', (t) => {
+  
+  const text = sync.transcribeTicket(
+    issue({ number: 7, title: '改名票', labels: ['archived'] }),
+    { contract: RENAMED_CONTRACT }
+  );
+  assert.match(text, /^\*\*Status:\*\* wontfix$/m, 'archived（改名 wontfix）→ wontfix');
+  const ready = sync.transcribeTicket(
+    issue({ number: 8, title: '改名可派发', labels: ['afk-ok'] }),
+    { contract: RENAMED_CONTRACT }
+  );
+  assert.match(ready, /^\*\*Status:\*\* ready-for-agent$/m);
+});
+
+test('spec 转写：closedStatus 同走词表——改名词表契约下 closed 母票仍落 canonical 关闭词', (t) => {
+  
+  const text = sync.transcribeSpec({
+    issue: issue({ number: 1040, state: 'CLOSED', labels: ['to-triage'] }),
+    source: 'https://example.test/o/r/issues/1040',
+    contract: RENAMED_CONTRACT,
+  });
+  assert.match(text, /^\*\*Status:\*\* resolved$/m, 'closed → 契约 closedStatus（固定输出词表）');
 });
 
 // ====================================================================

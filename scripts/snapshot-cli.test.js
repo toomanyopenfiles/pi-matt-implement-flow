@@ -1,9 +1,11 @@
 'use strict';
 
 // 票 05：snapshot-init 子命令黑盒测试——真实调用 ledger CLI，断言退出码、stdout、落盘产物。
-// gh 收发是 best-effort 薄 IO（spec 测试决策：不设缝、不碰网络）——测试通过 PATH 注入 gh 桩
+// 取数是 best-effort 薄 IO（spec 测试决策：不设缝、不碰网络）——测试通过 PATH 注入 y73 桩
 // 二进制供给合成 issue 数据，生产代码不含任何测试钩子。快照已存在的拒绝与零覆盖、
-// gh 失败的清晰报错与无半成品，都在这个外部行为面上验证。
+// 拉取失败的清晰报错与无半成品，都在这个外部行为面上验证。
+// 票 05 契约化：driver 按契约命令模板取数——桩透到仓库作用旗前置（-R <repo>）也要认；
+// fixture 带 setup 产物（docs/agents/issue-tracker.md）作判型输入（配置单源）。
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -19,6 +21,8 @@ const LEDGER = path.resolve(__dirname, 'ledger.js');
 // deps 桩默认返回空数组（无 native 边，既有用例行为不变）；GH_STUB_DEPS 给目录时按 issue 号读
 // <目录>/<号>.json，缺文件回退 []；GH_STUB_DEPS_FAIL 模拟端点失败。
 const GH_STUB = `#!/usr/bin/env bash
+# 契约 driver 把仓库作用旗前置（-R <repo>）——透到任何子命令前剥离（票 05 driver 版位约定）
+if [[ "$1" == "-R" ]]; then shift 2; fi
 if [[ -n "$GH_STUB_FAIL" ]]; then echo "gh: simulated failure (network down)" >&2; exit 1; fi
 case "$1" in
   issue) cat "$GH_STUB_ISSUES" ;;
@@ -104,7 +108,9 @@ const ISSUES_NO_EDGES = JSON.stringify([
 
 // --- fixture ---
 
-function makeFixture(t) {
+// setup 产物（契约判型输入）：缺省 = GitHub 范本（票 05 起快照取数的配置单源），
+// local 范本与缺文档用例显式传参覆盖。
+function makeFixture(t, { trackerDoc = GITHUB_DOC, triageDoc = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'snapshot-fixture-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, 'bin');
@@ -112,8 +118,17 @@ function makeFixture(t) {
   const gh = path.join(bin, 'gh');
   fs.writeFileSync(gh, GH_STUB);
   fs.chmodSync(gh, 0o755);
+  if (trackerDoc !== null) {
+    fs.mkdirSync(path.join(dir, 'docs/agents'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs/agents/issue-tracker.md'), trackerDoc);
+    if (triageDoc) fs.writeFileSync(path.join(dir, 'docs/agents/triage-labels.md'), triageDoc);
+  }
   return { dir, bin, runtime: path.join(dir, '.pi/matt-implement/demo'), tracker: path.join(dir, '.pi/matt-implement/demo/tracker') };
 }
+
+const readFixture = (name) => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
+const GITHUB_DOC = readFixture('issue-tracker-github.md');
+const LOCAL_DOC = readFixture('issue-tracker-local.md');
 
 function snapshot(f, args, env = {}) {
   const r = spawnSync(process.execPath, [LEDGER, 'snapshot-init', ...args], {
@@ -190,7 +205,7 @@ test('--tickets 兜底：三层走到 init 票号清单——按清单落盘', (
   assert.deepEqual(lsIssues(f), ['1043-issue-transcription-pure-fns.md', '1044-sync-command.md']);
 });
 
-test('--tickets 与 add init 同名旗标过同一转换点（schema.ticketSetList）：空段/非法项在旗标层拒绝', (t) => {
+test('--tickets 与 init 子命令同名旗标过同一转换点（schema.ticketSetList）：空段/非法项在旗标层拒绝', (t) => {
   const f = makeFixture(t);
   writeStubData(f, { issues: ISSUES_NO_EDGES, subs: null });
   for (const bad of ['1043,,1044', '1043,x']) {
@@ -199,12 +214,12 @@ test('--tickets 与 add init 同名旗标过同一转换点（schema.ticketSetLi
       ['--runtime-dir', f.runtime, '--spec', '#1042', '--tickets', bad],
       withGh(f, { GH_STUB_SUBS: '' })
     );
-    assert.equal(r.status, 2, `--tickets ${JSON.stringify(bad)} 必须被拒（与 add init 同一转换点）`);
+    assert.equal(r.status, 2, `--tickets ${JSON.stringify(bad)} 必须被拒（与 init 子命令同一转换点）`);
     assert.match(r.stdout, /票号列表/);
     assert.doesNotMatch(r.stdout, /init 票号清单 含非法票号/, '不走 resolveTicketSet 的双轨校验口径');
     assert.equal(fs.existsSync(f.tracker), false, '拒绝即零落盘');
   }
-  // 归一化 + 去重同轨：add init 接受的形态这里也接受
+  // 归一化 + 去重同轨：init 子命令接受的形态这里也接受
   const ok = snapshot(
     f,
     ['--runtime-dir', f.runtime, '--spec', '#1042', '--tickets', ' 1044, 1044,1043 '],
@@ -367,7 +382,7 @@ test('gh 拉取失败：报错清晰，快照零落盘（无半成品）', (t) =
     { ...withGh(f), GH_STUB_FAIL: '1' }
   );
   assert.equal(r.status, 1);
-  assert.match(r.stdout, /gh issue list 拉取失败/);
+  assert.match(r.stdout, /issue 集合拉取失败/);
   assert.match(r.stdout, /未落盘|半成品/);
   assert.equal(fs.existsSync(f.tracker), false, '失败不落盘');
   assert.equal(fs.existsSync(`${f.tracker}.incoming`), false, '无落盘草稿残留');
@@ -377,18 +392,29 @@ test('gh 拉取失败：报错清晰，快照零落盘（无半成品）', (t) =
 // 拒绝面：引用与旗标
 // ====================================================================
 
-test('local 路径 spec 引用：拒绝并提示 tracker=local 无需快照', (t) => {
-  const f = makeFixture(t);
+test('local 契约：快照为无操作——拒绝并提示票文件即真相层（票 05 契约驱动）', (t) => {
+  const f = makeFixture(t, { trackerDoc: LOCAL_DOC });
   writeStubData(f);
-  const r = snapshot(f, ['--runtime-dir', f.runtime, '--spec', '.scratch/demo/spec.md'], withGh(f));
+  const r = snapshot(f, ['--runtime-dir', f.runtime, '--spec', 'https://github.com/o/r/issues/1042'], withGh(f));
   assert.equal(r.status, 1);
-  assert.match(r.stdout, /spec 引用无法解析出 issue 号/);
   assert.match(r.stdout, /tracker=local 无需快照/);
+  assert.match(r.stdout, /本地票文件即真相层/);
   assert.equal(fs.existsSync(f.tracker), false);
 });
 
-test('缺 --spec 或给未知旗标：用法拒绝（exit 2），不触碰 gh', (t) => {
-  const f = makeFixture(t);
+test('setup 产物缺失：识别先于一切拉取——指引运行 /setup-matt-pocock-skills，不碰桩，exit 1', (t) => {
+  const f = makeFixture(t, { trackerDoc: null });
+  writeStubData(f);
+  const r = snapshot(f, ['--runtime-dir', f.runtime, '--spec', 'https://github.com/o/r/issues/1042'], withGh(f));
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /setup-matt-pocock-skills/);
+  assert.match(r.stdout, /issue-tracker\.md/);
+  assert.equal(fs.existsSync(f.tracker), false);
+  assert.equal(fs.existsSync(path.join(f.dir, '.pi/matt-implement/demo/tracker.incoming')), false, '识别失败即零网络零落盘');
+});
+
+test('缺 --spec 或给未知旗标：用法拒绝（exit 2），不触碰 gh（旗标层先于契约识别）', (t) => {
+  const f = makeFixture(t, { trackerDoc: null }); // 判型不到——旗标层先拒
   const missing = snapshot(f, ['--runtime-dir', f.runtime], withGh(f));
   assert.equal(missing.status, 2);
   assert.match(missing.stdout, /缺少必选参数 --spec/);

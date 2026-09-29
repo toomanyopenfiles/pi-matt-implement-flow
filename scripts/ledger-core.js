@@ -14,7 +14,8 @@
 //     branchExists(name): bool, shaExists(sha): bool, isAncestor(a, b): bool,
 //     commitMessage(sha): 'string|null', fileExists(p): bool,
 //     mergesWithTokens: [{sha, subject, tokens: ['01',...]}] | null,   // 无 init 基线 → null
-//     remoteUrl: 'string|null', probeGh(branch): 'opened-draft'|'ready'|'none'|null,
+//     remoteUrl: 'string|null', prProbe(branch): 'opened-draft'|'ready'|'none'|null,
+//        （票 05：收尾面状态探测——契约 prProbe 模板经 driver 执行；契约无此模板 → null）
 //     finalEvidence(runId): { found: bool, dir: 'string|null' },  // 平台会话产物探测（只读）
 //     tickets: [{num, file, title, status, type, blockedBy: [...]}],    // 本地 tracker 枚举
 //     ticketsWarning: 'string|null',                                   // 枚举不可用的原因
@@ -502,10 +503,12 @@ function prState({ events, truth }) {
   const prs = events.filter((e) => e.type === 'pr');
   if (prs.length) return prs.at(-1).payload.state;
   if (!truth.remoteUrl) return 'none';
-  if (!/github/i.test(truth.remoteUrl)) return 'unknown';
+  // 收尾面探测（票 05 契约化）：探测能力来自契约 prProbe 模板——无模板的契约
+  //（local 无 tracker 写面等）不探测，标 unknown 不编造；探测失败同标 unknown。
+  if (!truth.prProbe) return 'unknown';
   const init = events.find((e) => e.type === 'init');
   if (!init) return 'unknown';
-  return truth.probeGh(init.payload.branch) ?? 'unknown';
+  return truth.prProbe(init.payload.branch) ?? 'unknown';
 }
 
 function deriveRows({ events, truth, degraded }) {
