@@ -65,6 +65,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration produced by `/setup-matt-pocock-skills`, not a package resource.
 - `audit-report/` now ships in the npm package (its test files stay out of the tarball), so npm
   users can generate audit reports from their run directories.
+- Coder dispatch now carries a typed gate that assembles the report mechanically (ADR-0008):
+  after the child ends, a host-side command (`scripts/mechanical-report.js --base <ticketBase>
+  --test-command "<testCommand>"`) runs in its worktree — git truth plus a real test run become
+  the JSON report on stdout, and the process exit code is the acceptance verdict, so the model
+  never touches the report. The acceptance contract converges from 12 dual-channel fields
+  (`value` + `acceptanceReport`) to 4 fully-required mechanical fields — `headSha`, `testResult`
+  (one-line summary), `changedFiles`, `validationOutput` (verbatim tail of the test output).
+  Subjective self-report fields (`criteriaSatisfied`, `residualRisks`, `seams`) are gone — that
+  judgment belongs to the reviewer; derivable or near-constant fields (`commits`, `branch`,
+  `commandsRun`, `testsAddedOrUpdated`) are gone too. Fix rounds re-run the same script command
+  by hand in the retained worktree (same verdict standard, ledger `settled --gate` summary taken
+  from the fresh report's `testResult`); fixers without an isolated report consumer carry a
+  verdict-only gate and escalate to the user after 2 consecutive reds.
 
 ## [0.2.0] - 2026-09-22
 ### Added
