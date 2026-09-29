@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-30
 ### Added
 
 - Tracker contracts (ADR-0007): the tracker is no longer a `--tracker` flag plus hard-coded
@@ -68,8 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Coder dispatch now carries a typed gate that assembles the report mechanically (ADR-0008):
   after the child ends, a host-side command (`scripts/mechanical-report.js --base <ticketBase>
   --test-command "<testCommand>"`) runs in its worktree — git truth plus a real test run become
-  the JSON report on stdout, and the process exit code is the acceptance verdict, so the model
-  never touches the report. The acceptance contract converges from 12 dual-channel fields
+  the JSON report on stdout, and the process exit code is the acceptance verdict (a refusal or a
+  usage error also exits non-zero — any non-zero exit means not accepted), so the model never
+  touches the report. The acceptance contract converges from 12 dual-channel fields
   (`value` + `acceptanceReport`) to 4 fully-required mechanical fields — `headSha`, `testResult`
   (one-line summary), `changedFiles`, `validationOutput` (verbatim tail of the test output).
   Subjective self-report fields (`criteriaSatisfied`, `residualRisks`, `seams`) are gone — that
@@ -161,6 +163,7 @@ Initial public release.
   (spec / ticket / coder / worktree / review).
 - Package and repo descriptions now state the relationship to Matt Pocock's `/implement`.
 
-[Unreleased]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/releases/tag/v0.1.0
