@@ -263,8 +263,8 @@ function checkFlowConfigExtension({ isFile = (p) => isFileAt(PKG_ROOT, p) } = {}
     : [`flow-config extension missing: ${EXTENSION_SCRIPT} — /matt-flow-config is its registration surface`];
 }
 
-// —— 不变量 10：超时契约：三个 agent 各自声明 1h run 死线，
-// SKILL.md 派发模板的 gate verify 条目显式 10 分钟（平台常量 120s 不可配，只能 per-entry 覆盖）。
+// —— 不变量 10：超时契约：三个 agent 各自声明 1h run 死线；
+// SKILL.md 派发模板的 gate 对象显式 10 分钟（平台常量 120s 不可配，只能 per-entry 覆盖；断锚 1/7 钉死）。
 function checkAgentTimeoutFrontmatter(frontmatter, agentName) {
   if (!frontmatter) return [`missing agent file for "${agentName}"`];
   return frontmatter.timeoutMs === String(AGENT_TIMEOUT_MS)
@@ -278,73 +278,6 @@ function checkAgentTimeouts(agentFrontmatter) {
   const problems = [];
   for (const agentName of AGENT_NAMES) {
     problems.push(...checkAgentTimeoutFrontmatter(agentFrontmatter[agentName], agentName));
-  }
-  return problems;
-}
-
-const GATE_VERIFY_ANCHOR = `verify: [{ id: "gate", command: "npm test", timeoutMs: ${GATE_VERIFY_TIMEOUT_MS} }]`;
-function checkGateVerifyTimeout(skillText) {
-  return skillText.includes(GATE_VERIFY_ANCHOR)
-    ? []
-    : [
-        `SKILL.md coder dispatch template must pin the gate verify timeout verbatim: ${GATE_VERIFY_ANCHOR} (platform verify default is a fixed 120 s and not configurable)`,
-      ];
-}
-
-// —— 不变量 11：验收契约软化——意见型证据字段处置的单一真相。
-// 派发 acceptance 的 evidence 清单里 residual-risks（纯意见型、无 git 对应物）从强制降为建议：
-// 它不再参与「证据缺失 → run 拒收」的集合，因此纯文档票不会因漏填一个字段被平台拒收。
-// 三处契约文本（evidence 数组、Acceptance Contract 的 Rules 句、fix follow-up 简报）必须同口径，
-// 这里机械锁定其中两处：清单本身（不含 residual-risks，其余五项原样）与 Rules 句的执法集合。
-const ADVISORY_EVIDENCE_FIELD = 'residual-risks';
-const DISPATCHED_EVIDENCE_FIELDS = [
-  'changed-files',
-  'tests-added',
-  'commands-run',
-  'validation-output',
-  'no-staged-files',
-];
-const RULES_ENFORCEMENT_PATTERN = /missing evidence from the dispatched set \(([^)]*)\) rejects the run/;
-
-function parseDispatchedEvidenceFields(skillText) {
-  const match = skillText.match(/evidence:\s*\[([^\]]*)\]/);
-  return match ? [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : null;
-}
-
-function normalizeEvidenceFields(fields) {
-  return [...fields].map((f) => f.trim()).filter(Boolean).sort();
-}
-
-function checkAcceptanceEvidenceContract(skillText) {
-  const problems = [];
-  const dispatched = parseDispatchedEvidenceFields(skillText);
-  if (!dispatched) {
-    return [
-      'SKILL.md coder dispatch carries no parseable acceptance evidence list (`evidence: [...]`) — the dispatched evidence contract has no mechanical anchor',
-    ];
-  }
-  if (dispatched.includes(ADVISORY_EVIDENCE_FIELD)) {
-    problems.push(
-      `SKILL.md dispatch evidence list still enforces the advisory field "${ADVISORY_EVIDENCE_FIELD}" — the opinion-type field must stay out of the missing-evidence-rejects-the-run set`
-    );
-  }
-  if (normalizeEvidenceFields(dispatched).join(',') !== normalizeEvidenceFields(DISPATCHED_EVIDENCE_FIELDS).join(',')) {
-    problems.push(
-      `SKILL.md dispatch evidence list drifted from the softened contract — expected [${DISPATCHED_EVIDENCE_FIELDS.join(', ')}], got [${dispatched.join(', ')}]`
-    );
-  }
-  const enforced = (normalizeWhitespace(skillText).match(RULES_ENFORCEMENT_PATTERN) ?? [])[1];
-  if (enforced === undefined) {
-    problems.push(
-      'SKILL.md Acceptance Contract Rules sentence no longer names the enforced evidence set (`missing evidence from the dispatched set (<fields>) rejects the run`) — the sentence must stay in one voice with the dispatched list'
-    );
-  } else {
-    const enforcedFields = enforced.split(/\s*,\s*/);
-    if (normalizeEvidenceFields(enforcedFields).join(',') !== normalizeEvidenceFields(dispatched).join(',')) {
-      problems.push(
-        `SKILL.md Acceptance Contract Rules sentence disagrees with the dispatched evidence list — sentence enforces [${enforcedFields.join(', ')}], dispatch declares [${dispatched.join(', ')}]`
-      );
-    }
   }
   return problems;
 }
@@ -373,8 +306,260 @@ module.exports = {
   AGENT_TIMEOUT_MS,
   GATE_VERIFY_TIMEOUT_MS,
   checkAgentTimeouts,
-  checkGateVerifyTimeout,
-  DISPATCHED_EVIDENCE_FIELDS,
-  ADVISORY_EVIDENCE_FIELD,
-  checkAcceptanceEvidenceContract,
+  checkCoderDispatchTypedGate,
+  checkDispatchSchemaMatchesSource,
+  checkFixLoopHandRun,
+  checkBriefsNoReportDuties,
+  checkGateCommandFlags,
+  checkHardRulesRetained,
+  checkPureVerdictGateAndEscalation,
+  checkNoIsolationBriefs,
 };
+
+// —— 票 02 断锚：typed gate 派发形态（8 条）。检查器吃 SKILL.md / agents/coder.md
+// 文本；schema 副本比对吃票 01 模块导出的真源（调用方 require 后传入），文档副本漂移即红。
+
+function sectionBetween(text, startMarker, endMarker) {
+  const s = text.indexOf(startMarker);
+  if (s === -1) return null;
+  if (!endMarker) return text.slice(s);
+  const e = text.indexOf(endMarker, s + startMarker.length);
+  return e === -1 ? text.slice(s) : text.slice(s, e);
+}
+
+// —— 断锚 1：票据 coder 派发块为 typed gate JSON 形态；acceptance 对象（非 false）
+// 与 outputSchema 不再出现于派发面（平台互斥铁律：结构化输出源唯一）。
+function checkCoderDispatchTypedGate(skillText) {
+  const section = sectionBetween(skillText, '### Each round', '### Verify');
+  if (section === null) return ['SKILL.md is missing the "### Each round" section'];
+  const normalized = normalizeWhitespace(section);
+  const problems = [];
+  for (const anchor of [
+    'gate: {',
+    'output: "json"',
+    `timeoutMs: ${GATE_VERIFY_TIMEOUT_MS}`,
+    'mechanical-report.js',
+    'required: ["headSha", "testResult", "changedFiles", "validationOutput"]',
+  ]) {
+    if (!normalized.includes(anchor)) {
+      problems.push(`SKILL.md coder dispatch is missing the typed-gate anchor: ${anchor}`);
+    }
+  }
+  // 旧形状只在派发代码块内禁用——解释散文仍可点名互斥铁律。
+  const fence = section.match(/```js\n([\s\S]*?)\n```/);
+  if (!fence) {
+    problems.push('SKILL.md coder dispatch carries no fenced ```js dispatch block');
+  } else {
+    const block = normalizeWhitespace(fence[1]);
+    for (const pattern of [/acceptance\s*:\s*\{/, /outputSchema/, /report\s*:\s*"on"/, /verify\s*:\s*\[/]) {
+      if (pattern.test(block)) {
+        problems.push(
+          `SKILL.md coder dispatch still carries the old dispatch shape (${pattern}) — acceptance objects and outputSchema are retired from the dispatch face`
+        );
+      }
+    }
+  }
+  return problems;
+}
+
+// —— 断锚 2：schema 副本与票 01 真源逐字一致（调用方 require 机械报告模块导出后传入）。
+function extractFencedJsonCopy(text) {
+  const m = text.match(/```json\s*\n([\s\S]*?)\n```/);
+  if (!m) return { error: 'no fenced ```json schema copy' };
+  try {
+    return { doc: JSON.parse(m[1]) };
+  } catch (e) {
+    return { error: `fenced \`\`\`json schema copy is not valid JSON: ${e.message}` };
+  }
+}
+
+function checkDispatchSchemaMatchesSource(skillText, source) {
+  const { doc, error } = extractFencedJsonCopy(skillText);
+  if (error) {
+    return [
+      `SKILL.md carries ${error} — the dispatch schema copy must stay verbatim-identical to scripts/mechanical-report.js`,
+    ];
+  }
+  const problems = [];
+  if (JSON.stringify(doc) !== JSON.stringify(source.schema)) {
+    problems.push(
+      'SKILL.md dispatch schema copy drifted from the ticket-01 source (scripts/mechanical-report.js REPORT_SCHEMA) — the copy must stay verbatim-identical'
+    );
+  }
+  const names = (source.fields ?? []).map((f) => f.name);
+  if (JSON.stringify(doc.required ?? null) !== JSON.stringify(names)) {
+    problems.push(
+      `SKILL.md dispatch schema required list does not match the source field table [${names.join(', ')}]`
+    );
+  }
+  return problems;
+}
+
+// —— 断锚 3：修复轮 = 编排者在 coder 保留 worktree 手跑同一条脚本命令
+//（stdout 即该轮报告、退出码即该轮 gate；--base 恒为票基点；零报告职责）。
+function checkFixLoopHandRun(skillText) {
+  const section = sectionBetween(skillText, '### Fix loop', '### Merge');
+  if (section === null) return ['SKILL.md is missing the "### Fix loop" section'];
+  const normalized = normalizeWhitespace(section);
+  const problems = [];
+  for (const anchor of [
+    'mechanical-report.js',
+    '--base',
+    'retained worktree',
+    "stdout is that round's report",
+    "exit code is that round's gate",
+  ]) {
+    if (!normalized.includes(anchor)) {
+      problems.push(`SKILL.md fix loop is missing the hand-run anchor: ${anchor}`);
+    }
+  }
+  for (const forbidden of [
+    'acceptanceReport',
+    'structured_output',
+    'outputSchema',
+    'stored acceptance contract',
+    'treat the result as the gate',
+  ]) {
+    if (normalized.includes(forbidden)) {
+      problems.push(`SKILL.md fix loop still carries the old fix-loop wording: ${forbidden}`);
+    }
+  }
+  return problems;
+}
+
+// —— 断锚 4：简报（Briefs）与 coder agent 定义零报告职责——模型不再手写任何报告。
+function checkBriefsNoReportDuties(skillText, coderAgentText) {
+  const section = sectionBetween(skillText, '## Briefs', '## Hard rules');
+  if (section === null) return ['SKILL.md is missing the "## Briefs" section'];
+  const problems = [];
+  const normalized = normalizeWhitespace(section);
+  for (const token of ['acceptanceReport', 'structured_output', 'outputSchema', '## Acceptance Contract']) {
+    if (normalized.includes(token)) {
+      problems.push(`SKILL.md briefs still carry a report duty: ${token} — the model never hand-writes reports`);
+    }
+  }
+  if (!normalized.includes('commit everything')) {
+    problems.push('SKILL.md briefs lost the "commit everything" close-out duty');
+  }
+  if (coderAgentText !== undefined) {
+    const coderNorm = normalizeWhitespace(coderAgentText);
+    for (const token of ['acceptanceReport', 'structured_output', 'outputSchema', 'SIBLING']) {
+      if (coderNorm.includes(token)) {
+        problems.push(`agents/coder.md still carries the old contract wording: ${token}`);
+      }
+    }
+    if (!coderNorm.includes('No handwritten reports')) {
+      problems.push('agents/coder.md is missing the "No handwritten reports" clause');
+    }
+  }
+  return problems;
+}
+
+// —— 断锚 5：每条机械报告 gate 命令都带 --base 与 --test-command。
+// 只收以 node <this-package>/scripts/mechanical-report.js 起手的命令行——散文提及不算命令。
+function checkGateCommandFlags(skillText) {
+  const commands =
+    skillText.match(/node <this-package>\/scripts\/mechanical-report\.js[^\n]*/g) ?? [];
+  if (commands.length === 0) {
+    return [
+      'SKILL.md carries no mechanical-report gate command (`node <this-package>/scripts/mechanical-report.js …`)',
+    ];
+  }
+  const problems = [];
+  for (const cmd of commands) {
+    for (const flag of ['--base', '--test-command']) {
+      if (!cmd.includes(flag)) {
+        problems.push(`SKILL.md gate command is missing ${flag}: ${cmd.trim()}`);
+      }
+    }
+  }
+  return problems;
+}
+
+// —— 断锚 6：既有硬规则断言保留（改写不得顺手删硬规则）。
+function checkHardRulesRetained(skillText) {
+  const section = sectionBetween(skillText, '## Hard rules', null);
+  if (section === null) return ['SKILL.md is missing the "## Hard rules" section'];
+  const normalized = normalizeWhitespace(section);
+  const problems = [];
+  for (const anchor of [
+    'ticket-NN',
+    'Fix budget then escalate',
+    'blocked',
+    'approved',
+    'Never hand-write or edit the ledger or the event stream',
+  ]) {
+    if (!normalized.includes(anchor)) {
+      problems.push(`SKILL.md hard rules lost an existing clause: ${anchor}`);
+    }
+  }
+  return problems;
+}
+
+// —— 断锚 7：无隔离修复者（集成修复者 / 终审修复者）挂纯判定 gate
+//（command + timeoutMs，无 output/schema）+ 连红 2 次停下升级给用户。
+function checkPureVerdictGateAndEscalation(skillText) {
+  const problems = [];
+  const pureGateAnchor = `gate: { command: "<testCommand>", timeoutMs: ${GATE_VERIFY_TIMEOUT_MS} }`;
+  for (const [name, start, end] of [
+    ['merge/integration', '### Merge', '### Final gate'],
+    ['final gate', '### Final gate', '## Briefs'],
+  ]) {
+    const section = sectionBetween(skillText, start, end);
+    if (section === null) {
+      problems.push(`SKILL.md is missing the "${start}" section`);
+      continue;
+    }
+    const normalized = normalizeWhitespace(section);
+    if (!normalized.includes(pureGateAnchor)) {
+      problems.push(`SKILL.md ${name} section is missing the pure-verdict gate: ${pureGateAnchor}`);
+    }
+    for (const body of [...normalized.matchAll(/gate:\s*\{([^}]*)\}/g)].map((m) => m[1])) {
+      if (/output|schema/.test(body)) {
+        problems.push(`SKILL.md ${name} pure-verdict gate must not carry output/schema: gate: {${body}}`);
+      }
+    }
+    for (const anchor of ['two consecutive reds', 'escalate to the user']) {
+      if (!normalized.includes(anchor)) {
+        problems.push(`SKILL.md ${name} section is missing the escalation anchor: ${anchor}`);
+      }
+    }
+  }
+  return problems;
+}
+
+// —— 断锚 8：第五套无隔离修复简报存在且零报告职责；无隔离简报只剩修复收尾职责。
+function checkNoIsolationBriefs(skillText) {
+  const briefs = sectionBetween(skillText, '## Briefs', '## Hard rules');
+  if (briefs === null) return ['SKILL.md is missing the "## Briefs" section'];
+  const problems = [];
+  const normalized = normalizeWhitespace(briefs);
+  if (!normalized.includes('five brief templates')) {
+    problems.push(
+      'SKILL.md path rule still counts four brief templates — the no-isolation final-fixer brief is the fifth'
+    );
+  }
+  if (!briefs.includes('### Final fixer (no isolation)')) {
+    problems.push('SKILL.md is missing the fifth brief: "### Final fixer (no isolation)"');
+  }
+  for (const [name, start, end] of [
+    ['integration fixer', '### Integration fixer', '### Final fixer'],
+    ['final fixer', '### Final fixer', '## Hard rules'],
+  ]) {
+    const sub = sectionBetween(briefs, start, end);
+    if (sub === null) {
+      problems.push(`SKILL.md is missing the "${start}" brief`);
+      continue;
+    }
+    const subNorm = normalizeWhitespace(sub);
+    for (const token of ['acceptanceReport', 'structured_output', 'outputSchema', 'Acceptance Contract']) {
+      if (subNorm.includes(token)) {
+        problems.push(`SKILL.md ${name} brief still carries a report duty: ${token}`);
+      }
+    }
+    if (!subNorm.includes('commit on the feature branch')) {
+      problems.push(`SKILL.md ${name} brief lost the close-out duty: commit on the feature branch`);
+    }
+  }
+  return problems;
+}

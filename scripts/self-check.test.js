@@ -32,8 +32,14 @@ const {
   AGENT_TIMEOUT_MS,
   GATE_VERIFY_TIMEOUT_MS,
   checkAgentTimeouts,
-  checkGateVerifyTimeout,
-  checkAcceptanceEvidenceContract,
+  checkCoderDispatchTypedGate,
+  checkDispatchSchemaMatchesSource,
+  checkFixLoopHandRun,
+  checkBriefsNoReportDuties,
+  checkGateCommandFlags,
+  checkHardRulesRetained,
+  checkPureVerdictGateAndEscalation,
+  checkNoIsolationBriefs,
 } = require('./registration-checks.js');
 
 function readAgentFrontmatter() {
@@ -141,14 +147,6 @@ test('all three agents declare timeoutMs: 3600000 (1h run deadline)', () => {
   assert.deepEqual(checkAgentTimeouts(readAgentFrontmatter()), []);
 });
 
-test('SKILL.md pins the gate verify timeout at 600000 (platform default is a fixed, unconfigurable 120s)', () => {
-  assert.deepEqual(checkGateVerifyTimeout(readText(PKG_ROOT, 'SKILL.md')), []);
-});
-
-test('the coder acceptance contract is softened: the dispatched evidence list excludes residual-risks and the Rules sentence enforces exactly that list', () => {
-  assert.deepEqual(checkAcceptanceEvidenceContract(readText(PKG_ROOT, 'SKILL.md')), []);
-});
-
 // --- 模拟破坏：假想 fixture，绝不改动真实文件。每条恰好对应一条真实不变量。 ---
 
 test('breakage simulation: a pi.skills entry renamed to a missing file is flagged', () => {
@@ -199,10 +197,6 @@ test('breakage simulation: an agent losing its timeoutMs is flagged', () => {
   const problems = checkAgentTimeouts(broken).filter((p) => p.includes('coder'));
   assert.equal(problems.length, 1);
   assert.match(problems[0], /must declare timeoutMs: 3600000/);
-});
-
-test('breakage simulation: the gate verify timeout being dropped from the dispatch template is flagged', () => {
-  assert.match(checkGateVerifyTimeout('verify: [{ id: "gate", command: "npm test" }]')[0], /must pin the gate verify timeout/);
 });
 
 test('breakage simulation: SKILL.md name drifting from the package name is flagged', () => {
@@ -296,45 +290,141 @@ test('breakage simulation: the environment-survey step going missing is flagged'
   ]);
 });
 
-test('breakage simulation: residual-risks returning to the dispatched evidence list is flagged', () => {
-  const hardened =
-    'evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "residual-risks", "no-staged-files"],\n' +
-    '- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence from the dispatched set (changed-files, tests-added, commands-run, validation-output, residual-risks, no-staged-files) rejects the run.\n';
-  const problems = checkAcceptanceEvidenceContract(hardened);
-  assert.equal(problems.length, 2);
-  assert.match(problems[0], /dispatch evidence list still enforces the advisory field "residual-risks"/);
-  assert.match(problems[1], /dispatch evidence list drifted from the softened contract/);
+// --- 票 02 断锚：typed gate 派发形态（8 条）+ breakage simulation ---
+// 检查器吃 SKILL.md / agents/coder.md 文本；schema 副本与票 01 模块导出真源交叉比对。
+
+const skillText = readText(PKG_ROOT, 'SKILL.md');
+const coderAgentText = readText(PKG_ROOT, 'agents/coder.md');
+const { REPORT_SCHEMA, FIELD_TABLE } = require('./mechanical-report.js');
+
+test('anchor-1: coder dispatch carries a typed gate (command/output-json/schema/timeoutMs), no acceptance object or outputSchema', () => {
+  assert.deepEqual(checkCoderDispatchTypedGate(skillText), []);
 });
 
-test('breakage simulation: a Rules sentence enforcing a set other than the dispatched list is flagged', () => {
-  const drifted =
-    'evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "no-staged-files"],\n' +
-    '- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence from the dispatched set (changed-files, tests-added, commands-run, validation-output, no-staged-files, docs-updated) rejects the run.\n';
-  const problems = checkAcceptanceEvidenceContract(drifted);
-  assert.equal(problems.length, 1);
-  assert.match(problems[0], /Rules sentence disagrees with the dispatched evidence list/);
-});
-
-test('breakage simulation: the Rules sentence losing its enforced-set list is flagged', () => {
-  const vague =
-    'evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "no-staged-files"],\n' +
-    '- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence rejects the run.\n';
-  const problems = checkAcceptanceEvidenceContract(vague);
-  assert.equal(problems.length, 1);
-  assert.match(problems[0], /Rules sentence no longer names the enforced evidence set/);
-  // 折行不改变语义：Rules 句跨行、执法集合与 evidence 数组一致时不得误报（空白归一化）。
-  const wrapped =
-    'evidence: ["changed-files", "tests-added", "commands-run", "validation-output", "no-staged-files"],\n' +
-    '- Empty-but-applicable is fine ([]); MISSING fields are not — missing evidence from the dispatched set\n' +
-    '(changed-files, tests-added, commands-run,\nvalidation-output, no-staged-files) rejects the run.\n';
-  assert.deepEqual(checkAcceptanceEvidenceContract(wrapped), []);
-});
-
-test('breakage simulation: a dispatch losing its evidence array outright is flagged', () => {
-  assert.match(
-    checkAcceptanceEvidenceContract('acceptance: { level: "verified", report: "on" }')[0],
-    /no parseable acceptance evidence list/
+test('anchor-2: dispatch schema copy is verbatim-identical to the ticket-01 source (module export cross-check)', () => {
+  assert.deepEqual(
+    checkDispatchSchemaMatchesSource(skillText, { fields: FIELD_TABLE, schema: REPORT_SCHEMA }),
+    []
   );
+});
+
+test('anchor-3: fix loop is a hand-run of the same script command (stdout is the report, exit code is the gate)', () => {
+  assert.deepEqual(checkFixLoopHandRun(skillText), []);
+});
+
+test('anchor-4: briefs and the coder agent carry zero report duties (the model never hand-writes reports)', () => {
+  assert.deepEqual(checkBriefsNoReportDuties(skillText, coderAgentText), []);
+});
+
+test('anchor-5: every mechanical-report gate command carries --base and --test-command', () => {
+  assert.deepEqual(checkGateCommandFlags(skillText), []);
+});
+
+test('anchor-6: existing hard rules are retained (merge token, fix budget, verdict values, ledger write authority)', () => {
+  assert.deepEqual(checkHardRulesRetained(skillText), []);
+});
+
+test('anchor-7: no-isolation fixers carry a pure-verdict gate with two-consecutive-reds escalation', () => {
+  assert.deepEqual(checkPureVerdictGateAndEscalation(skillText), []);
+});
+
+test('anchor-8: the fifth no-isolation brief exists with zero report duties', () => {
+  assert.deepEqual(checkNoIsolationBriefs(skillText), []);
+});
+
+test('breakage simulation: the old acceptance-object dispatch shape is flagged (anchor-1)', () => {
+  const oldDispatch =
+    '### Each round\n```js\n' +
+    'acceptance: { level: "verified", report: "on", verify: [{ id: "gate", command: "npm test" }] },\n' +
+    'outputSchema: { type: "object" }\n```\n' +
+    '### Verify\n';
+  const problems = checkCoderDispatchTypedGate(oldDispatch);
+  assert.ok(problems.length >= 4, `expected the old shape to fail anchor-1 widely, got: ${JSON.stringify(problems)}`);
+  assert.ok(problems.some((p) => p.includes('acceptance') || p.includes('outputSchema') || p.includes('old dispatch shape')));
+  // 而真实派发不受影响（对照）。
+  assert.deepEqual(checkCoderDispatchTypedGate(skillText), []);
+});
+
+test('breakage simulation: a drifted schema copy is flagged (anchor-2)', () => {
+  const driftedSchema = { ...REPORT_SCHEMA, required: ['headSha', 'testResult', 'changedFiles'] };
+  const fixture = '### Each round\n```json\n' + JSON.stringify(driftedSchema, null, 2) + '\n```\n';
+  const problems = checkDispatchSchemaMatchesSource(fixture, { fields: FIELD_TABLE, schema: REPORT_SCHEMA });
+  assert.ok(problems.some((p) => p.includes('drifted') || p.includes('required list')));
+});
+
+test('breakage simulation: a missing schema copy is flagged (anchor-2)', () => {
+  const problems = checkDispatchSchemaMatchesSource('### Each round\nno fences here\n', {
+    fields: FIELD_TABLE,
+    schema: REPORT_SCHEMA,
+  });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /no fenced ```json schema copy/);
+});
+
+test('breakage simulation: the old run-the-suite-as-gate fix loop is flagged (anchor-3)', () => {
+  const oldFixLoop =
+    '### Fix loop\n' +
+    'gate is rejected on a retained resume — you run the full suite and treat the result as the gate.\n' +
+    'The resumed child replays its stored acceptance contract: report value + acceptanceReport.\n' +
+    '### Merge\n';
+  const problems = checkFixLoopHandRun(oldFixLoop);
+  assert.ok(problems.some((p) => p.includes('hand-run anchor')));
+  assert.ok(problems.some((p) => p.includes('old fix-loop wording')));
+});
+
+test('breakage simulation: a returning ## Acceptance Contract brief section is flagged (anchor-4)', () => {
+  const withContract =
+    '## Briefs\n## Acceptance Contract\nYour final structured_output call must carry acceptanceReport.\n' +
+    'commit everything.\n## Hard rules\n';
+  const problems = checkBriefsNoReportDuties(withContract, coderAgentText);
+  assert.ok(problems.some((p) => p.includes('report duty')));
+});
+
+test('breakage simulation: a coder agent re-adding SIBLING-keys wording is flagged (anchor-4)', () => {
+  const problems = checkBriefsNoReportDuties(skillText, 'acceptanceReport is a SIBLING of value.\nNo handwritten reports.\n');
+  assert.ok(problems.some((p) => p.includes('agents/coder.md')));
+});
+
+test('breakage simulation: a gate command losing --base is flagged (anchor-5)', () => {
+  const problems = checkGateCommandFlags(
+    'run node <this-package>/scripts/mechanical-report.js --test-command "npm test"\n'
+  );
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /missing --base/);
+  // 折行不改变语义：命令跨行续行时两旗标仍在同一逻辑行不得误报——此处按单行匹配，散文提及不算命令。
+  assert.deepEqual(checkGateCommandFlags('see scripts/mechanical-report.js (`REPORT_SCHEMA`, `--print-schema`)'), [
+    'SKILL.md carries no mechanical-report gate command (`node <this-package>/scripts/mechanical-report.js …`)',
+  ]);
+});
+
+test('breakage simulation: hard rules losing the merge-token clause are flagged (anchor-6)', () => {
+  const problems = checkHardRulesRetained('## Hard rules\nFix budget then escalate.\n');
+  assert.ok(problems.some((p) => p.includes('ticket-NN')));
+});
+
+test('breakage simulation: a no-isolation fixer without a gate or without escalation is flagged (anchor-7)', () => {
+  const noGate =
+    '### Merge\ndispatch one coder without isolation on the feature branch.\n' +
+    '### Final gate\ndispatch one coder without isolation to fix every finding.\n## Briefs\n';
+  const problems = checkPureVerdictGateAndEscalation(noGate);
+  assert.ok(problems.some((p) => p.includes('pure-verdict gate')));
+  assert.ok(problems.some((p) => p.includes('escalation anchor')));
+});
+
+test('breakage simulation: a pure gate smuggling output/schema is flagged (anchor-7)', () => {
+  const smuggled =
+    '### Merge\ngate: { command: "<testCommand>", timeoutMs: 600000, output: "json", schema: {} }\n' +
+    'two consecutive reds escalate to the user.\n### Final gate\n## Briefs\n';
+  const problems = checkPureVerdictGateAndEscalation(smuggled);
+  assert.ok(problems.some((p) => p.includes('must not carry output/schema')));
+});
+
+test('breakage simulation: a missing fifth brief is flagged (anchor-8)', () => {
+  const fourBriefs =
+    '## Briefs\nall five brief templates\n### Integration fixer (no isolation)\ncommit on the feature branch.\n' +
+    '## Hard rules\n';
+  const problems = checkNoIsolationBriefs(fourBriefs);
+  assert.ok(problems.some((p) => p.includes('fifth brief')));
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---
