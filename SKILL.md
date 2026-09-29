@@ -130,8 +130,6 @@ const results = await runs.all([
       },
       timeoutMs: 600000
     }
-      timeoutMs: 600000
-    }
   }
   // ...one entry per claimed ticket, up to N
 ]);
@@ -297,7 +295,7 @@ brief are absolute main-repo paths (read-only). Everything you edit and commit s
 inside your own worktree. Other tickets under .scratch/ and anything else in the main
 repo are context, not scope — never implement them.
 
-You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report headSha, branch, commits, and the test command result by context pointer. You write no report — the typed gate assembles it mechanically from git truth and a real test run after you finish (so keep the tree fully committed: a dirty tree or an empty diff fails the gate).
+You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report the headSha and branch by context pointer. You write no report — the typed gate assembles it mechanically from git truth and a real test run after you finish (so keep the tree fully committed: a dirty tree or an empty diff fails the gate).
 ```
 
 ### Reviewer brief
