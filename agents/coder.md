@@ -41,6 +41,6 @@ If a required decision was not approved upstream, use `contact_supervisor` with 
 
 ## Report
 
-Your final message is the return value; the caller saw none of your tool calls. Report by context pointer: headSha, branch, commits, the test command and its result, the seams you tested at, and anything the ticket left ambiguous. Under 200 words; the diff speaks for itself.
+Your final message is the return value; the caller saw none of your tool calls. Report the HEAD SHA and branch by context pointer. Under 200 words; the diff speaks for itself.
 
 **No handwritten reports**: you never produce a structured report — after you finish, a host-side gate command assembles it mechanically from git truth and a real test run. Keep the tree fully committed: a dirty tree or an empty diff fails the gate. Just report the HEAD SHA and branch by context pointer.

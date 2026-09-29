@@ -6,6 +6,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const PKG_ROOT = path.resolve(__dirname, '..');
 
@@ -327,24 +328,40 @@ function sectionBetween(text, startMarker, endMarker) {
   return e === -1 ? text.slice(s) : text.slice(s, e);
 }
 
+// 断锚共用形状：缺失锚点 / 残留禁用词各自收拢为一处循环，措辞由调用方闭包给定。
+function missingAnchors(normalized, anchors, describe) {
+  const problems = [];
+  for (const anchor of anchors) {
+    if (!normalized.includes(anchor)) problems.push(describe(anchor));
+  }
+  return problems;
+}
+
+function presentForbidden(normalized, forbidden, describe) {
+  const problems = [];
+  for (const token of forbidden) {
+    if (normalized.includes(token)) problems.push(describe(token));
+  }
+  return problems;
+}
+
 // —— 断锚 1：票据 coder 派发块为 typed gate JSON 形态；acceptance 对象（非 false）
 // 与 outputSchema 不再出现于派发面（平台互斥铁律：结构化输出源唯一）。
 function checkCoderDispatchTypedGate(skillText) {
   const section = sectionBetween(skillText, '### Each round', '### Verify');
   if (section === null) return ['SKILL.md is missing the "### Each round" section'];
   const normalized = normalizeWhitespace(section);
-  const problems = [];
-  for (const anchor of [
-    'gate: {',
-    'output: "json"',
-    `timeoutMs: ${GATE_VERIFY_TIMEOUT_MS}`,
-    'mechanical-report.js',
-    'required: ["headSha", "testResult", "changedFiles", "validationOutput"]',
-  ]) {
-    if (!normalized.includes(anchor)) {
-      problems.push(`SKILL.md coder dispatch is missing the typed-gate anchor: ${anchor}`);
-    }
-  }
+  const problems = missingAnchors(
+    normalized,
+    [
+      'gate: {',
+      'output: "json"',
+      `timeoutMs: ${GATE_VERIFY_TIMEOUT_MS}`,
+      'mechanical-report.js',
+      'required: ["headSha", "testResult", "changedFiles", "validationOutput"]',
+    ],
+    (anchor) => `SKILL.md coder dispatch is missing the typed-gate anchor: ${anchor}`
+  );
   // 旧形状只在派发代码块内禁用——解释散文仍可点名互斥铁律。
   const fence = section.match(/```js\n([\s\S]*?)\n```/);
   if (!fence) {
@@ -357,6 +374,12 @@ function checkCoderDispatchTypedGate(skillText) {
           `SKILL.md coder dispatch still carries the old dispatch shape (${pattern}) — acceptance objects and outputSchema are retired from the dispatch face`
         );
       }
+    }
+    // 派发块是待复制执行的 JS：包在 async 函数里必须可解析，大括号失衡即红。
+    try {
+      new vm.Script(`async function __dispatch__() {\n${fence[1]}\n}`);
+    } catch (e) {
+      problems.push(`SKILL.md coder dispatch \`\`\`js block is not parseable JS (${e.message}) — the dispatch copy must stay executable`);
     }
   }
   return problems;
@@ -401,29 +424,30 @@ function checkFixLoopHandRun(skillText) {
   const section = sectionBetween(skillText, '### Fix loop', '### Merge');
   if (section === null) return ['SKILL.md is missing the "### Fix loop" section'];
   const normalized = normalizeWhitespace(section);
-  const problems = [];
-  for (const anchor of [
-    'mechanical-report.js',
-    '--base',
-    'retained worktree',
-    "stdout is that round's report",
-    "exit code is that round's gate",
-  ]) {
-    if (!normalized.includes(anchor)) {
-      problems.push(`SKILL.md fix loop is missing the hand-run anchor: ${anchor}`);
-    }
-  }
-  for (const forbidden of [
-    'acceptanceReport',
-    'structured_output',
-    'outputSchema',
-    'stored acceptance contract',
-    'treat the result as the gate',
-  ]) {
-    if (normalized.includes(forbidden)) {
-      problems.push(`SKILL.md fix loop still carries the old fix-loop wording: ${forbidden}`);
-    }
-  }
+  const problems = missingAnchors(
+    normalized,
+    [
+      'mechanical-report.js',
+      '--base',
+      'retained worktree',
+      "stdout is that round's report",
+      "exit code is that round's gate",
+    ],
+    (anchor) => `SKILL.md fix loop is missing the hand-run anchor: ${anchor}`
+  );
+  problems.push(
+    ...presentForbidden(
+      normalized,
+      [
+        'acceptanceReport',
+        'structured_output',
+        'outputSchema',
+        'stored acceptance contract',
+        'treat the result as the gate',
+      ],
+      (token) => `SKILL.md fix loop still carries the old fix-loop wording: ${token}`
+    )
+  );
   return problems;
 }
 
@@ -433,21 +457,25 @@ function checkBriefsNoReportDuties(skillText, coderAgentText) {
   if (section === null) return ['SKILL.md is missing the "## Briefs" section'];
   const problems = [];
   const normalized = normalizeWhitespace(section);
-  for (const token of ['acceptanceReport', 'structured_output', 'outputSchema', '## Acceptance Contract']) {
-    if (normalized.includes(token)) {
-      problems.push(`SKILL.md briefs still carry a report duty: ${token} — the model never hand-writes reports`);
-    }
-  }
+  problems.push(
+    ...presentForbidden(
+      normalized,
+      ['acceptanceReport', 'structured_output', 'outputSchema', '## Acceptance Contract'],
+      (token) => `SKILL.md briefs still carry a report duty: ${token} — the model never hand-writes reports`
+    )
+  );
   if (!normalized.includes('commit everything')) {
     problems.push('SKILL.md briefs lost the "commit everything" close-out duty');
   }
   if (coderAgentText !== undefined) {
     const coderNorm = normalizeWhitespace(coderAgentText);
-    for (const token of ['acceptanceReport', 'structured_output', 'outputSchema', 'SIBLING']) {
-      if (coderNorm.includes(token)) {
-        problems.push(`agents/coder.md still carries the old contract wording: ${token}`);
-      }
-    }
+    problems.push(
+      ...presentForbidden(
+        coderNorm,
+        ['acceptanceReport', 'structured_output', 'outputSchema', 'SIBLING'],
+        (token) => `agents/coder.md still carries the old contract wording: ${token}`
+      )
+    );
     if (!coderNorm.includes('No handwritten reports')) {
       problems.push('agents/coder.md is missing the "No handwritten reports" clause');
     }
@@ -456,10 +484,14 @@ function checkBriefsNoReportDuties(skillText, coderAgentText) {
 }
 
 // —— 断锚 5：每条机械报告 gate 命令都带 --base 与 --test-command。
-// 只收以 node <this-package>/scripts/mechanical-report.js 起手的命令行——散文提及不算命令。
+// 只收以 node <this-package>/scripts/mechanical-report.js 起手的命令行——散文提及不算命令；
+// shell 续行（行尾反斜杠）先拼成逻辑行再判定，跨行命令不误报。
 function checkGateCommandFlags(skillText) {
-  const commands =
-    skillText.match(/node <this-package>\/scripts\/mechanical-report\.js[^\n]*/g) ?? [];
+  const logicalLines = skillText.replace(/\\\r?\n[ \t]*/g, ' ').split('\n');
+  const commands = [];
+  for (const line of logicalLines) {
+    commands.push(...(line.match(/node <this-package>\/scripts\/mechanical-report\.js[^\n]*/g) ?? []));
+  }
   if (commands.length === 0) {
     return [
       'SKILL.md carries no mechanical-report gate command (`node <this-package>/scripts/mechanical-report.js …`)',
@@ -467,11 +499,9 @@ function checkGateCommandFlags(skillText) {
   }
   const problems = [];
   for (const cmd of commands) {
-    for (const flag of ['--base', '--test-command']) {
-      if (!cmd.includes(flag)) {
-        problems.push(`SKILL.md gate command is missing ${flag}: ${cmd.trim()}`);
-      }
-    }
+    problems.push(
+      ...missingAnchors(cmd, ['--base', '--test-command'], (flag) => `SKILL.md gate command is missing ${flag}: ${cmd.trim()}`)
+    );
   }
   return problems;
 }
@@ -481,19 +511,17 @@ function checkHardRulesRetained(skillText) {
   const section = sectionBetween(skillText, '## Hard rules', null);
   if (section === null) return ['SKILL.md is missing the "## Hard rules" section'];
   const normalized = normalizeWhitespace(section);
-  const problems = [];
-  for (const anchor of [
-    'ticket-NN',
-    'Fix budget then escalate',
-    'blocked',
-    'approved',
-    'Never hand-write or edit the ledger or the event stream',
-  ]) {
-    if (!normalized.includes(anchor)) {
-      problems.push(`SKILL.md hard rules lost an existing clause: ${anchor}`);
-    }
-  }
-  return problems;
+  return missingAnchors(
+    normalized,
+    [
+      'ticket-NN',
+      'Fix budget then escalate',
+      'blocked',
+      'approved',
+      'Never hand-write or edit the ledger or the event stream',
+    ],
+    (anchor) => `SKILL.md hard rules lost an existing clause: ${anchor}`
+  );
 }
 
 // —— 断锚 7：无隔离修复者（集成修复者 / 终审修复者）挂纯判定 gate

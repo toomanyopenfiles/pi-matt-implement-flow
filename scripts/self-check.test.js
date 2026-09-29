@@ -295,7 +295,7 @@ test('breakage simulation: the environment-survey step going missing is flagged'
 
 const skillText = readText(PKG_ROOT, 'SKILL.md');
 const coderAgentText = readText(PKG_ROOT, 'agents/coder.md');
-const { REPORT_SCHEMA, FIELD_TABLE } = require('./mechanical-report.js');
+const { REPORT_CONTRACT } = require('./mechanical-report.js');
 
 test('anchor-1: coder dispatch carries a typed gate (command/output-json/schema/timeoutMs), no acceptance object or outputSchema', () => {
   assert.deepEqual(checkCoderDispatchTypedGate(skillText), []);
@@ -303,7 +303,7 @@ test('anchor-1: coder dispatch carries a typed gate (command/output-json/schema/
 
 test('anchor-2: dispatch schema copy is verbatim-identical to the ticket-01 source (module export cross-check)', () => {
   assert.deepEqual(
-    checkDispatchSchemaMatchesSource(skillText, { fields: FIELD_TABLE, schema: REPORT_SCHEMA }),
+    checkDispatchSchemaMatchesSource(skillText, REPORT_CONTRACT),
     []
   );
 });
@@ -332,6 +332,36 @@ test('anchor-8: the fifth no-isolation brief exists with zero report duties', ()
   assert.deepEqual(checkNoIsolationBriefs(skillText), []);
 });
 
+test('breakage simulation: a dispatch block with unbalanced JS (stray timeoutMs/brace) is flagged (anchor-1)', () => {
+  const brokenTail =
+    '### Each round\n```js\n' +
+    'const results = await runs.all([\n' +
+    '  {\n' +
+    '    key: "t-01",\n' +
+    '    gate: {\n' +
+    '      command: "node <this-package>/scripts/mechanical-report.js --base <b> --test-command \\"npm test\\"",\n' +
+    '      output: "json",\n' +
+    '      schema: {\n' +
+    '        type: "object",\n' +
+    '        required: ["headSha", "testResult", "changedFiles", "validationOutput"],\n' +
+    '        properties: {},\n' +
+    '        additionalProperties: false\n' +
+    '      },\n' +
+    '      timeoutMs: 600000\n' +
+    '    }\n' +
+    '      timeoutMs: 600000\n' +
+    '    }\n' +
+    '  }\n' +
+    ']);\n' +
+    'return results;\n```\n' +
+    '### Verify\n';
+  const problems = checkCoderDispatchTypedGate(brokenTail);
+  assert.ok(
+    problems.some((p) => p.includes('parseable')),
+    `expected a parseable-JS problem, got: ${JSON.stringify(problems)}`
+  );
+});
+
 test('breakage simulation: the old acceptance-object dispatch shape is flagged (anchor-1)', () => {
   const oldDispatch =
     '### Each round\n```js\n' +
@@ -346,17 +376,14 @@ test('breakage simulation: the old acceptance-object dispatch shape is flagged (
 });
 
 test('breakage simulation: a drifted schema copy is flagged (anchor-2)', () => {
-  const driftedSchema = { ...REPORT_SCHEMA, required: ['headSha', 'testResult', 'changedFiles'] };
+  const driftedSchema = { ...REPORT_CONTRACT.schema, required: ['headSha', 'testResult', 'changedFiles'] };
   const fixture = '### Each round\n```json\n' + JSON.stringify(driftedSchema, null, 2) + '\n```\n';
-  const problems = checkDispatchSchemaMatchesSource(fixture, { fields: FIELD_TABLE, schema: REPORT_SCHEMA });
+  const problems = checkDispatchSchemaMatchesSource(fixture, REPORT_CONTRACT);
   assert.ok(problems.some((p) => p.includes('drifted') || p.includes('required list')));
 });
 
 test('breakage simulation: a missing schema copy is flagged (anchor-2)', () => {
-  const problems = checkDispatchSchemaMatchesSource('### Each round\nno fences here\n', {
-    fields: FIELD_TABLE,
-    schema: REPORT_SCHEMA,
-  });
+  const problems = checkDispatchSchemaMatchesSource('### Each round\nno fences here\n', REPORT_CONTRACT);
   assert.equal(problems.length, 1);
   assert.match(problems[0], /no fenced ```json schema copy/);
 });
@@ -383,6 +410,14 @@ test('breakage simulation: a returning ## Acceptance Contract brief section is f
 test('breakage simulation: a coder agent re-adding SIBLING-keys wording is flagged (anchor-4)', () => {
   const problems = checkBriefsNoReportDuties(skillText, 'acceptanceReport is a SIBLING of value.\nNo handwritten reports.\n');
   assert.ok(problems.some((p) => p.includes('agents/coder.md')));
+});
+
+test('gate 命令跨行续行时两旗标仍被识别，不误报缺旗标（anchor-5 折行归一化）', () => {
+  const continued =
+    'run the gate:\n' +
+    'node <this-package>/scripts/mechanical-report.js \\\n' +
+    '  --base <baseCommit> --test-command "npm test"\n';
+  assert.deepEqual(checkGateCommandFlags(continued), []);
 });
 
 test('breakage simulation: a gate command losing --base is flagged (anchor-5)', () => {

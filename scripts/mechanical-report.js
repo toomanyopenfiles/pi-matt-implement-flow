@@ -9,8 +9,8 @@
 //   node mechanical-report.js --base <票基点> --test-command "<命令>"
 //   node mechanical-report.js --print-schema
 //
-// 退出码：0 = gate 通过（stdout 为单个 4 字段 JSON）；1 = gate 拒绝（五条件见下，
-// stdout 为拒绝原因）；2 = 用法错误。
+// 退出码：0 = gate 通过（stdout 为单个 4 字段 JSON）；非零 = gate 拒绝（五条件见下，
+// stdout 为拒绝原因；用法错误同样非零，无独立判死码）。
 // 非零退出五条件：① 测试命令非零或超时 ② 测试输出为空 ③ 存在 staged 或未提交改动
 // ④ 相对 base 无任何改动 ⑤ git 事实提取失败。不判死：无测试文件变更；超 12k 截断打标记。
 //
@@ -43,17 +43,17 @@ const TRUNCATION_NOTE = '[truncated: 超 12000 字符上限]';
 // stdout 经 console.log 落盘，恒多一个换行：JSON 本体按 11999 预算。
 const STDOUT_BUDGET = MAX_REPORT_CHARS - 1;
 
-// 测试命令超时（与派发 timeoutMs: 600000 同口径；运维旋钮，供长/短套件调参）。
-const DEFAULT_TEST_TIMEOUT_MS = 600000;
+// 测试命令超时与派发 timeoutMs: 600000 同口径（固定值，无环境旋钮）。
+const TEST_TIMEOUT_MS = 600000;
 const TEST_OUTPUT_MAX_BUFFER = 10 * 1024 * 1024;
 
-const USAGE = `mechanical-report.js — typed gate 机械产报告（stdout 即报告，退出码即判定）
-
-用法:
-  node mechanical-report.js --base <票基点> --test-command "<命令>"
-  node mechanical-report.js --print-schema`;
-
 const out = (...lines) => console.log(lines.join('\n'));
+
+// gate 拒绝出口（措辞各异、形状同一，收拢一处）。
+const refuse = (msg) => {
+  out(msg);
+  return 1;
+};
 
 function git(args) {
   const r = spawnSync('git', args, { encoding: 'utf8' });
@@ -76,8 +76,6 @@ function parseArgs(argv) {
       opts[a === '--base' ? 'base' : 'testCommand'] = v;
     } else if (a === '--print-schema') {
       opts.printSchema = true;
-    } else if (a === '--help' || a === '-h') {
-      opts.help = true;
     } else if (a.startsWith('--')) {
       return { error: `未知旗标 ${a}（用法：mechanical-report.js --base <票基点> --test-command "<命令>"）` };
     } else {
@@ -118,61 +116,35 @@ function fitBudget(report) {
   return s;
 }
 
-function testTimeoutMs() {
-  const raw = process.env.MECHANICAL_REPORT_TIMEOUT_MS;
-  if (raw === undefined || raw === '') return DEFAULT_TEST_TIMEOUT_MS;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_TEST_TIMEOUT_MS;
-}
-
 function main(argv) {
   const parsed = parseArgs(argv);
-  if (parsed.error) {
-    out(parsed.error);
-    return 2;
-  }
+  if (parsed.error) return refuse(parsed.error);
   const opts = parsed.opts;
-  if (opts.help) {
-    out(USAGE);
-    return 0;
-  }
   if (opts.printSchema) {
     out(JSON.stringify({ fields: FIELD_TABLE, schema: REPORT_SCHEMA }, null, 2));
     return 0;
   }
   if (!opts.base) {
-    out('缺少必选参数 --base（用法：mechanical-report.js --base <票基点> --test-command "<命令>"）');
-    return 2;
+    return refuse('缺少必选参数 --base（用法：mechanical-report.js --base <票基点> --test-command "<命令>"）');
   }
   if (!opts.testCommand) {
-    out('缺少必选参数 --test-command（用法：mechanical-report.js --base <票基点> --test-command "<命令>"）');
-    return 2;
+    return refuse('缺少必选参数 --test-command（用法：mechanical-report.js --base <票基点> --test-command "<命令>"）');
   }
 
   // ⑤ git 事实提取失败 → 非零（先取事实：HEAD / 脏检查 / 变更清单）。
   const head = git(['rev-parse', 'HEAD']);
-  if (!head.ok) {
-    out(`gate 拒绝：git 事实提取失败（${head.detail}）`);
-    return 1;
-  }
+  if (!head.ok) return refuse(`gate 拒绝：git 事实提取失败（${head.detail}）`);
   const headSha = head.stdout.trim();
 
   const status = git(['status', '--porcelain']);
-  if (!status.ok) {
-    out(`gate 拒绝：git 事实提取失败（${status.detail}）`);
-    return 1;
-  }
+  if (!status.ok) return refuse(`gate 拒绝：git 事实提取失败（${status.detail}）`);
   // ③ 存在 staged 或未提交改动 → 非零。
   if (status.stdout.trim() !== '') {
-    out('gate 拒绝：存在 staged 或未提交改动（工作区不干净），先提交再跑 gate');
-    return 1;
+    return refuse('gate 拒绝：存在 staged 或未提交改动（工作区不干净），先提交再跑 gate');
   }
 
   const diff = git(['diff', '--name-only', `${opts.base}...HEAD`]);
-  if (!diff.ok) {
-    out(`gate 拒绝：git 事实提取失败（${diff.detail}）`);
-    return 1;
-  }
+  if (!diff.ok) return refuse(`gate 拒绝：git 事实提取失败（${diff.detail}）`);
   const changedFiles = diff.stdout.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l !== '');
   // ④ 相对 base 无任何改动 → 非零。
   if (changedFiles.length === 0) {
@@ -181,36 +153,30 @@ function main(argv) {
   }
 
   // 实跑测试命令（不透明透传，shell 执行）。
-  const timeout = testTimeoutMs();
   const t = spawnSync(opts.testCommand, {
     shell: true,
     encoding: 'utf8',
-    timeout,
+    timeout: TEST_TIMEOUT_MS,
     maxBuffer: TEST_OUTPUT_MAX_BUFFER,
   });
   // ① 测试命令超时 → 非零。
   if (t.error && t.error.code === 'ETIMEDOUT') {
-    out(`gate 拒绝：测试命令超时（${timeout}ms）：${opts.testCommand}`);
-    return 1;
+    return refuse(`gate 拒绝：测试命令超时（${TEST_TIMEOUT_MS}ms）：${opts.testCommand}`);
   }
   if (t.error) {
-    out(`gate 拒绝：测试命令执行失败（${t.error.message}）：${opts.testCommand}`);
-    return 1;
+    return refuse(`gate 拒绝：测试命令执行失败（${t.error.message}）：${opts.testCommand}`);
   }
   // ① 测试命令非零 → 非零。
   if (t.status !== 0) {
-    out(`gate 拒绝：测试命令退出码非零（${oneLine(opts.testCommand)} — exit ${t.status}）`);
-    return 1;
+    return refuse(`gate 拒绝：测试命令退出码非零（${oneLine(opts.testCommand)} — exit ${t.status}）`);
   }
 
-  // stdout + stderr 合并为测试输出（行本身 verbatim，仅统一换行）。
-  const combined = `${t.stdout ?? ''}${t.stderr ?? ''}`;
+  // stdout + stderr 按流边界合流为测试输出（行本身 verbatim，仅统一换行；
+  // 空流不占位；直接拼接会在 stdout 无结尾换行时把两流相邻行黏成假行）。
+  const combined = [t.stdout ?? '', t.stderr ?? ''].filter((s) => s !== '').join('\n');
   const lines = combined.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim() !== '');
   // ② 测试输出为空 → 非零。
-  if (lines.length === 0) {
-    out('gate 拒绝：测试输出为空（无非空输出行）');
-    return 1;
-  }
+  if (lines.length === 0) return refuse('gate 拒绝：测试输出为空（无非空输出行）');
 
   const lastLine = lines[lines.length - 1];
   const report = {
@@ -229,7 +195,7 @@ module.exports = {
   REPORT_CONTRACT: { fields: FIELD_TABLE, schema: REPORT_SCHEMA },
   MAX_REPORT_CHARS,
   TRUNCATION_NOTE,
-  DEFAULT_TEST_TIMEOUT_MS,
+  DEFAULT_TEST_TIMEOUT_MS: TEST_TIMEOUT_MS,
 };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));
