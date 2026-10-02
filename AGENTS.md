@@ -9,7 +9,7 @@ pi 的 implement 阶段编排器：读 spec + 票 → 算前沿 → 并行派 co
 
 ### Issue tracker
 
-Issues and specs live as markdown files under `.scratch/<feature-slug>/`.
+Issues and specs live in this repo's GitHub Issues (via the `gh` CLI).
 See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
