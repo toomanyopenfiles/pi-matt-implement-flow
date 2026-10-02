@@ -1,0 +1,41 @@
+name: Feature Request
+description: Suggest an enhancement or new capability for pi-matt-implement-flow.
+title: "[Enhancement]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest an improvement!
+        This package deliberately implements only the implementation stage of
+        [mattpocock/skills](https://github.com/mattpocock/skills)' flow — feature requests
+        that belong upstream (grill / to-spec / to-tickets) are best filed there.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What are you trying to do? What gets in the way today?
+      placeholder: "When running the flow on ..., I cannot ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the package do instead? Concrete behavior beats abstract goals.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or other designs you considered and rejected.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true

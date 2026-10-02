@@ -1,0 +1,74 @@
+name: Bug Report
+description: Report something that isn't working in pi-matt-implement-flow.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! The more precise the reproduction, the faster it gets fixed.
+        Please report security vulnerabilities privately via [SECURITY.md](https://github.com/toomanyopenfiles/pi-matt-implement-flow/blob/main/SECURITY.md), not here.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: pi-matt-implement-flow version
+      description: The `version` field in this package's `package.json`, or the git commit if you run from source.
+      placeholder: "0.3.0"
+    validations:
+      required: true
+  - type: input
+    id: pi-version
+    attributes:
+      label: pi and pi-subagents versions
+      description: Output of `pi --version`, and the pi-subagents package version if known.
+      placeholder: "pi 0.x, pi-subagents 0.x"
+    validations:
+      required: false
+  - type: dropdown
+    id: tracker
+    attributes:
+      label: Issue tracker type of the target repo
+      description: The tracker the TARGET repo (the one the flow was driving) declares in its own `docs/agents/issue-tracker.md` when the bug appeared — this package drives any of the three.
+      options:
+        - GitHub
+        - GitLab
+        - Local markdown
+        - Not sure / not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Also tell us what you expected to happen instead.
+      placeholder: "The dispatch failed with ... I expected ..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, starting from the command you ran. If the bug needs a specific run state, describe it.
+      placeholder: |
+        1. Run `/pi-matt-implement-flow` with ...
+        2. ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Error messages, and if available the tail of `.pi/matt-implement/<slug>/events.jsonl` or the run's notes. Redact anything sensitive.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true
+        - label: I ran the full test suite (`npm test`) and this is not a pre-existing failure
+          required: false
