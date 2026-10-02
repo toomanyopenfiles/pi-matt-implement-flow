@@ -12,13 +12,13 @@ English | [简体中文](./README.zh-CN.md)
 
 1. **Parallel by dependency, no context to fight over** — each ticket gets its own throwaway worktree and a fresh context; independent tickets run in parallel, blocked ones start automatically once their prerequisites close.
 2. **Throwaway workspaces managed for you** — temp worktrees and branches are created when needed and reclaimed when a ticket ends; nothing to maintain by hand.
-3. **Reviewed as soon as it is written, fixed until it passes** — each ticket gets a two-axis review (repo standards + against the spec) right after coding; failures go back for fixes, then it is reviewed again.
+3. **Reviewed as soon as it is written, fixed until it passes** — each ticket gets a two-axis review right after coding — the repo's coding standards and the spec — and failures go back for fixes until it passes.
 4. **Coding and review are separate roles, configured separately** — coder and reviewer are independent agents; each role can have its own model and thinking level.
 5. **The full suite runs on every merge** — each ticket merged into the feature branch immediately triggers the project's full test suite, so integration problems surface on the ticket that caused them instead of piling up at the end.
 6. **A whole-branch final review** — after the last ticket merges, the entire feature branch is reviewed once more for what single-ticket reviews cannot see: cross-file drift, components contradicting each other, spec requirements no ticket implemented, docs that no longer match the code.
 7. **Interrupted runs resume** — a run's progress is recorded in a local run directory inside your repo; after an interruption or context compaction it continues from the recorded state, not from memory.
-8. **Stuck tickets never block the rest** — a ticket that exhausts its fix budget is handed to you when the run ends; everything else keeps moving. When the tracker contract declares a closing surface, the run opens a draft PR or MR at the start and marks it ready for review at the end; without one (local markdown), the feature branch itself is the deliverable.
-9. **Trackers on contracts: three first-class presets** — the run reads its tracker from the `/setup-matt-pocock-skills` artifacts (`docs/agents/issue-tracker.md` + `triage-labels.md`), identifies the upstream template, and loads the matching contract preset: local markdown, GitHub Issues, or GitLab Issues. With a remote tracker the flow keeps local-markdown strength: the spec and every ticket are pulled into a local tracker snapshot at init, so dispatch, review, ledger, and reconciliation all read and write local paths; the spec issue is claimed up front so two sessions cannot silently race the same feature; and all tracker progress lands in one idempotent sync before the run seals. Labels map through the repo's own vocabulary (`triage-labels.md`), so renamed labels never fool the seal gate. Local markdown runs behave exactly as before.
+8. **Stuck tickets never block the rest** — a ticket that exhausts its fix budget is handed to you when the run ends; everything else keeps moving. With GitHub or GitLab the run opens a draft PR or MR at the start and marks it ready for review at the end; with local markdown the feature branch itself is the deliverable.
+9. **Three trackers, first-class** — local markdown, GitHub Issues, or GitLab Issues: the run picks up whichever tracker `/setup-matt-pocock-skills` set up in your repo. With GitHub or GitLab your tickets are updated automatically at the end — merged tickets closed and linked to their commits, escalations commented and left open — two sessions can never silently start the same feature, and renamed labels are still recognized.
 
 ## Requirements
 
@@ -27,20 +27,22 @@ English | [简体中文](./README.zh-CN.md)
 
 This package does not replace the upstream flow — it only takes over the implementation stage.
 
-- Remote trackers also need the host CLI the tracker contract declares: `gh` for GitHub, `glab` for GitLab (installed and signed in to the target host). Local markdown needs no CLI.
+- Remote trackers also need the host CLI for that tracker: `gh` for GitHub, `glab` for GitLab (installed and signed in to the target host). Local markdown needs no CLI.
+
+Before every run, check three things: a clean worktree, at least one commit in the repo, and a full-suite test command that runs.
 
 ## Tracker support
 
-The tracker is not a flag — it comes from the target repo's setup artifacts: `docs/agents/issue-tracker.md` plus the `triage-labels.md` beside it, both written by `/setup-matt-pocock-skills`. At every tracker-touching command the script identifies the upstream template (H1 heading + anchor phrases; user-edited prose is tolerated) and loads the matching contract preset.
+Where your tickets live is not a flag — it comes from the two setup files `/setup-matt-pocock-skills` wrote into your repo: `docs/agents/issue-tracker.md` plus the `triage-labels.md` beside it. The run identifies your tracker from them automatically (edited wording in the files is fine).
 
-| Tracker | Status | Closing surface | Notes |
+| Tracker | Status | PR / MR | Notes |
 | --- | --- | --- | --- |
-| Local markdown (`.scratch/<feature>/`) | first-class | none | ticket files are the truth — snapshot, claim, and sync are no-ops (explicitly refused, behavior unchanged) |
-| GitHub Issues | first-class | PR | snapshot + pre-seal sync, sub-issues and native block edges |
-| GitLab Issues | first-class | MR | snapshot + pre-seal sync, no sub-issues (parent back-reference + init-list fallback), comment goes before close, self-hosted identified by the `/-/issues/N` path shape |
-| Anything else | explicitly unsupported | — | not guessed, not degraded — see the refusal semantics below |
+| Local markdown (`.scratch/<feature>/`) | first-class | none | your ticket files stay the single source of truth — nothing is synced either way |
+| GitHub Issues | first-class | PR | your issues are updated automatically at the end (merged tickets closed with their commit linked); ticket dependencies expressed via sub-issues |
+| GitLab Issues | first-class | MR | your issues are updated automatically at the end (a note is posted before a ticket closes); ticket dependencies without sub-issues; self-hosted GitLab works too |
+| Anything else | explicitly unsupported | — | not guessed, not degraded — the run stops with a clear error, see below |
 
-Identification failures are explicit stops, never a guess or a degradation: **artifacts missing** → run `/setup-matt-pocock-skills`; **template unrecognized** → the script refuses with `仅支持 local / github / gitlab 三种` (only these three templates are supported).
+When the setup is missing or does not look like one of the three, the run stops with a clear error instead of guessing: **setup files missing** → run `/setup-matt-pocock-skills` in your repo; **tracker not recognized** → the run refuses with `仅支持 local / github / gitlab 三种` (only these three are supported).
 
 ## Install
 
@@ -67,8 +69,6 @@ npm test
    /to-tickets
    ```
 
-   Before starting, check three things: a clean worktree, at least one commit, and a full-suite test command that runs.
-
 3. **Run**:
 
    ```
@@ -76,6 +76,15 @@ npm test
    ```
 
    `N` is the number of parallel coders; the command-line value overrides the configured default (see [Configuration](#configuration)). Most tickets finish on their own; anything that cannot be auto-fixed or needs your call is collected and reported when the run ends.
+
+### What you get
+
+When the run finishes, you have:
+
+- a merged **feature branch** — every accepted ticket's changes on it, with the full test suite green;
+- with GitHub / GitLab: a **draft PR / MR marked ready for review**, and your tracker tickets updated (see [Tracker support](#tracker-support));
+- a **run directory** `.pi/matt-implement/<feature>/` (see [Run directory](#run-directory)): a human-readable progress ledger (`ledger.md`), notes (`notes.md`), and the record of any tickets handed to you (also in the end-of-run summary);
+- optionally, a browsable [audit report](#audit-report) of the whole run.
 
 ## How it works
 
@@ -86,8 +95,8 @@ A run has four roles. The last three take a model and thinking level (see [Confi
 | Role | Does | Doesn't |
 | --- | --- | --- |
 | **Main agent** (the skill running in your current session) | Reads the spec and ticket graph, dispatches by dependency, merges, runs the full suite, decides what comes next | Never writes feature code |
-| **coder** | Implements one ticket in its own worktree — a test-first vertical slice — commits everything, reports verifiable results | Never touches ticket status, merges, or pushes |
-| **reviewer** | Read-only review of that one ticket: repo standards + the spec / ticket requirements | No code changes, no test runs (the flow's test gate already covered that) |
+| **coder** | Implements one ticket in its own worktree (tests first, then the implementation), commits everything, reports verifiable results | Never touches ticket status, merges, or pushes |
+| **reviewer** | Read-only review of that one ticket: repo standards + the spec / ticket requirements | No code changes, no test runs (tests already ran at the gate) |
 | **final-reviewer** | After everything merges, reviews the whole feature branch — including what only cross-ticket eyes can see | Also read-only, no code changes |
 
 ### The flow
@@ -97,7 +106,7 @@ A run has four roles. The last three take a model and thinking level (see [Confi
 3. When a coder finishes: the ticket's gate tests run → (if per-ticket review is on) the reviewer does a two-axis review → failures go back to the same coder, until it passes or hits the fix cap.
 4. Merge into the feature branch and immediately run the full suite; if it is red, fix the integration problem on the feature branch.
 5. Recompute the next batch of doable tickets and repeat 2–4 until everything is done or handed to you.
-6. The final-reviewer reviews the whole branch; when the contract declares a closing surface (a PR or an MR), the draft opened at the start is marked ready for review.
+6. The final-reviewer reviews the whole branch; with GitHub or GitLab, the draft PR / MR opened at the start is marked ready for review.
 
 ```mermaid
 flowchart TD
@@ -107,7 +116,7 @@ flowchart TD
     D --> E{"Tickets left?"}
     E -- yes --> B
     E -- no --> F["Whole-branch final review"]
-    F --> G["Closing surface ready"]
+    F --> G["Draft PR / MR ready"]
 ```
 
 Tickets that exhaust their fix budget land on a hand-off list for you at the end — they do not hold up the rest.
@@ -116,7 +125,7 @@ Tickets that exhaust their fix budget land on a hand-off list for you at the end
 
 ### Changing settings
 
-The built-in interactive wizard (no LLM in the loop):
+The built-in interactive wizard — instant, no model calls:
 
 ```
 /matt-flow-config        # pick a role → pick model / thinking level, or edit flow options
@@ -164,7 +173,7 @@ A typical split: a strong model for `coder`; reviewers on a cheaper (or differen
 
 1. `N` in `/pi-matt-implement-flow [N]` overrides concurrency only — not the review switch or the fix cap.
 2. Project settings override user settings field by field, not as a whole block.
-3. Flow options are read and frozen at run start; changing settings mid-run never affects the running one.
+3. Changing settings mid-run never affects a run already in progress.
 
 ## Run directory
 
@@ -177,7 +186,7 @@ Every run writes a local run directory, `.pi/matt-implement/<feature>/`:
   notes.md           # process notes and decisions worth remembering (for you)
   reviews/           # diffs used by each review round
   findings/          # review findings, plus post-merge full-suite failures
-  tracker/           # tracker snapshot: spec + tickets pulled from a GitHub / GitLab tracker (remote runs only)
+  tracker/           # local copy of your remote spec + tickets (GitHub / GitLab runs only)
 ```
 
 - The path is gitignored and never enters version control. This is run data, not a cache — do not delete it while a run is active or might be resumed.
@@ -186,7 +195,27 @@ Every run writes a local run directory, `.pi/matt-implement/<feature>/`:
 
 ## Audit report
 
-Audit a finished run after the fact: [`audit-report/`](./audit-report/README.md) turns the run directory into a browsable static report site — zero LLM calls, the main flow untouched. It ships with the npm package: `node <install-dir>/audit-report/report.js --runtime-dir <repo>/.pi/matt-implement/<feature>` (with `pi install`, `<install-dir>` is `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`).
+Audit a finished run after the fact: [`audit-report/`](./audit-report/README.md) turns the run directory into a browsable static report site — no LLM calls, and it never changes your run data. It ships with the npm package: `node <install-dir>/audit-report/report.js --runtime-dir <repo>/.pi/matt-implement/<feature>` (with `pi install`, `<install-dir>` is `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`).
+
+## FAQ & troubleshooting
+
+**The run complains about `docs/agents/issue-tracker.md` / tells me to run `/setup-matt-pocock-skills`?**
+The one-time setup is missing — run `/setup-matt-pocock-skills` once in your repo.
+
+**It refuses with `仅支持 local / github / gitlab 三种`?**
+Your tracker setup file is not one of the three supported templates. Regenerate it with
+`/setup-matt-pocock-skills`, or switch to local markdown / GitHub / GitLab.
+
+**Where did the tickets that could not be auto-fixed go?**
+They are listed in the end-of-run summary and recorded in `ledger.md` — nothing is lost. The
+remaining work needs your call or your hands.
+
+**The run was interrupted (or my context was compacted). Do I start over?**
+No — run the same command again and it continues from the recorded state (see [Run directory](#run-directory)).
+
+**What exactly did the run do, and are there hidden problems?**
+Generate an [audit report](#audit-report): a browsable, per-ticket account of the whole run, with
+an "anomalies & risks" section found by rules.
 
 ## Contributing
 

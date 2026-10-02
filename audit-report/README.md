@@ -1,33 +1,32 @@
-# audit-report — flow audit report (side-channel forensics)
+# audit-report — post-run audit report
 
 English | [简体中文](./README.zh-CN.md)
 
-Purely local, side-channel forensics over one finished pi-matt-implement-flow run, producing a
-browsable static report site for human auditors to check how the whole flow executed and to
-surface latent problems.
+A purely local audit tool for one finished pi-matt-implement-flow run: it turns the run into a
+browsable static report site, so you can check how the whole run went and surface latent problems.
 
-- **Zero LLM calls**: everything is collected mechanically from the event stream, the platform's
-  retained subagent evidence, the main session, and git facts.
-- **Bilingual output**: `--lang zh|en` picks the language of the report site and every output —
-  page chrome, deterministic risk texts, forensics warnings, timeline narration, glossary
-  definitions, analysis brief, CLI (default `zh`). Facts and evidence are language-independent.
-- **Zero main-flow intrusion**: SKILL.md / the ledger scripts / the agents are untouched, and
-  main-flow files and the target repo's source are read-only. The report is written to `report/`
-  under the run directory by default (the run directory as a whole is gitignored, so git status
-  stays clean); to leave the target repo completely untouched, point `--out` outside it. This
-  directory ships with the npm package (inside the `package.json` `files` allowlist), so npm
-  users can audit their runs too; the test files stay out of the tarball.
-- **Facts and opinions are layered**: the report body is deterministic fact (every item traces
-  back to its source); AI analysis is an explicit two-step backfill flow (below), rendered and
-  labelled as non-fact.
-- **By-products**: the report directory also gets `model.json` (intermediate forensics model, for
-  debugging and secondary analysis) and `analysis-brief.md` (only with `--ai-brief`). Both are
-  products of this tool, not files of the target repo.
+**When to use it**: double-check a run's quality before you merge; find where things went wrong
+after the fact; keep an auditable record of what happened.
+
+- **No LLM calls** — everything is collected automatically from the run's local records and git
+  history.
+- **Bilingual output** — `--lang zh|en` picks the language of the whole report site and every
+  output: page text, risk descriptions, warnings, timeline narration, glossary, analysis brief,
+  CLI (default `zh`). Facts and evidence are the same in either language.
+- **Your repo stays untouched** — the tool only reads; your run data and source code are never
+  modified. The report is written to `report/` inside the run directory by default (already
+  gitignored, so `git status` stays clean); use `--out` to write it elsewhere and leave the target
+  repo completely untouched.
+- **Facts and opinions are kept apart** — the report body is fact: every item traces back to its
+  source. AI analysis is optional (see below) and rendered in a separate section marked as
+  non-fact.
+- **Extra files you can ignore** — the report directory also gets a `model.json`, and with
+  `--ai-brief` an `analysis-brief.md`. Both are by-products of this tool, not files of your repo.
 
 ## Usage
 
 ```bash
-# Minimal: report on one run (output to <run dir>/report/, open index.html in a browser)
+# Minimal: report on one run (output to <run dir>/report/)
 node audit-report/report.js --runtime-dir <repo>/.pi/matt-implement/<slug>
 
 # Output elsewhere (e.g. outside the repo, leaving the target repo completely untouched)
@@ -39,90 +38,73 @@ node audit-report/report.js --runtime-dir <...> --lang en
 # Export an AI analysis brief (optional, see below)
 node audit-report/report.js --runtime-dir <...> --ai-brief
 
-# Re-render with an already backfilled AI analysis
+# Re-render with an already filled-in AI analysis
 # (optional; not needed when the file sits in the report directory)
 node audit-report/report.js --runtime-dir <...> --ai-analysis <analysis>.json
 ```
+
+When it finishes, open `report/index.html` in a browser.
 
 ## What the report contains
 
 | Page | Contents |
 |---|---|
-| `index.html` | Run overview (branch / spec / flow shape / test gate / PR / seal), run stats, the **anomalies & risks** section (deterministic findings), the ticket table, a narrated event timeline, usage & cost, glossary |
-| `ticket-NN.html` | The full evidence chain per ticket: ticket text → dispatch brief text → the implementer's structured report and acceptance details (including gate output) → review verdict with the full findings list → review diff → fix rounds → merge |
-| `final.html` | Final review (whole-branch) verdict and full text (with a `final` event the verdict is taken from the event), anomalies and escalations, sealing record (a note when unsealed), full orchestration notes |
+| `index.html` | Run overview (branch / spec / flow shape / test gate / PR / closing record), run stats, the **anomalies & risks** section (found by rules), the ticket table, a narrated event timeline, usage & cost, glossary |
+| `ticket-NN.html` | The full story of each ticket: the ticket text → what the implementer was asked to do → their report and acceptance details (including the test-gate output) → the review verdict with the full findings list → the review diff → fix rounds → merge |
+| `final.html` | The whole-branch final review: verdict and full text, anomalies and escalations, the closing record (with a note when the run never closed cleanly), and the orchestration notes |
 
-## Anomalies & risks (deterministic findings)
+If any source of evidence is missing, the affected pages say so; everything else still works.
 
-Every item is found mechanically by script and traces back to its source; nothing is model
-inference. The rules:
+## Anomalies & risks (found by rules, not by a model)
 
-- a subagent run that failed (non-zero exit code)
-- an acceptance that was rejected
+Every item is found mechanically by rule and traces back to its source — nothing is model
+inference. What gets flagged:
+
+- a worker run that failed
+- a rejected acceptance
 - an anomaly record
 - an escalation
-- the fix-round budget used up
-- the run not sealed
-- sealed with a wound: the latest final-review verdict at seal time was `not_ready`
-- platform-side evidence missing
-- a dispatch brief that could not be restored
-- 2+ rounds of `changes_requested` verdicts on the same ticket
+- a ticket that used up its fix-round budget
+- a run that never finished cleanly
+- a run closed with the final review still saying `not_ready`
+- missing evidence for a recorded run
+- a ticket's task text that could not be recovered
+- the same ticket marked `changes_requested` two or more rounds
 
-Items are sorted by severity (high / medium / low). Three presentation tags adjust how an item is
-shown, but **no risk item is ever deleted**:
+Items are sorted by severity (high / medium / low). Three tags adjust how an item is shown, but
+**no risk item is ever deleted**:
 
-- **"Recovered" downgrade (a factual exemption)**: a failed run or a rejected acceptance that has
-  a later successful settle (`settled`) on the same ticket is downgraded to medium and tagged
-  "recovered by a later run", with a link to the recovering run; never-recovered ones stay high.
-  The downgrade stops at medium — the work really was interrupted — and several incidents in a row
-  are never erased by one success: each stretch is judged on its own.
-- **"Corrected" tag**: an anomaly can carry a `refSeq` pointing at the record it corrects; when
-  the pointed-to record has been superseded by a later record of the same type on the same ticket,
-  the anomaly is downgraded to medium and tagged "corrected", and its derived evidence-missing
-  risk carries the "corrected" tag too. The correction basis is shown alongside, for human
-  re-check.
-- **Dead runRef detection**: a run reference whose runId is clearly not in the platform's run-id
-  shape is dead data from bookkeeping pollution — no platform evidence is probed for it, and it
-  takes no part in evidence-missing risk derivation; one `run-ref-dead` entry is left in the
-  forensics warnings for humans to check. The polluted dispatch event itself stays on the timeline
-  as recorded.
+- **"Recovered" downgrade** — a failure or rejection that a later success on the same ticket made
+  good is downgraded to medium and tagged "recovered by a later run", with a link to the run that
+  recovered it; ones that never recovered stay high. The downgrade stops at medium — the work
+  really was interrupted — and a streak of incidents is never erased by a single later success.
+- **"Corrected" tag** — when an anomaly record supersedes an earlier record it corrects, the
+  anomaly is downgraded to medium and tagged "corrected", and related missing-evidence risks carry
+  the tag too. The correction basis is shown alongside, for you to re-check.
+- **Invalid run references are ignored** — a run reference that is obviously not a real run id is
+  bookkeeping noise: it is skipped instead of surfacing as missing evidence, and listed in the
+  warnings for you to check.
 
-## AI analysis layer (optional, two-step backfill)
+## AI analysis layer (optional)
 
-Deterministic checks can only find modelled anomalies; semantic contradictions across evidence are
-worth one LLM analysis pass. To keep fact and opinion layered, an offline two-step flow is used
-instead of online calls:
+Rule-based checks only find known kinds of problems; semantic contradictions hiding across
+evidence are worth one LLM pass. The tool never calls a model itself — a two-step flow keeps facts
+and opinions apart:
 
-1. `--ai-brief` exports `analysis-brief.md` (a self-contained evidence brief, with the backfill
-   format instructions appended);
+1. `--ai-brief` exports `analysis-brief.md` — a self-contained evidence brief with the format
+   instructions for the analysis appended;
 2. hand the brief to a language model (or analyse it in a pi session), write `ai-analysis.json`
-   per the instructions and rerun this tool — an `ai-analysis.json` in the report directory is
-   picked up automatically; if the file lives elsewhere, pass it via `--ai-analysis <file>`.
+   following the instructions, and rerun this tool — a file in the report directory is picked up
+   automatically, or pass `--ai-analysis <file>` if it lives elsewhere.
 
-Opinions render into a separate "AI analysis" section explicitly marked as non-fact: they are for
-hinting at cross-evidence contradictions and unmodelled risks — verify them against the evidence,
-do not take them as fact.
+The opinions render into a separate "AI analysis" section explicitly marked as non-fact: they hint
+at cross-evidence contradictions and unmodelled risks — verify them against the evidence before
+believing them.
 
-## Tests
+## Troubleshooting
 
-```bash
-node --test audit-report/collect.test.js
-```
-
-Tests use synthetic fixtures (temp directories + fake session data, auto-cleaned) and depend on no
-real run data.
-
-## Data sources & correlation
-
-| Evidence | Location | Used for |
-|---|---|---|
-| Event stream | `<run dir>/events.jsonl` | timeline, ticket state machine, run ids |
-| `final` event | the `final` events in `<run dir>/events.jsonl` | the final-review run's runId and verdict: on the event-driven path the final-review list, cost bucket and findings text are all located from here (ledgers without a `final` event fall back to the directory scan below) |
-| Platform evidence (the four) | `~/.pi/agent/sessions/--<repo path>--/subagent-artifacts/<runId>_*` | structured output, acceptance record, gate output, process transcript |
-| Main session | `~/.pi/agent/sessions/--<repo path>--/*.jsonl` | restores each dispatch brief's original text (the input task in platform artifacts is placeholder text; the original only exists in the main session) |
-| Tickets & spec | `<repo>/.scratch/<slug>/` | ticket text and titles |
-| Review material | `<run dir>/reviews|findings/` | review input diffs and findings lists |
-| git | read-only queries | commit existence and subjects |
-
-Any missing layer degrades to a page annotation and a forensics warning; the rest of the evidence
-is unaffected.
+- **Some items say evidence is missing?** — a layer of evidence was not found (e.g. the pi session
+  records were cleaned up); the affected pages name what is missing, everything else is unaffected.
+- **Wrong language?** — rerun with `--lang zh|en`.
+- **Where is the report?** — in `report/` under the run directory by default, or wherever `--out`
+  points.

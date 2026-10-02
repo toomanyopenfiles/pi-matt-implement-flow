@@ -12,13 +12,13 @@
 
 1. **按依赖并行，互不抢上下文**——每张 ticket 用独立的临时 worktree 和干净上下文；没有依赖关系的 ticket 并行推进，有依赖的等前置完成后自动开跑。
 2. **临时工作区自动管理**——需要时创建临时 worktree 和临时分支，ticket 结束后自动收回，不用手工维护。
-3. **写完即审、有问题就改**——每张 ticket 编码完成后自动做双轴 review（代码规范 + 对照 spec），没过就交回修复，再审再过。
+3. **写完即审、有问题就改**——每张 ticket 编码完成后自动做双轴 review，审两个维度：是否符合仓库代码规范、是否符合 spec 需求；没过就交回修复，直到通过。
 4. **编码与审查分工，模型可分开配**——coder 和 reviewer 是独立 agent，可以给不同角色指定不同的模型和 thinking 档位。
 5. **合并即跑全量测试**——每张 ticket 合入 feature 分支后立刻跑项目全量测试，集成问题当场暴露、当场修，而不是堆到最后。
 6. **整分支 final review**——全部 ticket 合完后，对整条 feature 分支再审一次，专门看单张 ticket 看不见的问题：跨文件漂移、组件互相矛盾、spec 里有要求却没有 ticket 承接、文档和实现对不上。
 7. **中断可续跑**——一次 run 的进度记录在仓库本地的运行目录里；会话中断或上下文被压缩后，从已记录的状态继续，不用凭记忆重来。
-8. **修不完不卡全局**——单张 ticket 修复次数用尽后，在 run 结束时交给你处理，其余 ticket 继续走。契约声明了收尾面（PR 或 MR）时，run 开始会开一个 draft，全部完成后标为可审查；没有收尾面（local markdown）时，feature 分支本身就是交付物。
-9. **tracker 走契约：三种一等预设**——run 从 `/setup-matt-pocock-skills` 产物（`docs/agents/issue-tracker.md` + `triage-labels.md`）读取 tracker：脚本识别上游范本并加载对应契约预设——local markdown、GitHub Issues 或 GitLab Issues。远端 tracker 时流程强度与 local markdown 相同：run 在初始化阶段把 spec 与全部工单拉取为本地 tracker 快照，派发、评审、账本、对账全链路读写本地路径；spec issue 先占坑，两个会话无法悄悄抢跑同一 feature；全部 tracker 进度攒到封账前一次幂等同步推送。label 经 `triage-labels.md` 的自有词表映射，改名不会骗过封账门。local markdown 的 run 行为零变化。
+8. **修不完不卡全局**——单张 ticket 修复次数用尽后，在 run 结束时交给你处理，其余 ticket 继续走。用 GitHub / GitLab 时，run 开始会开一个 draft PR / MR，全部完成后标为可审查；用本地 markdown 时，feature 分支本身就是交付物。
+9. **三种工单管理方式，全都一等支持**——本地 markdown、GitHub Issues、GitLab Issues：run 会自动用 `/setup-matt-pocock-skills` 在你仓库里配好的那一种。用 GitHub / GitLab 时，跑完自动更新工单——合并的票自动关闭并关联提交，升级给你的票留评论、保持打开；两个会话不会悄悄开跑同一个功能；标签改过名也能正常识别。
 
 ## 环境要求
 
@@ -27,22 +27,22 @@
 
 本包不替代上游流程，只接手实现阶段。
 
-- 远端 tracker 还需要 tracker 契约声明的宿主 CLI：GitHub 用 `gh`，GitLab 用 `glab`（安装并登录目标站点）。local markdown 不需要任何 CLI。
+- 远端 tracker 还需要对应的宿主命令行工具：GitHub 用 `gh`，GitLab 用 `glab`（安装并登录目标站点）。本地 markdown 不需要任何命令行工具。
+
+每次开跑前请确认三件事：工作区干净、仓库至少有一个 commit、全量测试命令能跑通。
 
 ## tracker 支持
 
-tracker 不是旗标——它来自目标仓库的两份 setup 产物：`docs/agents/issue-tracker.md` 与其旁边的
-`triage-labels.md`，都由 `/setup-matt-pocock-skills` 落盘。每个触碰 tracker 的命令里，脚本
-按范本判型（H1 标题行 + 锚点短语；正文可被用户编辑）并加载对应契约预设。
+tracker 不是开关——它来自 `/setup-matt-pocock-skills` 写进仓库的两份配置文件：`docs/agents/issue-tracker.md` 与其旁边的 `triage-labels.md`。run 会据此自动识别你的工单方式（文件里的措辞改过也没关系）。
 
-| tracker | 支持度 | 收尾面 | 说明 |
+| tracker | 支持度 | PR / MR | 说明 |
 |---|---|---|---|
-| local markdown（`.scratch/<feature>/`） | 一等公民 | 无 | 票文件即真相——快照、占坑、同步均无操作（显式拒绝，行为不变） |
-| GitHub Issues | 一等公民 | PR | 快照 + 封账前同步，sub-issues 与原生阻塞边 |
-| GitLab Issues | 一等公民 | MR | 快照 + 封账前同步，无 sub-issues（Parent 反查 + init 清单兜底），先留评后关票，自建实例按 `/-/issues/N` 路径形态识别 |
-| 其他 tracker | 显式不支持 | — | 不猜测、不降级——见下方识别失败语义 |
+| local markdown（`.scratch/<feature>/`） | 一等公民 | 无 | 票文件就是唯一真相——不做任何同步 |
+| GitHub Issues | 一等公民 | PR | 跑完自动更新工单（合并的票自动关闭并关联提交）；用 sub-issues 表达依赖 |
+| GitLab Issues | 一等公民 | MR | 跑完自动更新工单（关票前先留一条评论）；不用 sub-issues 也能表达依赖；自建 GitLab 也支持 |
+| 其他 tracker | 显式不支持 | — | 不猜测、不降级——run 会明确报错停下，见下 |
 
-识别失败都是显式停机，不是猜测或降级：**缺产物** → 运行 `/setup-matt-pocock-skills`；**范本认不出** → 脚本拒绝并报 `仅支持 local / github / gitlab 三种`（只支持这三种范本）。
+配置缺失或认不出时，run 会明确报错停下，绝不猜测乱跑：**缺 setup 文件** → 在仓库里运行 `/setup-matt-pocock-skills`；**认不出工单方式** → 直接拒绝并报 `仅支持 local / github / gitlab 三种`（只支持这三种）。
 
 ## 安装
 
@@ -69,8 +69,6 @@ npm test
    /to-tickets
    ```
 
-   开跑前确认三件事：工作区干净、仓库至少有一个 commit、全量测试命令能跑通。
-
 3. **运行**：
 
    ```
@@ -78,6 +76,15 @@ npm test
    ```
 
    `N` 是并行 coder 数量，命令行取值覆盖配置里的默认并发（见[配置](#配置)）。多数 ticket 会自动走完；修不完或需要你拍板的，run 结束时会汇总给你。
+
+### 跑完你会拿到什么
+
+run 结束后，你手上有：
+
+- 一条**合好的 feature 分支**：所有通过验收的 ticket 改动都在上面，全量测试是绿的；
+- 用 GitHub / GitLab 时：一个**标为可审查的 draft PR / MR**，工单也会自动更新（见[tracker 支持](#tracker-支持)）；
+- 一个**运行目录** `.pi/matt-implement/<feature>/`（见[运行目录](#运行目录)）：可读的进度账本 `ledger.md`、备注 `notes.md`，以及自动修不完、交给你的票的记录（run 结束时的汇总里也有）；
+- 可选：用[审计报告](#审计报告)把这次 run 生成为可浏览的静态报告。
 
 ## 工作原理
 
@@ -88,7 +95,7 @@ npm test
 | 角色 | 做什么 | 不做什么 |
 |---|---|---|
 | **主 agent**（你当前会话里的这条 skill） | 读 spec 与 ticket 依赖图，按依赖派活、合并、跑全量测试、决定下一张票 | 不写任何功能代码 |
-| **coder** | 在一张 ticket 的独立 worktree 里按票实现（测试先行的一条完整切片），提交全部改动并给出可核验的结果 | 不改票状态、不合并、不推远程 |
+| **coder** | 在一张 ticket 的独立 worktree 里按票实现（先写测试再写实现），提交全部改动并给出可核验的结果 | 不改票状态、不合并、不推远程 |
 | **reviewer** | 只读审查这一张 ticket：对照仓库规范 + 对照 spec / 票面要求 | 不改代码、不跑测试（测试已由流程门禁跑过） |
 | **final-reviewer** | 全部合入后审查整条 feature 分支；除双轴审查外，还看跨 ticket 才能发现的问题 | 同样只读，不改代码 |
 
@@ -99,7 +106,7 @@ npm test
 3. coder 完成后：先跑该票的测试门禁 →（若开启逐票 review）reviewer 做双轴 review → 没过就交回同一个 coder 修复，直到通过或达到修复上限。
 4. 合入 feature 分支，立刻跑全量测试；测试红了，就在 feature 分支上修集成问题。
 5. 重算下一批可做的 ticket，重复 2–4，直到全部完成或交给你处理。
-6. final-reviewer 审查整条分支；契约声明了收尾面（PR 或 MR）时，把开始时开出的 draft 标为可审查。
+6. final-reviewer 审查整条分支；用 GitHub / GitLab 时，把开始时开出的 draft PR / MR 标为可审查。
 
 ```mermaid
 flowchart TD
@@ -109,7 +116,7 @@ flowchart TD
     D --> E{"还有 ticket 吗"}
     E -- 有 --> B
     E -- 没有 --> F["整分支 final review"]
-    F --> G["收尾面标为可审查"]
+    F --> G["draft PR / MR 标为可审查"]
 ```
 
 修复次数用尽的 ticket 会进入待你处理的清单，不拦住后面的票。
@@ -118,7 +125,7 @@ flowchart TD
 
 ### 怎么改
 
-推荐用包内置的交互向导 `/matt-flow-config`（不走模型）：
+推荐用包内置的交互向导 `/matt-flow-config`（即时生效，不消耗模型调用）：
 
 ```
 /matt-flow-config        # 选角色 → 选模型 / thinking 档位，或编辑流程选项
@@ -166,7 +173,7 @@ flowchart TD
 
 1. `/pi-matt-implement-flow [N]` 的 `N` 只覆盖并发，不影响 review 开关和修复上限。
 2. 项目配置覆盖用户配置，是按字段覆盖，不是整段替换。
-3. 流程选项在 run 开始时读取并固定，中途改 `settings.json` 不影响正在跑的那次。
+3. 开跑后中途改 `settings.json` 不影响正在跑的那次 run。
 
 ## 运行目录
 
@@ -179,7 +186,7 @@ flowchart TD
   notes.md           # 过程说明、需要记住的决定（给人看）
   reviews/           # 各轮 review 用的 diff
   findings/          # review 意见，以及合并后全量测试失败时的记录
-  tracker/           # tracker 快照：远端 tracker（GitHub / GitLab）拉取来的 spec 与工单（仅远端 run）
+  tracker/           # 远端工单的本地副本：从 GitHub / GitLab 拉下来的 spec 与工单（仅远端 run）
 ```
 
 - 路径已写入 `.gitignore`，不会进版本库。这是运行数据，不是缓存——run 进行中或还打算续跑时，不要删。
@@ -188,7 +195,24 @@ flowchart TD
 
 ## 审计报告
 
-跑完可以做事后审计：[`audit-report/`](./audit-report/README.zh-CN.md) 把运行目录生成为可浏览的静态报告网站——零大模型调用，主流程零改动。工具随 npm 包发布：`node <安装目录>/audit-report/report.js --runtime-dir <仓库>/.pi/matt-implement/<feature>`（`pi install` 安装时 `<安装目录>` 为 `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`）。
+跑完可以做事后审计：[`audit-report/`](./audit-report/README.zh-CN.md) 把运行目录生成为可浏览的静态报告网站——不消耗大模型调用，也不会改动你的运行数据。工具随 npm 包发布：`node <安装目录>/audit-report/report.js --runtime-dir <仓库>/.pi/matt-implement/<feature>`（`pi install` 安装时 `<安装目录>` 为 `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`）。
+
+## 常见问题与排错
+
+**run 提示缺少 `docs/agents/issue-tracker.md` / 让我先跑 `/setup-matt-pocock-skills`？**
+一次性配置还没做：在你的仓库里跑一次 `/setup-matt-pocock-skills`。
+
+**报错 `仅支持 local / github / gitlab 三种`？**
+工单配置文件不是三种受支持的模板之一。重新运行 `/setup-matt-pocock-skills` 生成，或改用本地 markdown / GitHub / GitLab。
+
+**修不完的 ticket 去哪了？**
+列在 run 结束时的汇总里，运行目录的 `ledger.md` 里也有记录——不会丢。剩下的工作需要你拍板或手工完成。
+
+**跑到一半中断（或上下文被压缩）了，要从头再来吗？**
+不用——重新运行同一条命令，会从记录的状态继续（见[运行目录](#运行目录)）。
+
+**这次 run 到底做了什么？有没有隐患？**
+用[审计报告](#审计报告)生成静态报告：逐票可查完整过程，还有专门的"异常与风险"区。
 
 ## 贡献
 
