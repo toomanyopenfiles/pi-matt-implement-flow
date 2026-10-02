@@ -316,6 +316,8 @@ module.exports = {
   checkPureVerdictGateAndEscalation,
   checkNoIsolationBriefs,
   checkAxisSpawnContract,
+  checkWorkflowScriptDelivery,
+  checkDispatchScriptFiles,
 };
 
 // —— 票 02 断锚：typed gate 派发形态（8 条）。检查器吃 SKILL.md / agents/coder.md
@@ -611,4 +613,41 @@ function checkAxisSpawnContract(agentText) {
     problems.push('must state the never-end-your-turn-while-an-axis-runs rule');
   }
   return problems;
+}
+
+// —— 派发交付形态（issue #9）：workflow 脚本一律「写入文件 → 文件路径调用」。
+// 围栏形态（同一回复的 ```js workflow 块 + 布尔 workflow: true）对模型调用不可靠：
+// `workflow` 走 === true 严格判别（模型系统性传字符串 "true"），围栏块又必须与工具
+// 调用同回复（模型常拆到不同消息 → found 0 fenced blocks）；旧 API workflowScript /
+// workflowScriptPath 已对模型关闭。唯一可靠交付是脚本文件路径（值含 / 即按文件加载）。
+const SCRIPT_FILE_FORM = /workflow:\s*["'`][^"'`]*[\\/][^"'`]*["'`]/;
+const RETIRED_DISPATCH_TOKENS = [
+  { re: /\bworkflow:\s*true\b/, name: 'the reply-fenced form (`workflow: true`)' },
+  { re: /```js workflow/, name: 'the reply-fenced form (a same-reply ```js workflow block)' },
+  { re: /\bworkflowScript\b/, name: 'the removed `workflowScript` API' },
+  { re: /\bworkflowScriptPath\b/, name: 'the removed `workflowScriptPath` API' },
+];
+
+function checkWorkflowScriptDelivery(text) {
+  const problems = [];
+  for (const { re, name } of RETIRED_DISPATCH_TOKENS) {
+    if (re.test(text)) {
+      problems.push(`dispatch wording still carries ${name} — deliver workflow scripts as files (workflow: "<path>.js")`);
+    }
+  }
+  if (!SCRIPT_FILE_FORM.test(text)) {
+    problems.push('no script-file dispatch form found (workflow: "<path>.js") — every workflow dispatch must call a script file');
+  }
+  return problems;
+}
+
+// —— SKILL.md 派发脚本的落盘纪律：脚本先写进运行期目录的新文件（审计报告按文件恢复
+// 任务书；一次调用一个新文件，不复用不覆盖），再以文件路径调用。
+function checkDispatchScriptFiles(skillText) {
+  const normalized = normalizeWhitespace(skillText);
+  return missingAnchors(
+    normalized,
+    ['a new file', '/wf/'],
+    (anchor) => `SKILL.md is missing the dispatch-script file discipline anchor: ${anchor} (write each dispatch script to a new file under .pi/matt-implement/<slug>/wf/, then call it by path)`,
+  );
 }

@@ -105,7 +105,7 @@ Optionally, when a survey finding is a durable repo-level lesson (e.g. a CLI syn
 
 ### Each round — dispatch the frontier
 
-Count running coders; while below N and the frontier is non-empty, claim the next tickets（认领）— write `Status: claimed` on the ticket's truth-layer file — the tracker snapshot's copy when the run reads one, the ticket file itself when the files are the truth layer; never a tracker-body write — tracker-side progress happens only at the pre-seal sync — and dispatch one wave — **exactly** one top-level subagent workflow call with `async: true`:
+Count running coders; while below N and the frontier is non-empty, claim the next tickets（认领）— write `Status: claimed` on the ticket's truth-layer file — the tracker snapshot's copy when the run reads one, the ticket file itself when the files are the truth layer; never a tracker-body write — tracker-side progress happens only at the pre-seal sync — and dispatch one wave. Dispatch delivery is always script-file form: **write the script below to a new file** `.pi/matt-implement/<slug>/wf/wave-<NN>.js` (one new file per call — the audit report recovers briefs from these files), then make one top-level `subagent` call naming that file: `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/wave-<NN>.js", async: true })`:
 
 ```js
 const results = await runs.all([
@@ -186,7 +186,7 @@ When a coder reports, first make its work mergeable, then review:
 1. **Anchor the ticket branch** (git truth, not the report): `git branch ticket-<NN> <headSha>` (the `<headSha>` is the gate report's — mechanical truth, not model prose). If `headSha` is missing or unreachable, go into the coder's retained worktree, run `git status --porcelain` there, commit anything left (`ticket <NN>: orchestrator checkpoint`), and use that SHA.
 2. **Write the review bundle**: `git diff <baseCommit>...refs/heads/ticket-<NN>` (three-dot) plus `git log --oneline` into `.pi/matt-implement/<slug>/reviews/<NN>-r<k>.diff`.
 3. **Record `settled`**（记账：`--ticket --round --head-sha --worktree --gate` 一句门禁摘要）— the ticket's headSha and worktree are now anchored in the event stream; the `--gate` summary is the fresh gate report's `testResult` line.
-4. **Dispatch the reviewer** for that ticket — only when the run's init snapshot has `reviewer=on` (the default). With `reviewer=off`, skip this step and the fix loop entirely and go straight to the merge: the platform gate and the post-merge integration suite are the remaining per-ticket defenses, and the whole-branch final-reviewer still runs at the end:
+4. **Dispatch the reviewer** for that ticket — only when the run's init snapshot has `reviewer=on` (the default). With `reviewer=off`, skip this step and the fix loop entirely and go straight to the merge: the platform gate and the post-merge integration suite are the remaining per-ticket defenses, and the whole-branch final-reviewer still runs at the end. Script-file delivery: write the script below to a new file `.pi/matt-implement/<slug>/wf/review-<NN>-r<k>.js`, then call `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/review-<NN>-r<k>.js", async: true })`:
 
 ```js
 const results = await runs.all([
@@ -220,7 +220,7 @@ On a verdict, record it: `verdict`（记账：`--ticket --round --verdict --find
 
 ### Fix loop — send it back to the same coder (reviewer=on runs only)
 
-Write the findings to `findings/<NN>-r<k>.md`. **Record the fix first**: `fix`（记账：`--ticket --fix-no --key --resume-run-id <coderRunId>`）— the budget is consumed at dispatch time, and the script mechanically rejects a third fix; that rejection is the escalation trigger. Then resume the coder in a **new** workflow call (new stable key; the revived child keeps its agent, model, worktree, and context):
+Write the findings to `findings/<NN>-r<k>.md`. **Record the fix first**: `fix`（记账：`--ticket --fix-no --key --resume-run-id <coderRunId>`）— the budget is consumed at dispatch time, and the script mechanically rejects a third fix; that rejection is the escalation trigger. Then resume the coder in a **new** workflow call (new stable key; the revived child keeps its agent, model, worktree, and context). Script-file delivery: write the script below to a new file `.pi/matt-implement/<slug>/wf/fix-<NN>-r<k>.js`, then call `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/fix-<NN>-r<k>.js", async: true })`:
 
 ```js
 const r = await runs.run("fix-01-r2", { resume: "<coderRunId>", task: `<fix follow-up brief — see Briefs>` });
@@ -245,7 +245,7 @@ Then `git branch -f ticket-<NN> <newSha>`, rebuild the bundle, and dispatch a fr
 Serially, in the main checkout on the feature branch — merges never run in parallel with each other:
 
 1. `git merge --no-ff -m "Merge ticket-<NN>: <title>" ticket-<NN>` — the message **must** contain the `ticket-<NN>` token (hard rule below; the ledger script cross-checks merges by it). On a conflict, follow the `resolving-merge-conflicts` skill.
-2. Run the full suite. Red means an integration problem no ticket-level review could see: save the failing output to `findings/integration-<NN>.md` and dispatch **one** coder **without isolation** (omit `worktree`) on the feature branch, guarded by a pure-verdict gate (command plus timeout only — no `output`/`schema`, zero report because zero consumers):
+2. Run the full suite. Red means an integration problem no ticket-level review could see: save the failing output to `findings/integration-<NN>.md` and dispatch **one** coder **without isolation** (omit `worktree`) on the feature branch, guarded by a pure-verdict gate (command plus timeout only — no `output`/`schema`, zero report because zero consumers). Script-file delivery: write the script below to a new file `.pi/matt-implement/<slug>/wf/integration-<NN>.js`, then call `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/integration-<NN>.js", async: true })`:
 
 ```js
 await runs.run("fix-integration-<NN>", {
@@ -263,7 +263,7 @@ Recompute the frontier. While tickets remain: top the dispatch back up to N. Don
 
 ### Final gate
 
-1. Write the whole-branch bundle `git diff <feature-base>...HEAD` and dispatch `pi-matt-implement-flow.final-reviewer` with `worktree: true, baseRef: "refs/heads/feat/<slug>", acceptance: false` and a verdict schema of `ready | ready_with_fixes | not_ready`.
+1. Write the whole-branch bundle `git diff <feature-base>...HEAD` and dispatch `pi-matt-implement-flow.final-reviewer` with `worktree: true, baseRef: "refs/heads/feat/<slug>", acceptance: false` and a verdict schema of `ready | ready_with_fixes | not_ready` — its task carries the same `Axis script: <absolute path to this package>/scripts/axis-axes.js` pointer as the Reviewer brief.
 2. **Record the verdict**（记账 `final`）: write the findings to `.pi/matt-implement/<feature-slug>/findings/final-r<k>.md` (`<k>` = final-review round), then record — `node <this-package>/scripts/ledger.js add final --runtime-dir .pi/matt-implement/<feature-slug> --final-verdict <ready|ready_with_fixes|not_ready> --run-id <runId> [--findings .pi/matt-implement/<feature-slug>/findings/final-r<k>.md]`. It is a run-level event (no `--ticket`); the final-reviewer's dispatch is not recorded separately — `--run-id` carries it, the same shape as a ticket reviewer's `--rev-run-id`. Every round of final review is one `final` event, and the **latest** verdict is the branch's readiness — never an earlier round's.
 3. **With fixes**: dispatch one coder without isolation to fix every finding, guarded by the same pure-verdict gate (`gate: { command: "<testCommand>", timeoutMs: 600000 }` — no `output`/`schema`); commit on the feature branch. A red gate → one more fix round; two consecutive reds stop and escalate to the user with the review pointers. Re-run the final review only if the changes are substantial — a re-run is a new round, so it gets its own `final` event. **Not ready**: escalate to the user with the review pointers. If the user calls the run off, record `close` (封账) as usual — the seal gate (封账门) lets a user's give-up through at warning level, and its enforcement belongs to the script, not to this file. When the run holds a claim (占坑), before that `close` run the give-up path of the sync — `node <this-package>/scripts/ledger.js sync --runtime-dir .pi/matt-implement/<slug> --mode abandon --claimant <占坑用户名> --reason <放弃说明>` — so the claim is unassigned and the tracker is left an explanatory comment, not a phantom claim; the claimant is the one the claim used.
 4. **Pre-seal sync** — after the last `final` verdict is in, and before the closing surface is ever marked ready: write the run's closing into the snapshot's `spec.md` (`closing: <交付指引>` under `## Comments` — the delivery note the closing comment will carry), then `node <this-package>/scripts/ledger.js sync --runtime-dir .pi/matt-implement/<slug>`: merged tickets close with their merge SHAs, escalated tickets get their comments and stay open, the spec closes with the delivery note. The sync is idempotent — after a partial failure, re-running plans only the still-missing actions. **A failed sync must not seal the run**: record `anomaly --note "sync failed: ..."` and stop to report — after `close` the event stream rejects every write, so a tracker failure can only be accounted for while the run is still open. The script itself refuses to sync a sealed run or one whose closing surface is already `ready`; the sync always precedes `pr --state ready`, so the closing keywords can never race-close a ticket the sync hasn't handled yet. Runs whose truth layer is the local files have no sync step: the local ticket files are the tracker already (zero change).
@@ -304,6 +304,7 @@ You are in your own pi-managed worktree on your own branch based at that commit;
 Ticket 07 (ticket file: <absolute main-repo path>). Spec: <absolute main-repo path>.
 Review bundle: <absolute main-repo path>/.pi/matt-implement/<slug>/reviews/07-r1.diff (three-dot diff + commit list against base <sha>).
 Implementer's report: the typed-gate report (`headSha` <sha>, `testResult` <one-line summary>) — mechanical gate evidence.
+Axis script: <absolute path to this package>/scripts/axis-axes.js (read-only) — you spawn both axes through it.
 Your worktree is checked out at refs/heads/ticket-07 — the post-change tree. Read the changed files there; review-bundle and findings paths are main-repo paths (read-only).
 
 Run your two-axis process and return the structured verdict.
@@ -342,6 +343,7 @@ You are on the feature branch in the main checkout; fix every finding, run the f
 - Merge commit messages must contain the `ticket-NN` token — the ledger script cross-checks merges by it.
 - Never hand-write or edit the ledger or the event stream: no shell appends, no edit tool, no "one-off fix to a cell". The ledger script is the only writer; when you disagree with it, record `anomaly --note "..."` and stop to report.
 - On workflow-infrastructure failure (launch, extension, prompt runtime), stop and report the exact failure, run/status, and repo/worktree state. Never fall back to doing the work yourself, and never switch execution modes silently.
+- Workflow scripts ship in script-file form: write each dispatch script to a new file under `.pi/matt-implement/<slug>/wf/`, then call it as `workflow: "<path>.js"`.
 
 ## Compaction
 

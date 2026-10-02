@@ -288,7 +288,21 @@ function extractKeysFromScript(script) {
   return { keys: [...new Set(keys)], resumeKeys: [...new Set(resumeKeys)] };
 }
 
-function extractBriefs(sessionFiles) {
+// 文件路径形态的 workflow 脚本读取（issue #9）：绝对路径直用，相对路径以主会话 cwd
+// （= 仓库根）解析。读不到返回 null —— 任务书恢复失败降级为 R9 风险，不崩溃。
+function readWorkflowScript(scriptPath, repoPath) {
+  const abs = path.isAbsolute(scriptPath) || !repoPath ? scriptPath : path.join(repoPath, scriptPath);
+  const t = readText(abs, { max: 1024 * 1024 });
+  return t && typeof t.text === 'string' && t.text.trim() ? t.text : null;
+}
+
+// workflow 参数值含路径分隔符即脚本文件路径（平台判别同源）；true / 命名资源不在此列。
+function workflowScriptPathOf(args) {
+  const wf = args && args.workflow;
+  return typeof wf === 'string' && (wf.includes('/') || wf.includes('\\')) ? wf : null;
+}
+
+function extractBriefs(sessionFiles, repoPath = null) {
   const briefs = [];
   for (const file of sessionFiles) {
     const raw = readText(file, { max: 32 * 1024 * 1024 });
@@ -301,15 +315,21 @@ function extractBriefs(sessionFiles) {
       for (const c of rec.message.content || []) {
         if (c.type !== 'toolCall' || !/subagent/i.test(c.name || '')) continue;
         const args = c.arguments || c.input || {};
-        if (typeof args.workflowScript === 'string' && args.workflowScript.length > 40) {
-          const { keys, resumeKeys } = extractKeysFromScript(args.workflowScript);
+        // 两种交付形态都解析：文件路径形态（脚本落盘，任务书从文件恢复）与旧 API
+        // （workflowScript 内联）——旧账审计语料照旧，不回归。
+        const wfPath = workflowScriptPathOf(args);
+        const inlineScript = typeof args.workflowScript === 'string' && args.workflowScript.length > 40 ? args.workflowScript : null;
+        const scriptText = inlineScript || (wfPath ? readWorkflowScript(wfPath, repoPath) : null);
+        if (scriptText) {
+          const { keys, resumeKeys } = extractKeysFromScript(scriptText);
           briefs.push({
             ts: rec.timestamp || null,
             kind: 'wave',
             keys,
             resumeKeys,
-            text: args.workflowScript,
+            text: scriptText,
             file: path.basename(file),
+            scriptPath: wfPath,
           });
         } else if (args.agent && typeof args.task === 'string') {
           briefs.push({ ts: rec.timestamp || null, kind: 'single', agent: args.agent, keys: [], resumeKeys: [], text: args.task, file: path.basename(file) });
@@ -408,11 +428,15 @@ function loadChildRun(dirs, ref, ctx) {
           if (/structured/i.test(c.name || '') && args.value) values.push(args.value);
           if (/subagent/i.test(c.name || '')) {
             const a = args;
-            if (a.task || a.workflowScript) {
+            // 两种脚本交付形态（文件路径 / 旧 API 内联）与直接 {agent, task} 派发都建模；
+            // 文件路径形态的轴任务书在 args 里，摘录一并带上。
+            const scripted = a.workflowScript || workflowScriptPathOf(a);
+            if (a.task || scripted) {
+              const body = a.task || a.workflowScript || `${workflowScriptPathOf(a)}${a.args ? ` ${JSON.stringify(a.args)}` : ''}`;
               nested.push({
                 ts: rec.timestamp || null,
-                agent: a.agent || (a.workflowScript ? T('run.nestedAgentScript') : T('run.nestedAgentUnknown')),
-                excerpt: String(a.task || a.workflowScript || '').slice(0, 500),
+                agent: a.agent || (scripted ? T('run.nestedAgentScript') : T('run.nestedAgentUnknown')),
+                excerpt: String(body).slice(0, 500),
               });
             }
           }
@@ -772,7 +796,7 @@ function collect({ runtimeDir, lang }) {
 
   const sessionFiles = mainSessionCandidates(repoPath, liveRefs.map((r) => r.runId), ctx);
   if (!sessionFiles.length) warn(warnings, 'main-session-missing', T('warn.main-session-missing'));
-  const briefs = extractBriefs(sessionFiles);
+  const briefs = extractBriefs(sessionFiles, repoPath);
 
   // 终审汇集：事件驱动优先（ADR-0002 Decision 8）。账上有 final 事件 → 从事件取 runId 建终审运行
   // 引用并入成本表与终审清单，不触发目录扫描（时间窗过滤对事件驱动路径不适用）；账上无 final

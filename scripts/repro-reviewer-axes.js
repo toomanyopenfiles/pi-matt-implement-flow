@@ -10,13 +10,16 @@
 //   G3 verdict-after-axes   收场（裁决点）不得早于两根轴各自的完成时刻
 //
 // 构型说明（为什么不是「真 reviewer 直跑」）：
-//   真 reviewer 车辆被两个与 #6 无关的平台级缺陷堵死（见探针报告与事件证据）：
-//   (a) aihubmix / commandcode 的约束采样把 `workflow: true` 布尔强制转成字符串，
-//       回复围栏形态的 workflow 在这两个 provider 上不可达；
-//   (b) 子运行上下文里模型无法把 ```js workflow 围栏块与工具调用放进同一条消息
-//       （顶层会话可以），而平台要求两者同回复。
-//   因此本探针从被测定义【抽取】轴派发契约，再由纪律化调用方（pi -p 顶层会话，
-//   文件形态 workflow，无格式噪音）【实例化】该契约。被测变量只有一个：定义里的
+//   真 reviewer 直跑被两个与 #6 无关的平台级事实堵死（见探针报告与事件证据）：
+//   (a) `workflow` 参数是 anyOf[boolean,string] 联合类型，模型系统性传字符串 "true"，
+//       平台 `=== true` 严格判别零容错 → 围栏形态对模型调用不可靠。（旧「约束采样
+//       强制转换」归因已证伪：subagent 工具 constrainedSampling 为 null，且同调用内
+//       `async` 布尔完好。）
+//   (b) 模型常把 ```js workflow 围栏块与工具调用拆到不同消息，平台要求严格同回复
+//       （顶层会话可由纪律化提示做到，子运行上下文里做不到）→ found 0 fenced blocks。
+//   文件路径形态（workflow: "<path>.js"）不受 (a)(b) 影响，故本探针从被测定义【抽取】
+//   轴派发契约，再由纪律化调用方（pi -p 顶层会话，文件形态 workflow，无格式噪音）
+//   【实例化】该契约。被测变量只有一个：定义里的
 //   `async` 值——现状 `async: true`（调用立即返回，失效状态可达 → 红）；
 //   修复后 `async: false`（调用阻塞到两轴返回，失效状态结构性不可达 → 绿）。
 //
@@ -263,7 +266,7 @@ function scenarioGuarantee(args, defName) {
 
   // 双轴 workflow 脚本：轴 key 固定用运行时常规名（key 缺陷由 keyless 场景专门复刻，
   // 对应 rev-362「缺 key 被拒 → 补 key 重试」路径的重试后状态）；本探针唯一实例化的
-  // 契约变量是 `async`。轴任务 sleep 30 秒——完成时刻确定，时序差可测量。
+  // 契约变量是 `async`。轴任务 sleep 12 秒——完成时刻确定，时序差可测量。
   const axisItems =
     '  { key: "standards", agent: "delegate", task: "Run bash: sleep 12. Then reply exactly: S_DONE" },\n' +
     '  { key: "spec", agent: "delegate", task: "Run bash: sleep 12. Then reply exactly: P_DONE" },\n';

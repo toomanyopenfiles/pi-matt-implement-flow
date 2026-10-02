@@ -9,6 +9,7 @@ const {
   parseEvents,
   buildRunModel,
   extractKeysFromScript,
+  extractBriefs,
   findBriefFor,
   deriveRisks,
 } = require('./collect');
@@ -89,6 +90,7 @@ return r;`;
   const revTranscript = [
     {"type":"message","timestamp":"2026-09-18T18:34:59.000Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"structured_output","id":"tc3","arguments":{"value":{"verdict":"changes_requested","standards":"ok","spec":"缺测试","findings":[{"severity":"P1","file":"a.js","issue":"无测试"}]}}}]}},
     { type: 'message', timestamp: '2026-09-18T18:35:30.000Z', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'subagent', id: 'tc4', arguments: { agent: 'reviewer', task: 'You are a READ-ONLY reviewer child (spec axis).' } }] } },
+    { type: 'message', timestamp: '2026-09-18T18:35:35.000Z', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'subagent', id: 'tc5', arguments: { workflow: '/pkg/scripts/axis-axes.js', args: { agent: 'pi-matt-implement-flow.reviewer', standards: '轴任务书 S', spec: '轴任务书 P' }, async: true } }] } },
   ];
   fs.writeFileSync(path.join(ad, `${revId}_pi-matt-implement-flow.reviewer_transcript.jsonl`), revTranscript.map((l) => JSON.stringify(l)).join('\n') + '\n');
   fs.writeFileSync(path.join(ad, `${revId}_pi-matt-implement-flow.reviewer_meta.json`), JSON.stringify({ runId: revId, agent: 'pi-matt-implement-flow.reviewer', exitCode: 0, model: 'test/model', usage: { input: 500, output: 50, cost: 0.005 }, acceptance: { status: 'not-required' } }));
@@ -248,6 +250,55 @@ test('findBriefFor 按 key + 时间就近匹配', () => {
   assert.equal(findBriefFor(briefs, 't-99', '2026-09-18T19:20:00.000Z'), null);
 });
 
+test('extractBriefs 文件路径形态：任务书从 wf 脚本文件恢复（相对与绝对路径同过，issue #9）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-wf-'));
+  try {
+    const repo = path.join(dir, 'repo');
+    const wf = path.join(repo, '.pi', 'matt-implement', 'demo', 'wf');
+    fs.mkdirSync(wf, { recursive: true });
+    const script =
+      "const results = await runs.all([{ key: 't-07', agent: 'pi-matt-implement-flow.coder', task: 'Ticket 07: 告别模块。' }]);\n" +
+      'return results;';
+    fs.writeFileSync(path.join(wf, 'wave-07.js'), script);
+    const rec = (ts, workflow) => JSON.stringify({
+      type: 'message', timestamp: ts,
+      message: { role: 'assistant', content: [{ type: 'toolCall', name: 'subagent', id: 'tc1', arguments: { workflow, async: true } }] },
+    });
+    const sessionFile = path.join(dir, 's1.jsonl');
+    fs.writeFileSync(sessionFile, [
+      rec('2026-10-02T10:00:00.000Z', './.pi/matt-implement/demo/wf/wave-07.js'),
+      rec('2026-10-02T10:05:00.000Z', path.join(wf, 'wave-07.js')),
+    ].join('\n') + '\n');
+
+    const briefs = extractBriefs([sessionFile], repo);
+    assert.equal(briefs.length, 2);
+    for (const b of briefs) {
+      assert.equal(b.kind, 'wave');
+      assert.deepEqual(b.keys, ['t-07']);
+      assert.ok(b.text.includes('Ticket 07'), '任务书原文应从脚本文件恢复');
+      assert.equal(typeof b.scriptPath, 'string');
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('extractBriefs 文件路径形态：脚本文件缺失时优雅降级不崩溃，不产出假任务书', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-wf-miss-'));
+  try {
+    const repo = path.join(dir, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    const sessionFile = path.join(dir, 's1.jsonl');
+    fs.writeFileSync(sessionFile, JSON.stringify({
+      type: 'message', timestamp: '2026-10-02T10:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'toolCall', name: 'subagent', id: 'tc1', arguments: { workflow: './.pi/matt-implement/demo/wf/gone.js', async: true } }] },
+    }) + '\n');
+    assert.deepEqual(extractBriefs([sessionFile], repo), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------- 端到端（合成 fixture）
 
 test('collect + render 全链路：模型、风险、页面', () => {
@@ -275,7 +326,8 @@ test('collect + render 全链路：模型、风险、页面', () => {
     assert.equal(coder.acceptance.status, 'rejected');
     const rev = model.childRuns['22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
     assert.equal(rev.structuredValue.verdict, 'changes_requested');
-    assert.equal(rev.nestedDispatches.length, 1, '评审者的轴代理派发应从 transcript 恢复');
+    assert.equal(rev.nestedDispatches.length, 2, '评审者的轴代理派发应从 transcript 恢复（直接派发 + 文件路径脚本两种形态）');
+    assert.ok(rev.nestedDispatches[1].excerpt.includes('axis-axes.js') && rev.nestedDispatches[1].excerpt.includes('轴任务书 S'), '文件路径形态的嵌套派发应携带脚本路径与 args 摘录');
 
     // 确定性风险：验收被拒（high）+ 异常记录（high）+ 未封账（medium）
     const titles = model.risks.map((r) => r.title).join('|');

@@ -41,6 +41,8 @@ const {
   checkPureVerdictGateAndEscalation,
   checkNoIsolationBriefs,
   checkAxisSpawnContract,
+  checkWorkflowScriptDelivery,
+  checkDispatchScriptFiles,
 } = require('./registration-checks.js');
 
 function readAgentFrontmatter() {
@@ -481,6 +483,38 @@ test('breakage simulation: an async:true axis spawn without keys and without the
   assert.ok(problems.some((p) => p.includes('must not instruct `async: true`')));
   assert.ok(problems.some((p) => p.includes('stable keys')));
   assert.ok(problems.some((p) => p.includes('never-end-your-turn')));
+});
+
+// --- issue #9 回归护栏：派发交付形态（脚本写入文件 → 文件路径调用，围栏形态即红） ---
+
+test('dispatch delivery: SKILL.md and both reviewer agents dispatch workflows in script-file form (issue #9)', () => {
+  const skill = readText(PKG_ROOT, 'SKILL.md') || '';
+  assert.deepEqual(checkWorkflowScriptDelivery(skill), [], 'SKILL.md violates the script-file dispatch form');
+  assert.deepEqual(checkDispatchScriptFiles(skill), [], 'SKILL.md lost the dispatch-script file discipline');
+  for (const name of ['reviewer', 'final-reviewer']) {
+    const text = readText(PKG_ROOT, `agents/${name}.md`) || '';
+    assert.deepEqual(checkWorkflowScriptDelivery(text), [], `agents/${name}.md violates the script-file dispatch form`);
+  }
+});
+
+test('breakage simulation: a reply-fenced dispatch (workflow: true + same-reply block) is flagged (issue #9)', () => {
+  const fenced =
+    'and dispatch one wave — one top-level subagent workflow call with `async: true`:\n' +
+    '```js workflow\nconst results = await runs.all([{ key: "t-01" }]);\n```\n' +
+    'Then call `subagent({ workflow: true, async: true })`.\n';
+  const problems = checkWorkflowScriptDelivery(fenced);
+  assert.ok(problems.some((p) => p.includes('reply-fenced')));
+  assert.ok(problems.some((p) => p.includes('script-file')));
+});
+
+test('breakage simulation: the removed workflowScript API and a lost file discipline are flagged (issue #9)', () => {
+  const removed =
+    'Then call `subagent({ workflowScript: "await runs.run(...)", async: true })`.\n' +
+    'Deliver every script inline in the call.\n';
+  const problems = checkWorkflowScriptDelivery(removed);
+  assert.ok(problems.some((p) => p.includes('removed `workflowScript` API')));
+  assert.ok(problems.some((p) => p.includes('script-file')));
+  assert.ok(checkDispatchScriptFiles(removed).some((p) => p.includes('/wf/')));
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

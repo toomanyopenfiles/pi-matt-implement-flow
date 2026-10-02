@@ -21,6 +21,14 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   view: plain language, no internal implementation details. The main READMEs gained a
   troubleshooting FAQ and a "what you get when the run finishes" section.
 
+### Fixed
+
+- Subagent dispatching now works on current pi-subagents. Every dispatch — the coder waves, the
+  per-ticket review, the fix loop, the integration fixer, and the reviewers' two-axis fan-out —
+  ships its script as a file and calls it by path. The previous form (pasting the script into the
+  same reply as the call) is rejected or missed by current pi-subagents, so runs could fail at
+  dispatch time before any ticket work started. (#9)
+
 ## [0.3.0] - 2026-09-30
 ### Added
 
