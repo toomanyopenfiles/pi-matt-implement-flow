@@ -190,6 +190,14 @@ flowchart TD
 
 跑完可以做事后审计：[`audit-report/`](./audit-report/README.zh-CN.md) 把运行目录生成为可浏览的静态报告网站——零大模型调用，主流程零改动。工具随 npm 包发布：`node <安装目录>/audit-report/report.js --runtime-dir <仓库>/.pi/matt-implement/<feature>`（`pi install` 安装时 `<安装目录>` 为 `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`）。
 
+## 贡献
+
+欢迎贡献！动手前先看：
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md)——开发流程（`npm test`，无构建步骤）、issue 生命周期标签、PR 检查清单
+- 用 issue 表单提交 [Bug 报告](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=bug.yml) 或 [功能请求](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=feature.yml)
+- 安全漏洞请按 [SECURITY.md](./SECURITY.md) 私密上报——永远不要开公开 issue
+
 ## 许可证
 
 [MIT](./LICENSE)

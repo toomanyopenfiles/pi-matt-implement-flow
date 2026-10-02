@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- Community intake scaffolding: issue forms (`.github/ISSUE_TEMPLATE/` — bug report / feature
+  request, auto-applying `bug`|`enhancement` + `needs-triage` on submission, blank issues
+  restricted to maintainers), `CONTRIBUTING.md` (dev workflow, the issue lifecycle labels, PR
+  checklist), and `SECURITY.md` (private vulnerability reporting). Both READMEs gained a short
+  Contributing section pointing at them.
+
+### Changed
+
+- Development setup only (not shipped in the npm package): this repo's own issue tracker moved
+  from local markdown (`.scratch/`) to GitHub Issues — `docs/agents/issue-tracker.md` now carries
+  the GitHub template and `AGENTS.md` follows. The wayfinding section notes that `wayfinder:*`
+  labels are a create-first prerequisite (not created in this repo yet).
 
 ## [0.3.0] - 2026-09-30
 ### Added

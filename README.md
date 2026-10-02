@@ -188,6 +188,14 @@ Every run writes a local run directory, `.pi/matt-implement/<feature>/`:
 
 Audit a finished run after the fact: [`audit-report/`](./audit-report/README.md) turns the run directory into a browsable static report site — zero LLM calls, the main flow untouched. It ships with the npm package: `node <install-dir>/audit-report/report.js --runtime-dir <repo>/.pi/matt-implement/<feature>` (with `pi install`, `<install-dir>` is `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`).
 
+## Contributing
+
+Contributions are welcome! Before diving in:
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — dev workflow (`npm test`, no build step), the issue lifecycle labels, and the PR checklist
+- File a [bug report](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=bug.yml) or a [feature request](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=feature.yml) through the issue forms
+- Report security vulnerabilities privately via [SECURITY.md](./SECURITY.md) — never as public issues
+
 ## License
 
 [MIT](./LICENSE)
