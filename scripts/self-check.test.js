@@ -40,6 +40,7 @@ const {
   checkHardRulesRetained,
   checkPureVerdictGateAndEscalation,
   checkNoIsolationBriefs,
+  checkAxisSpawnContract,
 } = require('./registration-checks.js');
 
 function readAgentFrontmatter() {
@@ -460,6 +461,26 @@ test('breakage simulation: a missing fifth brief is flagged (anchor-8)', () => {
     '## Hard rules\n';
   const problems = checkNoIsolationBriefs(fourBriefs);
   assert.ok(problems.some((p) => p.includes('fifth brief')));
+});
+
+// --- issue #6 回归护栏：双轴派发契约（阻塞调用 + 稳定 key + 不得提前收尾） ---
+
+test('reviewer and final-reviewer axis-spawn contract: blocking call with stable keys (issue #6)', () => {
+  for (const name of ['reviewer', 'final-reviewer']) {
+    const text = readText(PKG_ROOT, `agents/${name}.md`) || '';
+    assert.deepEqual(checkAxisSpawnContract(text), [], `agents/${name}.md violates the axis-spawn contract`);
+  }
+});
+
+test('breakage simulation: an async:true axis spawn without keys and without the turn rule is flagged (issue #6)', () => {
+  const broken =
+    'Spawn the two axes as parallel read-only children — exactly ONE top-level `subagent` workflow call with `async: true`,\n' +
+    'a `runs.all` of two children, both using your own agent, both with `context: "fork"`:\n';
+  const problems = checkAxisSpawnContract(broken);
+  assert.ok(problems.some((p) => p.includes('async: false')));
+  assert.ok(problems.some((p) => p.includes('must not instruct `async: true`')));
+  assert.ok(problems.some((p) => p.includes('stable keys')));
+  assert.ok(problems.some((p) => p.includes('never-end-your-turn')));
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

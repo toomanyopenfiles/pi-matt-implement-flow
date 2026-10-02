@@ -315,6 +315,7 @@ module.exports = {
   checkHardRulesRetained,
   checkPureVerdictGateAndEscalation,
   checkNoIsolationBriefs,
+  checkAxisSpawnContract,
 };
 
 // —— 票 02 断锚：typed gate 派发形态（8 条）。检查器吃 SKILL.md / agents/coder.md
@@ -588,6 +589,26 @@ function checkNoIsolationBriefs(skillText) {
     if (!subNorm.includes('commit on the feature branch')) {
       problems.push(`SKILL.md ${name} brief lost the close-out duty: commit on the feature branch`);
     }
+  }
+  return problems;
+}
+
+// issue #6：双轴派发契约必须是「阻塞调用 + 稳定 key + 不得提前收尾」。
+// async: true 会让调用立即返回，reviewer 可在轴未完时收尾并无 structured_output
+// 收场；key 是 runs.all 的硬契约（缺 key 整个调用被拒）。三者缺一即回归。
+function checkAxisSpawnContract(agentText) {
+  const problems = [];
+  if (!/async:\s*false/.test(agentText)) {
+    problems.push('axis-spawn must pin `async: false` (a blocking call); `async: true` can outlive the reviewer');
+  }
+  if (/async:\s*true/.test(agentText)) {
+    problems.push('axis-spawn must not instruct `async: true`');
+  }
+  if (!/\bkey\b/i.test(agentText) || !agentText.includes('standards') || !agentText.includes('spec')) {
+    problems.push('axis items must carry the stable keys `standards` and `spec` (runs.all rejects keyless items)');
+  }
+  if (!/never end (your|the) turn/i.test(agentText)) {
+    problems.push('must state the never-end-your-turn-while-an-axis-runs rule');
   }
   return problems;
 }
