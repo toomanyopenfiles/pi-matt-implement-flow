@@ -598,4 +598,66 @@ test('breakage simulation: dropping a load-bearing close-out sentence is flagged
   );
 });
 
+test('breakage simulation: re-adding "No report duties" to the fix brief is flagged (issue #7 负空间：最可能回潮的原句)', () => {
+  const banned = skillText.replace(
+    'The orchestrator hand-runs the gate for this round (see Fix loop).',
+    'No report duties — the orchestrator hand-runs the gate for this round (see Fix loop).'
+  );
+  assert.notEqual(banned, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkNoReportBans(banned, coderAgentText);
+  assert.ok(
+    problems.some((p) => p.includes('report ban') && p.includes('"no report duties"')),
+    `expected the re-added ban to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: dropping the dirty-tree close-out sentence is flagged (issue #7 边界护栏)', () => {
+  const noDirtyRule = skillText.replaceAll(
+    'a dirty tree or an empty diff fails the gate',
+    'no particular close-out rule'
+  );
+  assert.notEqual(noDirtyRule, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkNoReportBans(noDirtyRule, coderAgentText);
+  assert.ok(
+    problems.some((p) => p.includes('load-bearing') && p.includes('dirty tree')),
+    `expected the lost dirty-tree sentence to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: a single brief losing its SHA report is flagged (issue #7 逐简报钉死)', () => {
+  const oneBriefLosesIt = skillText.replace(
+    'report the headSha and branch by context pointer.',
+    'report the headSha and branch in the final message.'
+  );
+  assert.notEqual(oneBriefLosesIt, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkNoReportBans(oneBriefLosesIt, coderAgentText);
+  assert.ok(
+    problems.some((p) => p.includes('Coder brief') && p.includes('SHA report')),
+    `expected the single-brief loss to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: a brief re-stating the platform form duty is flagged (issue #7 复述即漂移源)', () => {
+  const restated = skillText.replace(
+    'return the structured verdict.',
+    'return the structured verdict. If the platform requires a form, that duty comes first.'
+  );
+  assert.notEqual(restated, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkNoReportBans(restated, coderAgentText);
+  assert.ok(
+    problems.some((p) => p.includes('form duty')),
+    `expected the restated form duty to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: a dropped brief template is flagged (issue #7 模板在位)', () => {
+  const droppedHeading = skillText.replaceAll('### Reviewer brief', '### Peer review brief');
+  assert.notEqual(droppedHeading, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkNoReportBans(droppedHeading, coderAgentText);
+  assert.ok(
+    problems.some((p) => p.includes('is missing the "### Reviewer brief" brief')),
+    `expected the dropped brief template to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

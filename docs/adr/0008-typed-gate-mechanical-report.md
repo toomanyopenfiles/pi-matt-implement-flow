@@ -116,13 +116,14 @@ Node 脚本机械组装成 JSON 报告，stdout 即结构化输出，**退出码
   平台演进即漂移（code-review Standards 轴 P2）。
 - **裁定（负空间）**：简报与 coder agent 定义**不设报告禁令**，也不复述平台表单义务——
   **报告职责单源归平台 system prompt**。理由：本流程承重输出全走结构化通道（git 真相、
-  手跑门禁、context pointer、评审 outputSchema），散文报告无机械消费者；禁令唯一作用是
+  手跑门禁、context pointer、评审结构化 verdict），散文报告无机械消费者；禁令唯一作用是
   省 token，代价是指令冲突类 bug（#7 一类的死因）。平台要表单时模型自然照填，无竞争指令。
 - **边界（机制化）**：断锚 4 反向钉死三个禁令短语不回流（No work reports / No
-  handwritten reports / No report duties，任意大小写），同时钉死砍禁令的边界——修复简报
-  的裁决来源事实句（"hand-runs the gate for this round"，防模型自封门禁）与两句承重收尾语
-  （"by context pointer"、"a dirty tree or an empty diff fails the gate"）。breakage
-  simulation：禁令加回任一文本 → 红；边界句丢失 → 红。
+  handwritten reports / No report duties，任意大小写）与表单义务复述句（识别句 "that duty
+  comes first"），同时钉死砍禁令的边界——修复简报的裁决来源事实句（"hand-runs the gate
+  for this round"，防模型自封门禁）与两句承重收尾语（"by context pointer" 逐简报钉死、
+  "a dirty tree or an empty diff fails the gate"）。breakage simulation：禁令或复述句回流
+  任一文本 → 红；任一边界句（含单套简报的 SHA 报告句）丢失 → 红；简报模板丢失 → 红。
 - **保留的隐性承重点**：首轮 dispatch 的门禁证据链经过平台表单（补记一事实①，不变）。
   砍禁令后该依赖由平台 system prompt 自证（表单要求平台自己会注入），本包不得复述；
   若未来平台取消该要求而门禁仍依赖表单，回到补记一事实①重审派发形态。

@@ -457,19 +457,35 @@ function checkFixLoopHandRun(skillText) {
 
 // —— 断锚 4（issue #7 后的负空间裁定，ADR-0008 补记二）：简报与 coder 定义**不得**携带
 // 报告禁令（No work reports / No handwritten reports / No report duties，任意大小写），
-// 也不得复述平台表单义务——报告职责单源归平台 system prompt。理由：本流程承重输出全走
-// 结构化通道（git 真相、手跑门禁、context pointer、评审 outputSchema），散文报告无机械
-// 消费者；禁令与平台 fenced `acceptance-report` 要求构成双指令冲突（#7 的死因），且首轮
-// 门禁证据链经过该表单（缺失则门禁在执行前被跳过，见 ADR-0008 补记一事实①），复述禁令
-// 直接威胁首轮门禁。同时钉死砍禁令的边界：修复简报的裁决来源事实句与两句承重收尾语
-// ——它们一丢，砍禁令就失守（模型自封门禁 / 编排者取不到 SHA / 门禁卡不住漏提交）。
-// 旧合同通道词（acceptanceReport / structured_output / outputSchema / SIBLING /
-// ## Acceptance Contract）仍禁用。
+// 也不得复述平台表单义务（识别句 "that duty comes first"）——报告/表单职责单源归平台
+// system prompt。理由：本流程承重输出全走结构化通道（git 真相、手跑门禁、context
+// pointer、评审结构化 verdict），散文报告无机械消费者；禁令与平台 fenced
+// `acceptance-report` 要求构成双指令冲突（#7 的死因），且首轮门禁证据链经过该表单
+// （缺失则门禁在执行前被跳过，见 ADR-0008 补记一事实①），复述禁令直接威胁首轮门禁。
+// 同时钉死砍禁令的边界：修复简报的裁决来源事实句与两句承重收尾语——它们一丢，砍禁令
+// 就失守（模型自封门禁 / 编排者取不到 SHA / 门禁卡不住漏提交）。旧合同通道词
+// （acceptanceReport / structured_output / outputSchema / SIBLING /
+// ## Acceptance Contract）两侧同表禁用。
 const BAN_PHRASES = ['no work reports', 'no handwritten reports', 'no report duties'];
+const FORM_DUTY_RESTATED = 'that duty comes first';
 const FIX_VERDICT_SOURCE = 'hand-runs the gate for this round';
 const LOAD_BEARING_SENTENCES = [
   'by context pointer',
   'a dirty tree or an empty diff fails the gate',
+];
+// 报 SHA 的四套简报逐个钉 "by context pointer"（评审简报不报 SHA，不在其列）。
+const SHA_REPORTING_BRIEFS = [
+  '### Coder brief',
+  '### Fix follow-up',
+  '### Integration fixer',
+  '### Final fixer',
+];
+const OLD_CONTRACT_TOKENS = [
+  'acceptanceReport',
+  'structured_output',
+  'outputSchema',
+  'SIBLING',
+  '## Acceptance Contract',
 ];
 // 五套简报的小节标题（前缀匹配带后缀的实际标题）；措辞不再钉死，只保证模板在位。
 const BRIEF_HEADINGS = [
@@ -488,7 +504,7 @@ function checkNoReportBans(skillText, coderAgentText) {
   problems.push(
     ...presentForbidden(
       normalized,
-      ['acceptanceReport', 'structured_output', 'outputSchema', '## Acceptance Contract'],
+      OLD_CONTRACT_TOKENS,
       (token) => `SKILL.md briefs still carry a report duty: ${token} — the round's report comes from the mechanical gate, never from the model`
     )
   );
@@ -500,10 +516,15 @@ function checkNoReportBans(skillText, coderAgentText) {
       problems.push(`SKILL.md is missing the "${heading}" brief`);
     }
   }
-  for (const phrase of BAN_PHRASES) {
-    if (new RegExp(phrase, 'i').test(skillText)) {
+  // 逐简报钉 "by context pointer"：只查整文件会漏掉单套简报丢失（其服务对象是每次派发）。
+  for (let i = 0; i < BRIEF_HEADINGS.length; i++) {
+    const heading = BRIEF_HEADINGS[i];
+    if (!SHA_REPORTING_BRIEFS.includes(heading)) continue;
+    const sub = sectionBetween(section, heading, BRIEF_HEADINGS[i + 1]);
+    if (sub === null) continue; // 缺模板已由上面的存在性检查报出
+    if (!sub.includes('by context pointer')) {
       problems.push(
-        `SKILL.md must not carry a report ban ("${phrase}") — issue #7 负空间裁定：报告职责单源归平台 system prompt，禁令与其构成双指令冲突`
+        `SKILL.md ${heading.slice(4)} brief lost the load-bearing SHA report ("by context pointer") — 编排者靠它取 worktree/branch/SHA（issue #7）`
       );
     }
   }
@@ -513,32 +534,35 @@ function checkNoReportBans(skillText, coderAgentText) {
       `SKILL.md Fix follow-up brief lost the verdict-source sentence ("${FIX_VERDICT_SOURCE}") — 砍禁令后这是防模型自封门禁的唯一事实句（issue #7）`
     );
   }
-  for (const anchor of LOAD_BEARING_SENTENCES) {
-    if (!skillText.includes(anchor)) {
-      problems.push(
-        `SKILL.md lost a load-bearing close-out sentence: "${anchor}" — 报告禁令可砍，这句是编排者取 SHA / 门禁卡提交的通道（issue #7）`
-      );
-    }
-  }
+  const targets = [['SKILL.md', skillText]];
   if (coderAgentText !== undefined) {
-    const coderNorm = normalizeWhitespace(coderAgentText);
+    targets.push(['agents/coder.md', coderAgentText]);
     problems.push(
       ...presentForbidden(
-        coderNorm,
-        ['acceptanceReport', 'structured_output', 'outputSchema', 'SIBLING'],
+        normalizeWhitespace(coderAgentText),
+        OLD_CONTRACT_TOKENS,
         (token) => `agents/coder.md still carries the old contract wording: ${token}`
       )
     );
+  }
+  for (const [who, text] of targets) {
     for (const phrase of BAN_PHRASES) {
-      if (new RegExp(phrase, 'i').test(coderAgentText)) {
+      if (new RegExp(phrase, 'i').test(text)) {
         problems.push(
-          `agents/coder.md must not carry a report ban ("${phrase}") — 同 SKILL.md 的负空间裁定（issue #7）`
+          `${who} must not carry a report ban ("${phrase}") — issue #7 负空间裁定：报告职责单源归平台 system prompt，禁令与其构成双指令冲突`
         );
       }
     }
+    if (text.includes(FORM_DUTY_RESTATED)) {
+      problems.push(
+        `${who} must not restate the platform form duty ("${FORM_DUTY_RESTATED} …") — 表单/报告职责单源归平台 system prompt，复述即漂移源（issue #7）`
+      );
+    }
     for (const anchor of LOAD_BEARING_SENTENCES) {
-      if (!coderAgentText.includes(anchor)) {
-        problems.push(`agents/coder.md lost a load-bearing close-out sentence: "${anchor}"（issue #7）`);
+      if (!text.includes(anchor)) {
+        problems.push(
+          `${who} lost a load-bearing close-out sentence: "${anchor}" — 报告禁令可砍，这句是编排者取 SHA / 门禁卡提交的通道（issue #7）`
+        );
       }
     }
   }
