@@ -32,9 +32,9 @@ test('合并票未同步：tracker 开着、无痕迹 → 规划关票且评论�
     ['close'],
   );
   assert.equal(actions[0].num, '1042');
-  assert.match(actions[0].body, new RegExp(SHA_A));
-  // 票 02：同步评论携带隐藏机器 marker（人类不可见；幂等键的载体）
-  assert.match(actions[0].body, /<!-- matt-implement:d573c461:merge -->/);
+  // issue #8：正文英文（tracker 受众语言）——确切文本钉死；事实锚 merge SHA: 保留，
+  // 隐藏机器 marker（幂等键载体）随正文收尾
+  assert.equal(actions[0].body, `Merged (merge SHA: ${SHA_A})\n\n<!-- matt-implement:d573c461:merge -->`);
 });
 
 test('合并票已同步：tracker 已关且评论 marker 已在 → 不再产生任何动作（只认 marker）', () => {
@@ -81,8 +81,8 @@ test('升级票未同步：tracker 开着、无痕迹 → 只规划留评，不�
     actions.map((a) => a.kind),
     ['comment'],
   );
-  assert.match(actions[0].body, /两轮修复后 review 仍 changes_requested/);
-  assert.match(actions[0].body, /matt-implement:d573c461:escalate/);
+  // issue #8：正文英文——确切文本钉死；升级事实锚（行首 + 冒号）保留
+  assert.equal(actions[0].body, `Escalated: 两轮修复后 review 仍 changes_requested\n\n<!-- matt-implement:d573c461:escalate -->`);
 });
 
 test('升级票已同步：marker 已在 → 零动作（已评不重评；正文是什么不再参与判定）', () => {
@@ -203,8 +203,8 @@ test('放弃未同步：撤占坑并留评说明，先评论后撤占（留评�
     { mode: 'abandon', claimant: 'alice', reason: '用户拍板放弃：终审 not_ready', runId: RUN },
   );
   assert.deepEqual(actions.map((a) => a.kind), ['comment', 'unassign']);
-  assert.match(actions[0].body, /用户拍板放弃：终审 not_ready/);
-  assert.match(actions[0].body, /matt-implement:d573c461:abandon/);
+  // issue #8：放弃留评正文英文——确切文本钉死（原因原文跟随，不译）
+  assert.equal(actions[0].body, `This run has been abandoned: 用户拍板放弃：终审 not_ready\n\n<!-- matt-implement:d573c461:abandon -->`);
   assert.deepEqual(actions[1], { kind: 'unassign', num: '3001', login: 'alice' });
 });
 
@@ -227,11 +227,11 @@ test('放弃时占坑已不在（他人已处理）：只留说明', () => {
     actions.map((a) => a.kind),
     ['comment'],
   );
-  assert.match(actions[0].body, /本 run 已放弃：改期重跑/);
+  assert.match(actions[0].body, /This run has been abandoned: 改期重跑/);
   assert.match(actions[0].body, /matt-implement:d573c461:abandon/);
 });
 
-test('放弃：旧 run 无 marker 历史评论 → 视为未同步、照常推送（语义显式记录）', () => {
+test('放弃：旧版中文无 marker 历史评论 → 视为未同步、照常推送英文正文（语义显式记录）', () => {
   const actions = planTrackerSync(
     { tickets: [], spec: { num: '3001', type: 'spec' } },
     { issues: [{ num: 3001, state: 'open', assignees: [], comments: ['本 run 已放弃：改期重跑'] }] },
@@ -241,7 +241,7 @@ test('放弃：旧 run 无 marker 历史评论 → 视为未同步、照常推�
     actions.map((a) => a.kind),
     ['comment'],
   );
-  assert.match(actions[0].body, /本 run 已放弃：改期重跑/);
+  assert.match(actions[0].body, /This run has been abandoned: 改期重跑/);
 });
 
 test('放弃已同步（marker 已在、占坑已撤）：零动作', () => {
@@ -251,6 +251,35 @@ test('放弃已同步（marker 已在、占坑已撤）：零动作', () => {
     { mode: 'abandon', claimant: 'alice', reason: '改期重跑', runId: RUN },
   );
   assert.deepEqual(actions, []);
+});
+
+// --- issue #8：跨语言兼容——旧版中文正文（带 marker）已同步，重跑识别、零重复 ---
+
+test('旧版中文同步评论（带 marker）已同步：merge/escalate/abandon 三类皆零动作（只认 marker）', () => {
+  const seal = planTrackerSync(
+    {
+      tickets: [
+        { num: '1042', status: 'resolved', mergeSha: SHA_A },
+        { num: '87', status: 'claimed', escalateReason: '预算用尽' },
+      ],
+      spec: { num: '3001', type: 'spec', closingNote: '已交付。' },
+    },
+    {
+      issues: [
+        { num: 1042, state: 'closed', comments: [`已合并（merge SHA：${SHA_A}）`, syncMarker(RUN, 'merge')] },
+        { num: 87, state: 'open', comments: [`已升级上报：预算用尽`, syncMarker(RUN, 'escalate')] },
+        { num: 3001, state: 'closed', comments: ['已交付。', syncMarker(RUN, 'closing')] },
+      ],
+    },
+    { mode: 'seal', runId: RUN },
+  );
+  assert.deepEqual(seal, []);
+  const abandon = planTrackerSync(
+    { tickets: [], spec: { num: '3001', type: 'spec' } },
+    { issues: [{ num: 3001, state: 'open', assignees: [], comments: ['本 run 已放弃：改期重跑', syncMarker(RUN, 'abandon')] }] },
+    { mode: 'abandon', claimant: 'alice', reason: '改期重跑', runId: RUN },
+  );
+  assert.deepEqual(abandon, []);
 });
 
 // --- 确定性：多票规划按票号数值序、spec 殿后；重复规划得同一列表；输入不被改动 ---

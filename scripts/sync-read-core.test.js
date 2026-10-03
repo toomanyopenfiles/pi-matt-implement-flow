@@ -46,12 +46,33 @@ test('Comments 事实：自然收尾评论 已合并（merge SHA：40 位 SHA）
   assert.equal(facts.mergeSha, SHA);
 });
 
-test('Comments 事实：escalate: <原因> 与 已升级上报：<原因> 两种写法同捕（带列表符宽容）', () => {
+test('Comments 事实：escalate: <原因> 与旧版中文 已升级上报：<原因> 两种写法同捕（带列表符宽容）', () => {
   const a = parseCommentsFacts('# x\n\n## Comments\n\n- escalate: 两轮修复后仍 changes_requested\n');
   assert.equal(a.escalateReason, '两轮修复后仍 changes_requested');
   assert.equal(a.mergeSha, null);
   const b = parseCommentsFacts('# x\n\n## Comments\n\n已升级上报：预算用尽\n');
   assert.equal(b.escalateReason, '预算用尽');
+});
+
+test('Comments 事实：新英文收尾评论 Merged (merge SHA: <sha>) → 同一 merge SHA 锚捕获（issue #8）', () => {
+  const facts = parseCommentsFacts(
+    `# x\n\n## Comments\n\n- Merged (merge SHA: ${SHA})\n\n<!-- matt-implement:demo:merge -->\n`,
+  );
+  assert.equal(facts.mergeSha, SHA);
+  assert.equal(facts.escalateReason, null);
+});
+
+test('Comments 事实：新英文升级评论 Escalated: <原因> → 同锚捕获（issue #8，与 escalate: 同一行首锚）', () => {
+  const facts = parseCommentsFacts(
+    '# x\n\n## Comments\n\nEscalated: budget exhausted\n\n<!-- matt-implement:demo:escalate -->\n',
+  );
+  assert.equal(facts.escalateReason, 'budget exhausted');
+  assert.equal(facts.mergeSha, null);
+  // 旧中文与新英文并存于同一 Comments 节：各自成行、互不遮蔽（两种顺序都验，无事实丢失）
+  const mixed = parseCommentsFacts('# x\n\n## Comments\n\n已升级上报：预算用尽\n\nEscalated: budget exhausted\n');
+  assert.equal(mixed.escalateReason, '预算用尽');
+  const mixedEnFirst = parseCommentsFacts('# x\n\n## Comments\n\nEscalated: budget exhausted\n\n已升级上报：预算用尽\n');
+  assert.equal(mixedEnFirst.escalateReason, 'budget exhausted');
 });
 
 test('Comments 事实：merge 与 escalate 并存 → 两事实各自解析（合并事实优先属规划器职责）', () => {

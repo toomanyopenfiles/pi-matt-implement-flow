@@ -319,12 +319,12 @@ test('sync seal（gitlab）：合并票 note 先行再 close、升级票 note �
   assert.deepEqual(stateOf(f, 7043), {
     state: 'closed',
     assignees: [],
-    comments: [`已合并（merge SHA：${SHA_A}）\n\n${MARK('merge')}`],
+    comments: [`Merged (merge SHA: ${SHA_A})\n\n${MARK('merge')}`],
   });
   assert.deepEqual(stateOf(f, 7046), {
     state: 'open',
     assignees: [],
-    comments: [`已升级上报：预算用尽\n\n${MARK('escalate')}`],
+    comments: [`Escalated: 预算用尽\n\n${MARK('escalate')}`],
   });
   assert.deepEqual(stateOf(f, 7042), {
     state: 'closed',
@@ -431,7 +431,7 @@ test('sync 部分同步续作（gitlab）：合并票被抢跑 close、评论未
   assert.deepEqual(stateOf(f, 7043), {
     state: 'closed',
     assignees: [],
-    comments: [`已合并（merge SHA：${SHA_A}）\n\n${MARK('merge')}`],
+    comments: [`Merged (merge SHA: ${SHA_A})\n\n${MARK('merge')}`],
   }, '已关不重关，补评论恰一次');
   assert.match(r.stdout, /同步完成/);
 });
@@ -449,10 +449,10 @@ test('sync abandon（gitlab）：note 先行留评、撤占坑走 update --unass
   assert.deepEqual(stateOf(f, 7042), {
     state: 'open',
     assignees: [],
-    comments: [`本 run 已放弃：用户拍板放弃：终审 not_ready\n\n${MARK('abandon')}`],
+    comments: [`This run has been abandoned: 用户拍板放弃：终审 not_ready\n\n${MARK('abandon')}`],
   });
   const log = calls(f);
-  const note = log.findIndex((l) => l.includes('issue note 7042 --message') && l.includes('本 run 已放弃'));
+  const note = log.findIndex((l) => l.includes('issue note 7042 --message') && l.includes('This run has been abandoned'));
   const unassign = log.findIndex((l) => /(^|\s)issue update 7042 --unassign alice(\s|$)/.test(l));
   assert.ok(note !== -1 && unassign !== -1 && note < unassign, '放弃同样 note 先行再撤占坑');
   assert.ok(markerNear(rawLog(f), 'issue note 7042 --message ', MARK('abandon')), '放弃留评携带 marker：abandon');

@@ -217,16 +217,16 @@ test('sync seal 成功：合并票关票附 SHA、升级票只留评保持开放
 
   // tracker 桩状态：合并票已关且评论含 SHA + merge marker；升级票保持开放只有留评
   //（escalate marker）；spec 已关附收尾评论（closing marker）。marker 隐藏在正文尾部，
-  // 人类可读正文信息不变。
+  // 人类可读正文信息不变；issue #8：固定正文英文（旧版中文只存在于历史评论）。
   assert.deepEqual(stateOf(f, 1043), {
     state: 'closed',
     assignees: [],
-    comments: [`已合并（merge SHA：${SHA_A}）\n\n${MARK('merge')}`],
+    comments: [`Merged (merge SHA: ${SHA_A})\n\n${MARK('merge')}`],
   });
   assert.deepEqual(stateOf(f, 1102), {
     state: 'open',
     assignees: [],
-    comments: [`已升级上报：预算用尽\n\n${MARK('escalate')}`],
+    comments: [`Escalated: 预算用尽\n\n${MARK('escalate')}`],
   });
   assert.deepEqual(stateOf(f, 3001), {
     state: 'closed',
@@ -241,8 +241,8 @@ test('sync seal 成功：合并票关票附 SHA、升级票只留评保持开放
     ['issue view 1043', 'issue view 1102', 'issue view 3001'],
     '只拉取同步对象的状态（在途票 1044 不发请求）',
   );
-  assert.ok(log.some((l) => /issue close 1043 --comment 已合并（merge SHA：0f3a9c41b7e2d5f8a6c1e4b9d2f7a3c5e8b1d4f6）/.test(l)));
-  assert.ok(log.some((l) => /issue comment 1102 --body 已升级上报：预算用尽/.test(l)));
+  assert.ok(log.some((l) => l.includes('issue close 1043 --comment Merged (merge SHA: 0f3a9c41b7e2d5f8a6c1e4b9d2f7a3c5e8b1d4f6)')));
+  assert.ok(log.some((l) => l.includes('issue comment 1102 --body Escalated: 预算用尽')));
   assert.ok(log.some((l) => /issue close 3001 --comment 已交付：票 1043/.test(l)));
   // 四类同步写入均带 marker —— 逐条验（合并关票=merge、升级留评=escalate、spec 收尾=closing；
   // 各 marker 含本 run 标识）。多行正文折行，按原文窗口断言同一调用内携带。
@@ -322,10 +322,11 @@ test('sync 幂等重跑：旧 run 无 marker 历史评论 → 首重跑后照常
   const first = sync(f, [], withGh(f));
   assert.equal(first.status, 0, first.stdout);
   assert.match(first.stdout, /✓ comment 1043/, '历史无 marker 评论视为未同步、照常推送一次');
+  // issue #8：旧版中文正文与新英文正文同列——旧文识别、新文携带 marker 推送
   assert.deepEqual(stateOf(f, 1043), {
     state: 'closed',
     assignees: [],
-    comments: [`已合并（merge SHA：${SHA_A}）`, `已合并（merge SHA：${SHA_A}）\n\n${MARK('merge')}`],
+    comments: [`已合并（merge SHA：${SHA_A}）`, `Merged (merge SHA: ${SHA_A})\n\n${MARK('merge')}`],
   });
 
   // 再重跑：marker 已在 → 零动作（新写入不再重复，语义收敛到 marker）
@@ -337,6 +338,26 @@ test('sync 幂等重跑：旧 run 无 marker 历史评论 → 首重跑后照常
     writesBefore,
     'marker 补推后重跑：零动作',
   );
+});
+
+// issue #8：升级前版本推送的旧版中文正文（带 marker）——重跑识别为已同步，零重复推送。
+//（无 marker 的旧中文评论按迁移语义照常补推一次，见上一用例；带 marker 的永不重复。）
+test('sync 跨语言兼容：旧版中文同步评论（带 marker）→ 重跑识别，零重复推送', (t) => {
+  const f = makeFixture(t);
+  seedSealFixture(f);
+  stubState(f, {
+    1043: { state: 'closed', assignees: [], comments: [`已合并（merge SHA：${SHA_A}）\n\n${MARK('merge')}`] },
+    1044: { state: 'open', assignees: [], comments: [] },
+    1102: { state: 'open', assignees: [], comments: [`已升级上报：预算用尽\n\n${MARK('escalate')}`] },
+    3001: { state: 'closed', assignees: [], comments: [`已交付：票 1043 合并于主分支，PR #12 待审。\n\n${MARK('closing')}`] },
+  });
+  const r = sync(f, [], withGh(f));
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /已同步：无待推送动作/);
+  assert.equal(callLog(f).filter((l) => !isViewCall(l)).length, 0, '旧中文痕迹识别为已同步：零写入');
+  assert.equal(stateOf(f, 1043).comments.length, 1, '合并票评论不重复');
+  assert.equal(stateOf(f, 1102).comments.length, 1, '升级票留评不重复');
+  assert.equal(stateOf(f, 3001).comments.length, 1, 'spec 收尾评论不重复');
 });
 
 // ====================================================================
@@ -389,11 +410,11 @@ test('sync abandon：spec 留评放弃说明 + 撤占坑；重跑零动作', (t)
   });
   const r = sync(f, ['--mode', 'abandon', '--claimant', 'alice', '--reason', '用户拍板放弃：终审 not_ready'], withGh(f));
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  // 放弃留评携带 abandon marker（含 run 标识）——人类可读正文原样保留
+  // 放弃留评携带 abandon marker（含 run 标识）——人类可读正文原样保留（issue #8：英文正文，原因原文跟随）
   assert.deepEqual(stateOf(f, 3001), {
     state: 'open',
     assignees: [],
-    comments: [`本 run 已放弃：用户拍板放弃：终审 not_ready\n\n${MARK('abandon')}`],
+    comments: [`This run has been abandoned: 用户拍板放弃：终审 not_ready\n\n${MARK('abandon')}`],
   });
   assert.ok(markerNear(rawLog(f), 'issue comment 3001 --body ', MARK('abandon')), '放弃留评携带 marker：abandon');
   assert.match(r.stdout, /✓ comment 3001/);
@@ -415,7 +436,7 @@ test('sync abandon：占坑者已不在（他人已处理）→ 只留说明', (
   assert.deepEqual(stateOf(f, 3001), {
     state: 'open',
     assignees: [],
-    comments: [`本 run 已放弃：改期重跑\n\n${MARK('abandon')}`],
+    comments: [`This run has been abandoned: 改期重跑\n\n${MARK('abandon')}`],
   });
   assert.match(r.stdout, /✓ comment 3001/);
 });

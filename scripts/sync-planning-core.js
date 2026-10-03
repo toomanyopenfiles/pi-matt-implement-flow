@@ -107,8 +107,11 @@ function hasSyncMarker(comments, runId, kind) {
 }
 
 // 评论幂等（票 02）：幂等键是隐藏机器 marker——幂等判定只认 marker，
-// 中文自然语言文本包含判定废除。正文（merge SHA / 升级原因 / 交付指引 / 放弃说明）
+// 自然语言文本包含判定废除。正文（merge SHA / 升级原因 / 交付指引 / 放弃说明）
 // 只面向 tracker 上的人类，不参与任何判定；判重不依赖文本包含（无双重判定遗留）。
+// 正文语言（issue #8）：三条固定正文用英文（tracker 受众的通用语言）；旧版中文正文
+// （已合并（merge SHA：…）/ 已升级上报：… / 本 run 已放弃：…）只存在于 tracker 历史
+// 评论里，识别靠 marker，读取层事实提取两套都认（sync-read-core）。
 
 // git SHA 形态：7–40 位十六进制（短 SHA 到完整 SHA 都允许，按原文携带）
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
@@ -132,7 +135,7 @@ const withMarker = (body, kind, runId) => `${body}\n\n${syncMarker(runId, kind)}
 
 function planMergeActions(ticket, num, issue, runId, closeWithComment) {
   const sha = ticket.mergeSha;
-  const body = withMarker(`已合并（merge SHA：${sha}）`, 'merge', runId);
+  const body = withMarker(`Merged (merge SHA: ${sha})`, 'merge', runId);
   const commented = hasSyncMarker(issue.comments, runId, 'merge');
   if (issue.state === 'open') {
     // marker 已在（部分同步）→ 仅关票不重评；否则按关票能力生成动作集：
@@ -208,7 +211,7 @@ function planSeal(snapshot, issues, runId, closeWithComment) {
       const issue = issues.get(num);
       if (!issue) reject(`tracker 缺快照票 ${num} 的状态——升级票需要同步留评`);
       if (!hasSyncMarker(issue.comments, runId, 'escalate')) {
-        actions.push({ kind: 'comment', num, body: withMarker(`已升级上报：${t.escalateReason}`, 'escalate', runId) });
+        actions.push({ kind: 'comment', num, body: withMarker(`Escalated: ${t.escalateReason}`, 'escalate', runId) });
       }
       // 保持开放：不产生任何状态动作
     }
@@ -245,7 +248,7 @@ function planAbandon(snapshot, issues, options) {
   if (!issue) reject(`tracker 缺 spec 母票 ${num} 的状态——撤占坑需要母票状态`);
   const actions = [];
   if (!hasSyncMarker(issue.comments, runId, 'abandon')) {
-    actions.push({ kind: 'comment', num, body: withMarker(`本 run 已放弃：${reason}`, 'abandon', runId) });
+    actions.push({ kind: 'comment', num, body: withMarker(`This run has been abandoned: ${reason}`, 'abandon', runId) });
   }
   if (issue.assignees.includes(claimant)) {
     actions.push({ kind: 'unassign', num, login: claimant });

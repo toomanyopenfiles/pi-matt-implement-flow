@@ -17,6 +17,10 @@ implementation history live in [`docs/adr/`](./docs/adr/).
 
 ### Changed
 
+- The comments the run posts to the tracker before it finishes (merged / escalated / run
+  abandoned) are now written in English, so colleagues and clients reading an English-language tracker can
+  understand them. Comments posted by earlier versions (Chinese) are still recognised —
+  re-running the sync against them posts nothing twice. (#8)
 - All user-facing docs (both READMEs and the audit-report docs) rewritten from the user's point of
   view: plain language, no internal implementation details. The main READMEs gained a
   troubleshooting FAQ and a "what you get when the run finishes" section.

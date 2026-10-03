@@ -10,9 +10,11 @@
 //      的 tracker 状态（小写 open/closed、login/body 字符串数组）。
 //
 // 快照 Comments 事实约定（写入侧是编排流程文档，票 07 对齐措辞）：
-//   - 票文件 Comments 节里 `merge SHA: <sha>`（或收尾评论 `已合并（merge SHA：<sha>）`
-//     的自然写法——同一宽容口径）→ mergeSha
-//   - 票文件 Comments 节里 `escalate: <原因>`（或 `已升级上报：<原因>`）→ escalateReason
+//   - 票文件 Comments 节里 `merge SHA: <sha>`（或收尾评论的自然写法——旧版中文
+//     `已合并（merge SHA：<sha>）`、新版英文 `Merged (merge SHA: <sha>)`——同一
+//     merge SHA 锚，半/全角冒号皆宽容）→ mergeSha
+//   - 票文件 Comments 节里 `escalate: <原因>`（或自然写法：旧版中文 `已升级上报：<原因>`、
+//     新版英文 `Escalated: <原因>`——同一行首锚）→ escalateReason
 //   - spec.md Comments 节里 `closing: <交付指引>`（或 `收尾：<交付指引>`）→ closingNote
 // 事实只认 Comments 节内的行（追加语义：多个 Comments 节取最后一个——最新在最下）；
 // 节外的散文提及不算事实。
@@ -31,10 +33,11 @@ const META_LINE = (label) => new RegExp(`^\\**\\s*${label}\\s*:\\**\\s*(.*)$`, '
 // 追加语义下若有多个节，最后一个即最新）。
 const COMMENTS_HEADING = /(?:^|\n)##\s+Comments\s*(?:$|\n)/g;
 
-// 同步事实行（Comments 节内）：merge SHA（半/全角冒号、是否带列表符皆宽容）、
-// escalate（或规划器同源的 已升级上报：前缀）、closing（或中文 收尾：）。
+// 同步事实行（Comments 节内）：merge SHA（半/全角冒号、是否带列表符皆宽容；锚吃新旧
+// 收尾评论自然写法）、escalate（或规划器同源的自然写法前缀：旧版中文 已升级上报：、
+// 新版英文 Escalated：——同一行首锚）、closing（或中文 收尾：）。
 const MERGE_SHA_FACT = /merge\s*SHA\s*[：:]\s*([0-9a-f]{7,40})/i;
-const ESCALATE_FACT = /^(?:[-*]\s*)?(?:escalate|已升级上报)\s*[：:]\s*(.+)$/im;
+const ESCALATE_FACT = /^(?:[-*]\s*)?(?:escalate|escalated|已升级上报)\s*[：:]\s*(.+)$/im;
 const CLOSING_FACT = /^(?:[-*]\s*)?(?:closing|收尾)\s*[：:]\s*(.+)$/im;
 
 // git SHA 形态取 7–40 位十六进制——与 sync-planning-core 的 SHA_RE 同一口径；
