@@ -35,7 +35,8 @@ const {
   checkCoderDispatchTypedGate,
   checkDispatchSchemaMatchesSource,
   checkFixLoopHandRun,
-  checkBriefsNoReportDuties,
+  checkFixLoopAcceptanceDisabled,
+  checkReportDutySplit,
   checkGateCommandFlags,
   checkHardRulesRetained,
   checkPureVerdictGateAndEscalation,
@@ -315,8 +316,8 @@ test('anchor-3: fix loop is a hand-run of the same script command (stdout is the
   assert.deepEqual(checkFixLoopHandRun(skillText), []);
 });
 
-test('anchor-4: briefs and the coder agent carry zero report duties (the model never hand-writes reports)', () => {
-  assert.deepEqual(checkBriefsNoReportDuties(skillText, coderAgentText), []);
+test('anchor-4: report duty is split — no work reports, but the platform acceptance form is filled truthfully (briefs and coder agent agree, issue #7)', () => {
+  assert.deepEqual(checkReportDutySplit(skillText, coderAgentText), []);
 });
 
 test('anchor-5: every mechanical-report gate command carries --base and --test-command', () => {
@@ -406,12 +407,12 @@ test('breakage simulation: a returning ## Acceptance Contract brief section is f
   const withContract =
     '## Briefs\n## Acceptance Contract\nYour final structured_output call must carry acceptanceReport.\n' +
     'commit everything.\n## Hard rules\n';
-  const problems = checkBriefsNoReportDuties(withContract, coderAgentText);
+  const problems = checkReportDutySplit(withContract, coderAgentText);
   assert.ok(problems.some((p) => p.includes('report duty')));
 });
 
 test('breakage simulation: a coder agent re-adding SIBLING-keys wording is flagged (anchor-4)', () => {
-  const problems = checkBriefsNoReportDuties(skillText, 'acceptanceReport is a SIBLING of value.\nNo handwritten reports.\n');
+  const problems = checkReportDutySplit(skillText, 'acceptanceReport is a SIBLING of value.\nNo handwritten reports.\n');
   assert.ok(problems.some((p) => p.includes('agents/coder.md')));
 });
 
@@ -515,6 +516,65 @@ test('breakage simulation: the removed workflowScript API and a lost file discip
   assert.ok(problems.some((p) => p.includes('removed `workflowScript` API')));
   assert.ok(problems.some((p) => p.includes('script-file')));
   assert.ok(checkDispatchScriptFiles(removed).some((p) => p.includes('/wf/')));
+});
+
+// --- issue #7 回归护栏：修复轮 resume 与完整性兜底一律 acceptance: false（断锚 9）+ 职责二分 ---
+
+test('anchor-9: fix-loop resume and the integrity fallback carry acceptance: false with no gate (issue #7)', () => {
+  assert.deepEqual(checkFixLoopAcceptanceDisabled(skillText), []);
+});
+
+test('breakage simulation: a fix-loop resume without acceptance: false is flagged (issue #7, 旧派发形态回潮即红)', () => {
+  const oldResume =
+    '### Fix loop\n' +
+    '```js\nconst r = await runs.run("fix-01-r2", { resume: "<coderRunId>", task: `fix` });\n```\n' +
+    "(`acceptance: false` — this round's verdict is the hand-run gate below.)\n" +
+    'fall back to a fresh coder with `worktree: true, baseRef: "refs/heads/ticket-<NN>", acceptance: false` — no gate.\n' +
+    '### Merge\n';
+  const problems = checkFixLoopAcceptanceDisabled(oldResume);
+  assert.ok(
+    problems.some((p) => p.includes('resume snippet must carry `acceptance: false`')),
+    `expected the old resume shape to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: a fallback fresh coder carrying a gate (or losing the no-gate rule) is flagged (issue #7)', () => {
+  const gatedFallback =
+    '### Fix loop\n' +
+    '```js\nconst r = await runs.run("fix-01-r2", { resume: "r", task: "t", acceptance: false });\n```\n' +
+    "this round's verdict is the hand-run gate below\n" +
+    'fall back to a fresh coder with `worktree: true, baseRef: "refs/heads/ticket-<NN>", acceptance: false, gate: { command: "npm test" }`.\n' +
+    '### Merge\n';
+  const problems = checkFixLoopAcceptanceDisabled(gatedFallback);
+  assert.ok(
+    problems.some((p) => p.includes('gate object')),
+    `expected the gated fallback to be flagged, got: ${JSON.stringify(problems)}`
+  );
+  assert.ok(problems.some((p) => p.includes('integrity fallback')));
+});
+
+test('breakage simulation: a coder agent dropping the platform acceptance-form duty is flagged (issue #7, 两类文本不一致即红)', () => {
+  const problems = checkReportDutySplit(
+    skillText,
+    'No work reports — never write prose about what you changed, why, or what risks remain.\n'
+  );
+  assert.ok(
+    problems.some((p) => p.includes('agents/coder.md') && p.includes('acceptance-form duty')),
+    `expected the missing form duty to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: a brief losing the form-duty sentence while another keeps it is flagged (issue #7, 五简报模板逐个断言)', () => {
+  const oneBriefDropsIt = skillText.replace(
+    "If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).\n\n### Fix follow-up",
+    '\n### Fix follow-up'
+  );
+  assert.notEqual(oneBriefDropsIt, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkReportDutySplit(oneBriefDropsIt, coderAgentText);
+  assert.ok(
+    problems.some((p) => p.includes('Reviewer brief') && p.includes('acceptance-form duty')),
+    `expected the drifted brief to be flagged, got: ${JSON.stringify(problems)}`
+  );
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

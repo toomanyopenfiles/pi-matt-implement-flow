@@ -310,7 +310,8 @@ module.exports = {
   checkCoderDispatchTypedGate,
   checkDispatchSchemaMatchesSource,
   checkFixLoopHandRun,
-  checkBriefsNoReportDuties,
+  checkFixLoopAcceptanceDisabled,
+  checkReportDutySplit,
   checkGateCommandFlags,
   checkHardRulesRetained,
   checkPureVerdictGateAndEscalation,
@@ -454,8 +455,27 @@ function checkFixLoopHandRun(skillText) {
   return problems;
 }
 
-// —— 断锚 4：简报（Briefs）与 coder agent 定义零报告职责——模型不再手写任何报告。
-function checkBriefsNoReportDuties(skillText, coderAgentText) {
+// —— 断锚 4（issue #7 起为职责二分措辞）：模型不写**工作报告**（改了什么/为什么/
+// 残余风险自评等主观自评），但平台 system prompt 若要求 fenced `acceptance-report`
+// 表单，必须如实填写（只含机械事实）——表单是平台机制件，表单义务优先于「无报告
+// 职责」句。五套简报模板与 coder agent 定义携带同一组措辞（空白归一化后逐字一致），
+// 一处漂移即红。旧合同通道词（acceptanceReport / structured_output / outputSchema /
+// Acceptance Contract）仍然禁用。
+const NO_WORK_REPORTS =
+  'No work reports — never write prose about what you changed, why, or what risks remain.';
+const FORM_DUTY =
+  "If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).";
+const BRIEF_HEADINGS = [
+  '### Coder brief',
+  '### Reviewer brief',
+  '### Fix follow-up',
+  '### Integration fixer',
+  '### Final fixer',
+];
+const PRODUCER_BRIEFS = ['### Coder brief', '### Integration fixer', '### Final fixer'];
+const FIX_BRIEF_NO_REPORT_DUTIES = 'No report duties — the orchestrator hand-runs the gate';
+
+function checkReportDutySplit(skillText, coderAgentText) {
   const section = sectionBetween(skillText, '## Briefs', '## Hard rules');
   if (section === null) return ['SKILL.md is missing the "## Briefs" section'];
   const problems = [];
@@ -464,11 +484,38 @@ function checkBriefsNoReportDuties(skillText, coderAgentText) {
     ...presentForbidden(
       normalized,
       ['acceptanceReport', 'structured_output', 'outputSchema', '## Acceptance Contract'],
-      (token) => `SKILL.md briefs still carry a report duty: ${token} — the model never hand-writes reports`
+      (token) => `SKILL.md briefs still carry a report duty: ${token} — the model never hand-writes work reports`
     )
   );
   if (!normalized.includes('commit everything')) {
     problems.push('SKILL.md briefs lost the "commit everything" close-out duty');
+  }
+  for (let i = 0; i < BRIEF_HEADINGS.length; i++) {
+    const heading = BRIEF_HEADINGS[i];
+    const sub = sectionBetween(section, heading, BRIEF_HEADINGS[i + 1]);
+    if (sub === null) {
+      problems.push(`SKILL.md is missing the "${heading}" brief`);
+      continue;
+    }
+    const subNorm = normalizeWhitespace(sub);
+    const name = heading.slice(4);
+    if (!subNorm.includes(normalizeWhitespace(FORM_DUTY))) {
+      problems.push(
+        `SKILL.md ${name} brief is missing the platform acceptance-form duty sentence (issue #7) — same wording as the coder agent: ${FORM_DUTY}`
+      );
+    }
+    if (PRODUCER_BRIEFS.includes(heading)) {
+      if (!subNorm.includes(normalizeWhitespace(NO_WORK_REPORTS))) {
+        problems.push(
+          `SKILL.md ${name} brief is missing the no-work-reports clause (issue #7): ${NO_WORK_REPORTS}`
+        );
+      }
+    }
+    if (heading === '### Fix follow-up' && !subNorm.includes(FIX_BRIEF_NO_REPORT_DUTIES)) {
+      problems.push(
+        `SKILL.md Fix follow-up brief lost the retained clause: "${FIX_BRIEF_NO_REPORT_DUTIES} …" (issue #7 keeps it and adds the form-duty precedence)`
+      );
+    }
   }
   if (coderAgentText !== undefined) {
     const coderNorm = normalizeWhitespace(coderAgentText);
@@ -479,9 +526,71 @@ function checkBriefsNoReportDuties(skillText, coderAgentText) {
         (token) => `agents/coder.md still carries the old contract wording: ${token}`
       )
     );
-    if (!coderNorm.includes('No handwritten reports')) {
-      problems.push('agents/coder.md is missing the "No handwritten reports" clause');
+    if (!coderNorm.includes(normalizeWhitespace(NO_WORK_REPORTS))) {
+      problems.push(
+        `agents/coder.md is missing the no-work-reports clause (issue #7): ${NO_WORK_REPORTS}`
+      );
     }
+    if (!coderNorm.includes(normalizeWhitespace(FORM_DUTY))) {
+      problems.push(
+        `agents/coder.md is missing the platform acceptance-form duty sentence (issue #7) — must match the briefs verbatim: ${FORM_DUTY}`
+      );
+    }
+  }
+  return problems;
+}
+
+// —— issue #7 断锚：修复轮 resume 与完整性兜底 fresh coder 一律 `acceptance: false`。
+// 平台事实：retained resume 继承首轮验收契约（verified + attestation 报告义务），而模型
+// 不产工作报告 → 提交完的修复被「Structured acceptance report not found」判死；gate 在
+// resume 上被平台拒收，兜底 fresh coder 也**不**挂 gate（gate 归一化出 verified 并恢复
+// 报告义务，正是本 bug 的死因）。两处判定都只剩编排者手跑的机械报告门禁（断锚 3）。
+const FIX_ACCEPTANCE_REASON_ANCHOR = "this round's verdict is the hand-run gate";
+const FIX_FALLBACK_SHAPE = 'worktree: true, baseRef: "refs/heads/ticket-<NN>", acceptance: false';
+
+function checkFixLoopAcceptanceDisabled(skillText) {
+  const section = sectionBetween(skillText, '### Fix loop', '### Merge');
+  if (section === null) return ['SKILL.md is missing the "### Fix loop" section'];
+  const problems = [];
+  const fence = section.match(/```js\n([\s\S]*?)\n```/);
+  const block = fence ? fence[1] : '';
+  if (!block) {
+    problems.push('SKILL.md fix loop carries no fenced ```js resume snippet');
+  } else {
+    if (!/resume:/.test(block)) {
+      problems.push('SKILL.md fix-loop resume snippet lost the `resume` dispatch');
+    }
+    if (!/acceptance:\s*false/.test(block)) {
+      problems.push(
+        'SKILL.md fix-loop resume snippet must carry `acceptance: false` (issue #7) — a retained resume inherits the first round\'s acceptance contract and rejects a committed fix for a report the model never writes'
+      );
+    }
+    if (/\bgate\s*:/.test(block)) {
+      problems.push(
+        'SKILL.md fix-loop resume snippet must not carry a gate — the platform rejects a gate on a retained resume'
+      );
+    }
+  }
+  const normalized = normalizeWhitespace(section);
+  if (!normalized.includes(FIX_ACCEPTANCE_REASON_ANCHOR)) {
+    problems.push(
+      `SKILL.md fix loop must say why the resume carries \`acceptance: false\` (issue #7 anchor: "${FIX_ACCEPTANCE_REASON_ANCHOR}")`
+    );
+  }
+  if (!normalized.includes(FIX_FALLBACK_SHAPE)) {
+    problems.push(
+      `SKILL.md integrity fallback must dispatch the fresh coder as \`${FIX_FALLBACK_SHAPE}\` (issue #7) — acceptance off, verdict from the hand-run gate`
+    );
+  }
+  if (!/\bno gate\b/i.test(normalized)) {
+    problems.push(
+      'SKILL.md integrity fallback must state it carries no gate (a gate restores the report duty that falsely rejects a finished fix)'
+    );
+  }
+  if (/\bgate\s*:\s*\{/.test(normalized)) {
+    problems.push(
+      'SKILL.md fix loop must not dispatch any gate object — fix rounds are judged by the hand-run gate only'
+    );
   }
   return problems;
 }
