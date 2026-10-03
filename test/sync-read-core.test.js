@@ -14,8 +14,8 @@ const {
   parseSourceLine,
   readSnapshot,
   toTrackerIssues,
-} = require('./sync-read-core.js');
-const { GITHUB_CONTRACT, GITLAB_CONTRACT, LOCAL_CONTRACT } = require('./tracker-contracts');
+} = require('../scripts/sync-read-core.js');
+const { GITHUB_CONTRACT, GITLAB_CONTRACT, LOCAL_CONTRACT } = require('../scripts/tracker-contracts');
 const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
 
 const SHA = '0f3a9c41b7e2d5f8a6c1e4b9d2f7a3c5e8b1d4f6';

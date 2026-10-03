@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const LEDGER = path.resolve(__dirname, 'ledger.js');
+const LEDGER = path.resolve(__dirname, '../scripts/ledger.js');
 const FIXTURES = path.resolve(__dirname, 'fixtures');
 const read = (name) => fs.readFileSync(path.join(FIXTURES, name), 'utf8');
 

@@ -9,7 +9,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { syncMarker, hasSyncMarker } = require('./sync-planning-core.js');
+const { syncMarker, hasSyncMarker } = require('../scripts/sync-planning-core.js');
 
 // ------------------------------------------------------------------
 // marker 构造：HTML 注释形态，人类不可见

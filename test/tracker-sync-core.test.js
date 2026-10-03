@@ -7,9 +7,9 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const sync = require('./tracker-sync-core');
-const schema = require('./ledger-schema');
-const { LOCAL_CONTRACT, GITHUB_CONTRACT, GITLAB_CONTRACT } = require('./tracker-contracts');
+const sync = require('../scripts/tracker-sync-core');
+const schema = require('../scripts/ledger-schema');
+const { LOCAL_CONTRACT, GITHUB_CONTRACT, GITLAB_CONTRACT } = require('../scripts/tracker-contracts');
 const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
 
 // 状态映射矩阵（spec 接缝②参数化）：同一套用例喂三预设 + 合成改名词表契约，
@@ -161,7 +161,7 @@ test('状态读取：缺行 / 未知串透传——对账与封账门照旧如�
 test('封账门链路（合成改名词表）：wontfix 改名后票文件 Status 过映射判 wontfix，不再误报未闭环', (t) => {
   // ADR-0006 的原始痛点：wontfix label 改名后，封账门把改名票当未闭环炸响。
   // 链路：票文件 Status 串 → normalizeStatus（契约词表）→ canonical → closeBlockers。
-  const core = require('./ledger-core');
+  const core = require('../scripts/ledger-core');
   const raw = sync.normalizeStatus('archived', { contract: RENAMED_CONTRACT });
   assert.equal(raw, 'wontfix');
   const blockers = core.closeBlockers({

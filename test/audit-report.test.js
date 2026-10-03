@@ -12,8 +12,8 @@ const {
   extractBriefs,
   findBriefFor,
   deriveRisks,
-} = require('./collect');
-const { renderAll } = require('./render');
+} = require('../audit-report/collect');
+const { renderAll } = require('../audit-report/render');
 
 // ---------------------------------------------------------------- fixture 工厂
 
@@ -304,7 +304,7 @@ test('extractBriefs 文件路径形态：脚本文件缺失时优雅降级不崩
 test('collect + render 全链路：模型、风险、页面', () => {
   const fx = makeFixture();
   try {
-    const { collect } = require('./collect');
+    const { collect } = require('../audit-report/collect');
     const model = collect({ runtimeDir: fx.runtimeDir });
 
     // 票与轮次
@@ -314,7 +314,7 @@ test('collect + render 全链路：模型、风险、页面', () => {
 
     // 任务书恢复
     assert.ok(model.briefs.length >= 2, '应从主会话恢复两段脚本');
-    const { findBriefFor } = require('./collect');
+    const { findBriefFor } = require('../audit-report/collect');
     const wave = findBriefFor(model.briefs, 't-01', '2026-09-18T18:20:00.000Z');
     assert.ok(wave && wave.text.includes('Ticket 01'), 'wave 任务书应含 brief 原文');
     const fix = findBriefFor(model.briefs, 'fix-01-r1', '2026-09-18T18:40:00.000Z');
@@ -874,7 +874,7 @@ test('collect：UUID 形状错值的污染 dispatch + refSeq anomaly → 衍生�
 // ---------------------------------------------------------------- i18n 双语输出
 
 test('i18n：zh/en 文案目录键集完全一致；归一、回落、词形占位可用', () => {
-  const { M, makeT, normLang } = require('./i18n');
+  const { M, makeT, normLang } = require('../audit-report/i18n');
   assert.deepEqual(Object.keys(M.zh).sort(), Object.keys(M.en).sort(), '双语键集必须奇偶一致');
   assert.equal(normLang('zh-CN'), 'zh');
   assert.equal(normLang('en'), 'en');

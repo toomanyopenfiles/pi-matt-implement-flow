@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const LEDGER = path.resolve(__dirname, 'ledger.js');
+const LEDGER = path.resolve(__dirname, '../scripts/ledger.js');
 
 // --- gh 桩：按首个参数分派（issue list / api sub_issues / api dependencies/blocked_by / repo view）---
 // api 分支按路径二次分派：sub_issues 与 dependencies/blocked_by 两个 REST 端点（票 05 薄 IO 的全部收口）。

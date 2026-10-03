@@ -34,8 +34,8 @@ const {
   renderPatchPreview,
   extractFrontmatterFields,
   buildShowView,
-} = require('./flow-config-core.js');
-const { PKG_ROOT, readText } = require('./registration-checks.js');
+} = require('../scripts/flow-config-core.js');
+const { PKG_ROOT, readText } = require('../scripts/registration-checks.js');
 
 // --- 路径解析 ---
 

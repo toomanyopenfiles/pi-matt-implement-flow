@@ -7,7 +7,7 @@
 // 构造后立即过 01 的同一扇 schema 校验门（validateContract），保证夹具本身合法。
 
 const assert = require('node:assert/strict');
-const { validateContract } = require('../tracker-contract-core');
+const { validateContract } = require('../../scripts/tracker-contract-core');
 
 const RENAMED_CONTRACT = {
   tracker: 'synthetic-renamed',

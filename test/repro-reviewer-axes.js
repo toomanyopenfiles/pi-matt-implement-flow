@@ -34,7 +34,7 @@
 //   `async: false` 时调用阻塞到两轴返回 → 收场必然晚于两轴完成。
 //
 // 用法：
-//   node scripts/repro-reviewer-axes.js [--only keyless|reviewer|final-reviewer|all]
+//   node test/repro-reviewer-axes.js [--only keyless|reviewer|final-reviewer|all]
 //        [--model provider/id] [--dump]
 //
 // 不进默认 `npm test`（真实模型调用、分钟级、需 API 凭证）；npm run repro 手动跑。

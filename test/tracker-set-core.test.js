@@ -8,7 +8,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseSpecRef, repoOfSpecRef, parseParentEdge, resolveTicketSet } = require('./tracker-set-core.js');
+const { parseSpecRef, repoOfSpecRef, parseParentEdge, resolveTicketSet } = require('../scripts/tracker-set-core.js');
 
 // --- fixture：tracker 的 issue 集合表示（number / body / subIssues）---
 
@@ -196,7 +196,7 @@ test('Parent 边解析：无 ## Parent 节返回 null（没有边）；空节返
 // 契约参数化（票 05 接缝②）：引用形态与兜底链由契约数据驱动，不再按 tracker 形态分叉
 // ====================================================================
 
-const { GITHUB_CONTRACT, GITLAB_CONTRACT, LOCAL_CONTRACT } = require('./tracker-contracts');
+const { GITHUB_CONTRACT, GITLAB_CONTRACT, LOCAL_CONTRACT } = require('../scripts/tracker-contracts');
 const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
 
 test('引用形态参数化（GitHub 契约）：四形态同过一个转换点，域外 URL 显式解析不出', () => {

@@ -8,7 +8,11 @@ implementation stage of [Matt Pocock's engineering flow](https://github.com/matt
 
 - Requirements: Node.js (for the scripts and tests), [pi](https://github.com/earendil-works/pi) with
   the [pi-subagents](https://github.com/nicobailon/pi-subagents) package.
-- Run the test suite: `npm test` (plain `node --test scripts/*.test.js`, no build step, no install needed).
+- Run the test suite: `npm test` (plain `node --test test/*.test.js`, no build step, no install needed).
+- Test layout: every test lives under `test/` (fixtures in `test/fixtures/`), named after what it
+  covers — `<module>.test.js` for a module in `scripts/` or `audit-report/`, `<sub-command>-cli.test.js`
+  for a CLI black-box suite. `test/repro-*.js` are manual acceptance probes (`npm run repro`, real model
+  calls) and are never part of `npm test`. None of `test/` ships in the npm package.
 - Orientation for agents and humans alike: [`AGENTS.md`](./AGENTS.md) points at the issue-tracker
   setup, the triage label vocabulary, and the domain docs; [`CONTEXT.md`](./CONTEXT.md) holds the
   glossary and the flow's vocabulary.

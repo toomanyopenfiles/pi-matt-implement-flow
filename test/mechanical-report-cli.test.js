@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const SCRIPT = path.resolve(__dirname, 'mechanical-report.js');
+const SCRIPT = path.resolve(__dirname, '../scripts/mechanical-report.js');
 
 // --- 夹具：真 git 仓库（init → 改文件 → commit，可控历史）---
 
@@ -259,7 +259,7 @@ test('截断兜底：变更文件清单超长时截断 changedFiles 并打标记
   assert.ok(r.stdout.length <= 12000, `stdout ${r.stdout.length} 字符必须 ≤12000`);
   const report = JSON.parse(r.stdout);
   assert.ok(report.changedFiles.length < 600, '清单被截断');
-  assert.equal(report.changedFiles[report.changedFiles.length - 1], require('./mechanical-report').TRUNCATION_NOTE);
+  assert.equal(report.changedFiles[report.changedFiles.length - 1], require('../scripts/mechanical-report').TRUNCATION_NOTE);
 });
 
 test('截断兜底：单行超长输出时硬截 testResult 并打标记', (t) => {

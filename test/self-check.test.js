@@ -44,7 +44,7 @@ const {
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
   checkDispatchScriptFiles,
-} = require('./registration-checks.js');
+} = require('../scripts/registration-checks.js');
 
 function readAgentFrontmatter() {
   const frontmatter = {};
@@ -299,7 +299,7 @@ test('breakage simulation: the environment-survey step going missing is flagged'
 
 const skillText = readText(PKG_ROOT, 'SKILL.md');
 const coderAgentText = readText(PKG_ROOT, 'agents/coder.md');
-const { REPORT_CONTRACT } = require('./mechanical-report.js');
+const { REPORT_CONTRACT } = require('../scripts/mechanical-report.js');
 
 test('anchor-1: coder dispatch carries a typed gate (command/output-json/schema/timeoutMs), no acceptance object or outputSchema', () => {
   assert.deepEqual(checkCoderDispatchTypedGate(skillText), []);

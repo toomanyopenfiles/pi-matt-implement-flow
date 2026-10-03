@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const LEDGER = path.resolve(__dirname, 'ledger.js');
+const LEDGER = path.resolve(__dirname, '../scripts/ledger.js');
 
 // --- fixture 临时仓 ---
 
@@ -42,8 +42,8 @@ function makeFixture(t, { tickets = true, remote = null, trackerDoc = 'issue-tra
     writeTicketFile(dir, '01', '自检基线', { blockedBy: null });
     writeTicketFile(dir, '02', 'README 速览', { blockedBy: '01' });
   }
-  // setup 产物（票 04）：ledger.test 的默认铺底按 local 范本判型——契约识别的判型输入，
-  // 复用 scripts/fixtures 的既有范本 / 词表 fixture；trackerDoc 可换 github 等预设范本。
+  // setup 产物（票 04）：ledger-cli.test 的默认铺底按 local 范本判型——契约识别的判型输入，
+  // 复用 test/fixtures 的既有范本 / 词表 fixture；trackerDoc 可换 github 等预设范本。
   const fixturesDir = path.join(__dirname, 'fixtures');
   fs.mkdirSync(path.join(dir, 'docs/agents'), { recursive: true });
   fs.copyFileSync(path.join(fixturesDir, trackerDoc), path.join(dir, 'docs/agents/issue-tracker.md'));
@@ -1659,7 +1659,7 @@ test('票集边界：对账兼住事件流——冻结后账上出现边界外�
 });
 
 test('票集边界：旗标形态纯函数档——parseFlags 对 tickets 的接受 / 归一 / 拒绝三档', (t) => {
-  const { parseFlags } = require('./ledger-schema.js');
+  const { parseFlags } = require('../scripts/ledger-schema.js');
   const ok = parseFlags(['--tickets', '02, 01,1'], 'init');
   assert.ok(
     ok.errors.every((e) => /缺少必选参数/.test(e)),

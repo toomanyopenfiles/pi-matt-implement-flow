@@ -11,7 +11,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { planTrackerSync, syncMarker } = require('./sync-planning-core.js');
+const { planTrackerSync, syncMarker } = require('../scripts/sync-planning-core.js');
 const RUN = 'd573c461'; // marker 专项用的 run 标识（options 必选——下同）
 
 // --- 合成 fixture：40 位 SHA（独立已知值，非由实现推出） ---

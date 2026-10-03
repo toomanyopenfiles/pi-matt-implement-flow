@@ -8,8 +8,8 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { slugify, planSnapshot, checkOverwrite } = require('./snapshot-core.js');
-const { LOCAL_CONTRACT, GITHUB_CONTRACT } = require('./tracker-contracts');
+const { slugify, planSnapshot, checkOverwrite } = require('../scripts/snapshot-core.js');
+const { LOCAL_CONTRACT, GITHUB_CONTRACT } = require('../scripts/tracker-contracts');
 const { RENAMED_CONTRACT } = require('./fixtures/synthetic-renamed-contract');
 
 // --- fixture：tracker 的 issue 集合表示（gh issue list --json 的手工等价物）---

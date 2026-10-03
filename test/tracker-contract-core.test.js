@@ -8,15 +8,15 @@
 //   - 缺 setup 产物 / 认不出的范本 → 显式错误文案（停下，不猜测不降级）
 //   - triage-labels.md 的解析矩阵（合规、改名、重复 label、多行少行、缺列 → 文件+行+列+期望）
 //   - 合成契约（假想 tracker 形态）不经判型直接构造——契约是引擎唯一依赖
-// fixture 直喂（scripts/fixtures/ 三份上游范本 + 词表变体），中文用例命名，沿用既有
+// fixture 直喂（test/fixtures/ 三份上游范本 + 词表变体），中文用例命名，沿用既有
 // 纯函数测试风格（node:test + assert/strict + 分节横幅注释）。
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const core = require('./tracker-contract-core');
-const contracts = require('./tracker-contracts');
+const core = require('../scripts/tracker-contract-core');
+const contracts = require('../scripts/tracker-contracts');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
 const read = (name) => fs.readFileSync(path.join(FIXTURES, name), 'utf8');

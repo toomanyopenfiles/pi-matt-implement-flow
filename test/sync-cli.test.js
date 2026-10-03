@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const LEDGER = path.resolve(__dirname, 'ledger.js');
+const LEDGER = path.resolve(__dirname, '../scripts/ledger.js');
 
 // 票 02：同步幂等机器 marker——黑盒断言点在 gh 桩的状态与调用日志里。run 标识 = --runtime-dir 的
 // 目录名（fixture 下恒 'demo'）；kind = 四类同步写入（merge / escalate / closing / abandon）。

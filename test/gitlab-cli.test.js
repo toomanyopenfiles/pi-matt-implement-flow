@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const LEDGER = path.resolve(__dirname, 'ledger.js');
+const LEDGER = path.resolve(__dirname, '../scripts/ledger.js');
 
 // 票 02：同步幂等机器 marker——run 标识 = --runtime-dir 目录名（fixture 恒 'demo'）。
 const RUN = 'demo';
