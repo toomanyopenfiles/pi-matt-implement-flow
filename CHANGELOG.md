@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe what each release means for users of the package. Design decisions and
 implementation history live in [`docs/adr/`](./docs/adr/).
 
-## [Unreleased]
+## [0.3.1] - 2026-10-03
 ### Added
 
 - Bug reports and feature requests now go through GitHub issue forms; see
@@ -21,6 +21,9 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   abandoned) are now written in English, so colleagues and clients reading an English-language tracker can
   understand them. Comments posted by earlier versions (Chinese) are still recognised —
   re-running the sync against them posts nothing twice. (#8)
+- The npm package no longer ships development-only code (the test suite and its manual
+  acceptance probes): it now contains only what a run needs. In the repository the tests all
+  live under `test/`, one entry point (`npm test`) covering the whole suite.
 - All user-facing docs (both READMEs and the audit-report docs) rewritten from the user's point of
   view: plain language, no internal implementation details. The main READMEs gained a
   troubleshooting FAQ and a "what you get when the run finishes" section.
@@ -122,7 +125,8 @@ Initial public release.
   (spec / ticket / coder / worktree / review).
 - Package and repo descriptions now state the relationship to Matt Pocock's `/implement`.
 
-[Unreleased]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/toomanyopenfiles/pi-matt-implement-flow/releases/tag/v0.1.0
