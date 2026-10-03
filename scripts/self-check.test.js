@@ -36,8 +36,7 @@ const {
   checkDispatchSchemaMatchesSource,
   checkFixLoopHandRun,
   checkFixLoopAcceptanceDisabled,
-  checkReportDutySplit,
-  FORM_DUTY,
+  checkNoReportBans,
   checkGateCommandFlags,
   checkHardRulesRetained,
   checkPureVerdictGateAndEscalation,
@@ -317,8 +316,8 @@ test('anchor-3: fix loop is a hand-run of the same script command (stdout is the
   assert.deepEqual(checkFixLoopHandRun(skillText), []);
 });
 
-test('anchor-4: report duty is split — no work reports, but the platform acceptance form is filled truthfully (briefs and coder agent agree, issue #7)', () => {
-  assert.deepEqual(checkReportDutySplit(skillText, coderAgentText), []);
+test('anchor-4: no report bans anywhere — the report duty is single-sourced to the platform, load-bearing close-outs stay (issue #7 负空间裁定)', () => {
+  assert.deepEqual(checkNoReportBans(skillText, coderAgentText), []);
 });
 
 test('anchor-5: every mechanical-report gate command carries --base and --test-command', () => {
@@ -408,12 +407,12 @@ test('breakage simulation: a returning ## Acceptance Contract brief section is f
   const withContract =
     '## Briefs\n## Acceptance Contract\nYour final structured_output call must carry acceptanceReport.\n' +
     'commit everything.\n## Hard rules\n';
-  const problems = checkReportDutySplit(withContract, coderAgentText);
+  const problems = checkNoReportBans(withContract, coderAgentText);
   assert.ok(problems.some((p) => p.includes('report duty')));
 });
 
 test('breakage simulation: a coder agent re-adding SIBLING-keys wording is flagged (anchor-4)', () => {
-  const problems = checkReportDutySplit(skillText, 'acceptanceReport is a SIBLING of value.\nNo handwritten reports.\n');
+  const problems = checkNoReportBans(skillText, 'acceptanceReport is a SIBLING of value.\nNo handwritten reports.\n');
   assert.ok(problems.some((p) => p.includes('agents/coder.md')));
 });
 
@@ -519,7 +518,7 @@ test('breakage simulation: the removed workflowScript API and a lost file discip
   assert.ok(checkDispatchScriptFiles(removed).some((p) => p.includes('/wf/')));
 });
 
-// --- issue #7 回归护栏：修复轮 resume 与完整性兜底一律 acceptance: false（断锚 9）+ 职责二分 ---
+// --- issue #7 回归护栏：修复轮 resume 与完整性兜底一律 acceptance: false（断锚 9）+ 断锚 4 负空间 ---
 
 test('anchor-9: fix-loop resume and the integrity fallback carry acceptance: false with no gate (issue #7)', () => {
   assert.deepEqual(checkFixLoopAcceptanceDisabled(skillText), []);
@@ -554,27 +553,48 @@ test('breakage simulation: a fallback fresh coder carrying a gate (or losing the
   assert.ok(problems.some((p) => p.includes('integrity fallback')));
 });
 
-test('breakage simulation: a coder agent dropping the platform acceptance-form duty is flagged (issue #7, 两类文本不一致即红)', () => {
-  const problems = checkReportDutySplit(
-    skillText,
-    'No work reports — never write prose about what you changed, why, or what risks remain.\n'
-  );
+test('breakage simulation: a report ban re-added to the coder agent is flagged (issue #7 负空间：禁令回流即红)', () => {
+  const banned = `${coderAgentText}\nNo handwritten reports.\n`;
+  const problems = checkNoReportBans(skillText, banned);
   assert.ok(
-    problems.some((p) => p.includes('agents/coder.md') && p.includes('acceptance-form duty')),
-    `expected the missing form duty to be flagged, got: ${JSON.stringify(problems)}`
+    problems.some((p) => p.includes('agents/coder.md') && p.includes('report ban')),
+    `expected the re-added ban to be flagged, got: ${JSON.stringify(problems)}`
   );
 });
 
-test('breakage simulation: a brief losing the form-duty sentence while another keeps it is flagged (issue #7, 五简报模板逐个断言)', () => {
-  const oneBriefDropsIt = skillText.replace(
-    `return the structured verdict. ${FORM_DUTY}`,
-    'return the structured verdict.'
+test('breakage simulation: a report ban re-added to a brief is flagged (issue #7 负空间：双指令冲突回潮即红)', () => {
+  const bannedBrief = skillText.replace(
+    'return the structured verdict.',
+    'return the structured verdict. No work reports.'
   );
-  assert.notEqual(oneBriefDropsIt, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
-  const problems = checkReportDutySplit(oneBriefDropsIt, coderAgentText);
+  assert.notEqual(bannedBrief, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkNoReportBans(bannedBrief, coderAgentText);
   assert.ok(
-    problems.some((p) => p.includes('Reviewer brief') && p.includes('acceptance-form duty')),
-    `expected the drifted brief to be flagged, got: ${JSON.stringify(problems)}`
+    problems.some((p) => p.includes('SKILL.md') && p.includes('report ban')),
+    `expected the re-added ban to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: the fix brief losing its verdict-source sentence is flagged (issue #7 边界护栏)', () => {
+  const noVerdictSource = skillText.replace(
+    'hand-runs the gate for this round',
+    'leaves the judging to nobody'
+  );
+  assert.notEqual(noVerdictSource, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkNoReportBans(noVerdictSource, coderAgentText);
+  assert.ok(
+    problems.some((p) => p.includes('verdict-source')),
+    `expected the lost verdict-source sentence to be flagged, got: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: dropping a load-bearing close-out sentence is flagged (issue #7 边界护栏)', () => {
+  const noPointer = coderAgentText.replaceAll('by context pointer', 'in the final message');
+  assert.notEqual(noPointer, coderAgentText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const problems = checkNoReportBans(skillText, noPointer);
+  assert.ok(
+    problems.some((p) => p.includes('load-bearing')),
+    `expected the lost load-bearing sentence to be flagged, got: ${JSON.stringify(problems)}`
   );
 });
 

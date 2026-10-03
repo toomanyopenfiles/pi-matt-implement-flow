@@ -283,15 +283,6 @@ function checkAgentTimeouts(agentFrontmatter) {
   return problems;
 }
 
-// —— 断锚 4 的职责二分措辞原子（issue #7，声明在 module.exports 之前以供导出）：
-// NO_WORK_REPORTS 半句禁主观工作报告；FORM_DUTY 半句必填平台验收表单（优先于任何
-// 「无报告职责」句）。语义详见 checkReportDutySplit 的注释；self-check 的 fixture 手术
-// 共用 FORM_DUTY，避免字面量多副本漂移。
-const NO_WORK_REPORTS =
-  'No work reports — never write prose about what you changed, why, or what risks remain.';
-const FORM_DUTY =
-  "If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).";
-
 module.exports = {
   PKG_ROOT,
   AGENT_NAMES,
@@ -320,8 +311,7 @@ module.exports = {
   checkDispatchSchemaMatchesSource,
   checkFixLoopHandRun,
   checkFixLoopAcceptanceDisabled,
-  checkReportDutySplit,
-  FORM_DUTY,
+  checkNoReportBans,
   checkGateCommandFlags,
   checkHardRulesRetained,
   checkPureVerdictGateAndEscalation,
@@ -465,15 +455,23 @@ function checkFixLoopHandRun(skillText) {
   return problems;
 }
 
-// —— 断锚 4（issue #7 起为职责二分措辞）：模型不写**工作报告**（改了什么/为什么/
-// 残余风险自评等主观自评），但平台 system prompt 若要求 fenced `acceptance-report`
-// 表单，必须如实填写（只含机械事实）——表单是平台机制件，表单义务优先于「无报告
-// 职责」句。措辞分工：FORM_DUTY 在五套简报模板与 coder agent 定义逐字一致（空白归一
-// 化后比对）；NO_WORK_REPORTS 半句只在产工作报告的文本（coder / integration fixer /
-// final fixer 简报与 coder.md）——评审者的产出即发现散文，「不写」一侧对它不适用，
-// 修复简报按 spec 保留原句 FIX_BRIEF_NO_REPORT_DUTIES；一处漂移即红。旧合同通道词
-// （acceptanceReport / structured_output / outputSchema / Acceptance Contract）仍禁用。
-// 五套简报的小节标题；末项无后继标题，sectionBetween 取到小节尾。
+// —— 断锚 4（issue #7 后的负空间裁定，ADR-0008 补记二）：简报与 coder 定义**不得**携带
+// 报告禁令（No work reports / No handwritten reports / No report duties，任意大小写），
+// 也不得复述平台表单义务——报告职责单源归平台 system prompt。理由：本流程承重输出全走
+// 结构化通道（git 真相、手跑门禁、context pointer、评审 outputSchema），散文报告无机械
+// 消费者；禁令与平台 fenced `acceptance-report` 要求构成双指令冲突（#7 的死因），且首轮
+// 门禁证据链经过该表单（缺失则门禁在执行前被跳过，见 ADR-0008 补记一事实①），复述禁令
+// 直接威胁首轮门禁。同时钉死砍禁令的边界：修复简报的裁决来源事实句与两句承重收尾语
+// ——它们一丢，砍禁令就失守（模型自封门禁 / 编排者取不到 SHA / 门禁卡不住漏提交）。
+// 旧合同通道词（acceptanceReport / structured_output / outputSchema / SIBLING /
+// ## Acceptance Contract）仍禁用。
+const BAN_PHRASES = ['no work reports', 'no handwritten reports', 'no report duties'];
+const FIX_VERDICT_SOURCE = 'hand-runs the gate for this round';
+const LOAD_BEARING_SENTENCES = [
+  'by context pointer',
+  'a dirty tree or an empty diff fails the gate',
+];
+// 五套简报的小节标题（前缀匹配带后缀的实际标题）；措辞不再钉死，只保证模板在位。
 const BRIEF_HEADINGS = [
   '### Coder brief',
   '### Reviewer brief',
@@ -481,11 +479,8 @@ const BRIEF_HEADINGS = [
   '### Integration fixer',
   '### Final fixer',
 ];
-// 产工作报告的简报（含 NO_WORK_REPORTS 半句）；reviewer 例外见上方措辞分工注释。
-const PRODUCER_BRIEFS = ['### Coder brief', '### Integration fixer', '### Final fixer'];
-const FIX_BRIEF_NO_REPORT_DUTIES = 'No report duties — the orchestrator hand-runs the gate';
 
-function checkReportDutySplit(skillText, coderAgentText) {
+function checkNoReportBans(skillText, coderAgentText) {
   const section = sectionBetween(skillText, '## Briefs', '## Hard rules');
   if (section === null) return ['SKILL.md is missing the "## Briefs" section'];
   const problems = [];
@@ -494,36 +489,34 @@ function checkReportDutySplit(skillText, coderAgentText) {
     ...presentForbidden(
       normalized,
       ['acceptanceReport', 'structured_output', 'outputSchema', '## Acceptance Contract'],
-      (token) => `SKILL.md briefs still carry a report duty: ${token} — the model never hand-writes work reports`
+      (token) => `SKILL.md briefs still carry a report duty: ${token} — the round's report comes from the mechanical gate, never from the model`
     )
   );
   if (!normalized.includes('commit everything')) {
     problems.push('SKILL.md briefs lost the "commit everything" close-out duty');
   }
-  for (let i = 0; i < BRIEF_HEADINGS.length; i++) {
-    const heading = BRIEF_HEADINGS[i];
-    const sub = sectionBetween(section, heading, BRIEF_HEADINGS[i + 1]);
-    if (sub === null) {
+  for (const heading of BRIEF_HEADINGS) {
+    if (!section.includes(heading)) {
       problems.push(`SKILL.md is missing the "${heading}" brief`);
-      continue;
     }
-    const subNorm = normalizeWhitespace(sub);
-    const name = heading.slice(4);
-    if (!subNorm.includes(normalizeWhitespace(FORM_DUTY))) {
+  }
+  for (const phrase of BAN_PHRASES) {
+    if (new RegExp(phrase, 'i').test(skillText)) {
       problems.push(
-        `SKILL.md ${name} brief is missing the platform acceptance-form duty sentence (issue #7) — same wording as the coder agent: ${FORM_DUTY}`
+        `SKILL.md must not carry a report ban ("${phrase}") — issue #7 负空间裁定：报告职责单源归平台 system prompt，禁令与其构成双指令冲突`
       );
     }
-    if (PRODUCER_BRIEFS.includes(heading)) {
-      if (!subNorm.includes(normalizeWhitespace(NO_WORK_REPORTS))) {
-        problems.push(
-          `SKILL.md ${name} brief is missing the no-work-reports clause (issue #7): ${NO_WORK_REPORTS}`
-        );
-      }
-    }
-    if (heading === '### Fix follow-up' && !subNorm.includes(FIX_BRIEF_NO_REPORT_DUTIES)) {
+  }
+  const fixBrief = sectionBetween(section, '### Fix follow-up', '### Integration fixer');
+  if (fixBrief !== null && !fixBrief.includes(FIX_VERDICT_SOURCE)) {
+    problems.push(
+      `SKILL.md Fix follow-up brief lost the verdict-source sentence ("${FIX_VERDICT_SOURCE}") — 砍禁令后这是防模型自封门禁的唯一事实句（issue #7）`
+    );
+  }
+  for (const anchor of LOAD_BEARING_SENTENCES) {
+    if (!skillText.includes(anchor)) {
       problems.push(
-        `SKILL.md Fix follow-up brief lost the retained clause: "${FIX_BRIEF_NO_REPORT_DUTIES} …" (issue #7 keeps it and adds the form-duty precedence)`
+        `SKILL.md lost a load-bearing close-out sentence: "${anchor}" — 报告禁令可砍，这句是编排者取 SHA / 门禁卡提交的通道（issue #7）`
       );
     }
   }
@@ -536,23 +529,25 @@ function checkReportDutySplit(skillText, coderAgentText) {
         (token) => `agents/coder.md still carries the old contract wording: ${token}`
       )
     );
-    if (!coderNorm.includes(normalizeWhitespace(NO_WORK_REPORTS))) {
-      problems.push(
-        `agents/coder.md is missing the no-work-reports clause (issue #7): ${NO_WORK_REPORTS}`
-      );
+    for (const phrase of BAN_PHRASES) {
+      if (new RegExp(phrase, 'i').test(coderAgentText)) {
+        problems.push(
+          `agents/coder.md must not carry a report ban ("${phrase}") — 同 SKILL.md 的负空间裁定（issue #7）`
+        );
+      }
     }
-    if (!coderNorm.includes(normalizeWhitespace(FORM_DUTY))) {
-      problems.push(
-        `agents/coder.md is missing the platform acceptance-form duty sentence (issue #7) — must match the briefs verbatim: ${FORM_DUTY}`
-      );
+    for (const anchor of LOAD_BEARING_SENTENCES) {
+      if (!coderAgentText.includes(anchor)) {
+        problems.push(`agents/coder.md lost a load-bearing close-out sentence: "${anchor}"（issue #7）`);
+      }
     }
   }
   return problems;
 }
 
 // —— issue #7 断锚：修复轮 resume 与完整性兜底 fresh coder 一律 `acceptance: false`。
-// 平台事实：retained resume 继承首轮验收契约（verified + attestation 报告义务），而模型
-// 不产工作报告 → 提交完的修复被「Structured acceptance report not found」判死；gate 在
+// 平台事实：retained resume 继承首轮验收契约（verified + attestation 报告义务），报告
+// 缺失时平台在任何核查执行前就把 run 判为「Structured acceptance report not found」——gate 在
 // resume 上被平台拒收，兜底 fresh coder 也**不**挂 gate（gate 归一化出 verified 并恢复
 // 报告义务，正是本 bug 的死因）。两处判定都只剩编排者手跑的机械报告门禁（断锚 3）。
 const FIX_ACCEPTANCE_REASON_ANCHOR = "this round's verdict is the hand-run gate";
