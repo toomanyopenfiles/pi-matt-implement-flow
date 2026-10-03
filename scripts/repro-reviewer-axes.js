@@ -168,6 +168,10 @@ function harvestRuns(node, out = [], depth = 0) {
   return out;
 }
 
+// 平台子运行 runId 一律 UUID 形状（与 audit-report/collect.js 的 isUuidRunId 同一机判）；
+// workflow 自身的 call_… 形状运行不是子运行，更不是轴。
+const RUN_ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function dedupeRuns(runs) {
   const byId = new Map();
   for (const r of runs) {
@@ -322,8 +326,13 @@ function scenarioGuarantee(args, defName) {
     }
   }
 
-  // 双轴发现：workflow toolResult 的运行元组（key 映射）；兜底扫 subagent-artifacts
-  const axes = dedupeRuns(axisRuns);
+  // 双轴发现：workflow toolResult / 运行元数据里的运行元组（key 映射）；兜底扫 subagent-artifacts。
+  // 只认两根轴本体：平台子运行 runId 一律 UUID 形状（与 audit-report 的死数据机判同源），
+  // workflow 自身的 call_ 形状 runId 及其他运行元数据不是轴；双轴齐备时丢弃未命名杂项
+  // （workflow 运行、异步包装运行等），G3 恰好测「两根轴各自的完成时刻」。
+  const all = dedupeRuns(axisRuns.filter((r) => RUN_ID_UUID.test(r.runId)));
+  const keyed = all.filter((a) => a.key === 'standards' || a.key === 'spec');
+  const axes = keyed.length >= 2 ? keyed : all;
   if (axes.length < 2) {
     const known = new Set(axes.map((a) => a.runId));
     for (const f of walk(root)) {

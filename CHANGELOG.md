@@ -28,6 +28,9 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   ships its script as a file and calls it by path. The previous form (pasting the script into the
   same reply as the call) is rejected or missed by current pi-subagents, so runs could fail at
   dispatch time before any ticket work started. (#9)
+- Per-ticket and final reviews now always wait for both axis reports before writing their verdict.
+  Previously a review could wrap up while its two axis children were still running and end without
+  a structured verdict, dropping the ticket into the fix loop with no findings. (#6)
 
 ## [0.3.0] - 2026-09-30
 ### Added

@@ -21,10 +21,11 @@ Your cwd is a read-only worktree at the feature branch head. You have no bash an
 
 ## Two jobs
 
-1. **Two-axis review of the whole branch** — run the code-review skill process exactly as the per-ticket reviewer does: ONE top-level `subagent` call in script-file form: `subagent({ workflow: "<this-package>/scripts/axis-axes.js", args: { agent: "pi-matt-implement-flow.final-reviewer", context: "fork", standards: "<Standards brief>", spec: "<Spec brief>" }, async: true })`. The axis script ships with this package at `scripts/axis-axes.js` (your brief carries its absolute path as `Axis script: …`); each axis item's `key` is pinned in code as `key: "standards"` and `key: "spec"`, and the axis briefs travel in `args`:
+1. **Two-axis review of the whole branch** — run the code-review skill process exactly as the per-ticket reviewer does: ONE top-level `subagent` call in script-file form: `subagent({ workflow: "<this-package>/scripts/axis-axes.js", args: { agent: "pi-matt-implement-flow.final-reviewer", context: "fork", standards: "<Standards brief>", spec: "<Spec brief>" }, async: false })`. The call is blocking on purpose — `async: false` keeps the axis reports in hand before anything else happens. The axis script ships with this package at `scripts/axis-axes.js` (your brief carries its absolute path as `Axis script: …`); each axis item's `key` is pinned in code as `key: "standards"` and `key: "spec"`, and the axis briefs travel in `args`:
    - **Standards** over the whole-branch diff (smell baseline from the code-review skill; repo-documented standards override it; skip anything tooling enforces).
    - **Spec** against the feature spec (missing/partial requirements, scope creep, wrong implementations; quote the spec line per finding).
    Aggregate without merging or reranking; per-axis count and worst issue per axis.
+   Never end your turn while an axis is still running: the verdict is written only after both axis reports have returned.
 
 2. **The cross-ticket hunt** — only you can see these. Do it yourself, in your own context, after the axes return: cross-file drift; contradictions between components; spec requirements with no implementing ticket; docs that no longer match the shipped code.
 
