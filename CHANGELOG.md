@@ -23,13 +23,9 @@ implementation history live in [`docs/adr/`](./docs/adr/).
 
 ### Fixed
 
-- Fix rounds no longer end in a false "Structured acceptance report not found" failure after the
-  fix is committed and the test gate passes. A resumed coder — and the fallback fresh coder when
-  the retained worktree is gone — now runs with the platform's acceptance form switched off, so
-  the hand-run test gate stays the only verdict for a fix round. Coder briefs now state the
-  reporting rule precisely: no work reports (subjective prose), but fill in the platform's
-  acceptance form truthfully whenever the platform asks for one — first-round dispatches stop
-  depending on how a model reads two conflicting sentences. (#7)
+- A fix retry (after a review asks for changes) that lands a committed, green fix no longer fails
+  with a false "Structured acceptance report not found": the fix is judged by the test run, so
+  finished work is never mistaken for failed work. (#7)
   (Design: [ADR-0008](./docs/adr/0008-typed-gate-mechanical-report.md).)
 - Subagent dispatching now works on current pi-subagents. Every dispatch — the coder waves, the
   per-ticket review, the fix loop, the integration fixer, and the reviewers' two-axis fan-out —

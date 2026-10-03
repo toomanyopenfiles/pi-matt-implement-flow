@@ -283,6 +283,15 @@ function checkAgentTimeouts(agentFrontmatter) {
   return problems;
 }
 
+// —— 断锚 4 的职责二分措辞原子（issue #7，声明在 module.exports 之前以供导出）：
+// NO_WORK_REPORTS 半句禁主观工作报告；FORM_DUTY 半句必填平台验收表单（优先于任何
+// 「无报告职责」句）。语义详见 checkReportDutySplit 的注释；self-check 的 fixture 手术
+// 共用 FORM_DUTY，避免字面量多副本漂移。
+const NO_WORK_REPORTS =
+  'No work reports — never write prose about what you changed, why, or what risks remain.';
+const FORM_DUTY =
+  "If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).";
+
 module.exports = {
   PKG_ROOT,
   AGENT_NAMES,
@@ -312,6 +321,7 @@ module.exports = {
   checkFixLoopHandRun,
   checkFixLoopAcceptanceDisabled,
   checkReportDutySplit,
+  FORM_DUTY,
   checkGateCommandFlags,
   checkHardRulesRetained,
   checkPureVerdictGateAndEscalation,
@@ -458,13 +468,12 @@ function checkFixLoopHandRun(skillText) {
 // —— 断锚 4（issue #7 起为职责二分措辞）：模型不写**工作报告**（改了什么/为什么/
 // 残余风险自评等主观自评），但平台 system prompt 若要求 fenced `acceptance-report`
 // 表单，必须如实填写（只含机械事实）——表单是平台机制件，表单义务优先于「无报告
-// 职责」句。五套简报模板与 coder agent 定义携带同一组措辞（空白归一化后逐字一致），
-// 一处漂移即红。旧合同通道词（acceptanceReport / structured_output / outputSchema /
-// Acceptance Contract）仍然禁用。
-const NO_WORK_REPORTS =
-  'No work reports — never write prose about what you changed, why, or what risks remain.';
-const FORM_DUTY =
-  "If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).";
+// 职责」句。措辞分工：FORM_DUTY 在五套简报模板与 coder agent 定义逐字一致（空白归一
+// 化后比对）；NO_WORK_REPORTS 半句只在产工作报告的文本（coder / integration fixer /
+// final fixer 简报与 coder.md）——评审者的产出即发现散文，「不写」一侧对它不适用，
+// 修复简报按 spec 保留原句 FIX_BRIEF_NO_REPORT_DUTIES；一处漂移即红。旧合同通道词
+// （acceptanceReport / structured_output / outputSchema / Acceptance Contract）仍禁用。
+// 五套简报的小节标题；末项无后继标题，sectionBetween 取到小节尾。
 const BRIEF_HEADINGS = [
   '### Coder brief',
   '### Reviewer brief',
@@ -472,6 +481,7 @@ const BRIEF_HEADINGS = [
   '### Integration fixer',
   '### Final fixer',
 ];
+// 产工作报告的简报（含 NO_WORK_REPORTS 半句）；reviewer 例外见上方措辞分工注释。
 const PRODUCER_BRIEFS = ['### Coder brief', '### Integration fixer', '### Final fixer'];
 const FIX_BRIEF_NO_REPORT_DUTIES = 'No report duties — the orchestrator hand-runs the gate';
 
