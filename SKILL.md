@@ -176,7 +176,7 @@ Record each child as a `dispatch` event（记账：`--ticket --key --run-id`，`
 - **Why a typed `gate` instead of an `acceptance` object** (they are mutually exclusive — a child has exactly one structured-output source): the report is assembled host-side, after the child ends, by a script from git truth plus a real test run — double-encoding and dropped fields are structurally impossible. The gate's stdout becomes the structured output and its exit code is the verdict, so you never parse model prose to decide a run.
 - **stdout contract**: the gate command must print a single JSON document of at most 12,000 characters; empty, truncated, non-JSON, or schema-mismatched output fails the gate fail-closed. The script keeps itself inside the limit (over-long output is truncated and marked, never fatal).
 - **Gate timeout**: the platform's verify default is a fixed 120 s — too short for full suites in a cold worktree, and the constant is not configurable; the dispatch pins `timeoutMs: 600000` (10 min) on the gate object.
-- **Mutual exclusion (iron rule)**: `gate`, a non-`false` `acceptance` object, and `outputSchema` are three-way exclusive — the coder dispatch carries the gate and neither of the other two (`acceptance: false` counts as omitted, which is what the read-only reviewer dispatch below uses).
+- **Mutual exclusion (iron rule)**: `gate`, a non-`false` `acceptance` object, and `outputSchema` are three-way exclusive — the coder dispatch carries the gate and neither of the other two (`acceptance: false` counts as omitted — what the read-only reviewer dispatch and the fix-loop resumes below use; beside a `gate` it is no shield: the gate still normalizes into a `verified` acceptance carrying its report duty, so `acceptance: false` never de-risks a gate dispatch).
 - **The fix loop** runs the same gate by hand (below): a gate is rejected on a retained resume, so you execute the identical script command in the retained worktree — the same standard every round, no second track.
 
 ### Verify each finished ticket
@@ -223,9 +223,11 @@ On a verdict, record it: `verdict`（记账：`--ticket --round --verdict --find
 Write the findings to `findings/<NN>-r<k>.md`. **Record the fix first**: `fix`（记账：`--ticket --fix-no --key --resume-run-id <coderRunId>`）— the budget is consumed at dispatch time, and the script mechanically rejects a third fix; that rejection is the escalation trigger. Then resume the coder in a **new** workflow call (new stable key; the revived child keeps its agent, model, worktree, and context). Script-file delivery: write the script below to a new file `.pi/matt-implement/<slug>/wf/fix-<NN>-r<k>.js`, then call `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/fix-<NN>-r<k>.js", async: true })`:
 
 ```js
-const r = await runs.run("fix-01-r2", { resume: "<coderRunId>", task: `<fix follow-up brief — see Briefs>` });
+const r = await runs.run("fix-01-r2", { resume: "<coderRunId>", task: `<fix follow-up brief — see Briefs>`, acceptance: false });
 return { ok: r.ok, structured: r.structuredOutput ?? null };
 ```
+
+(`acceptance: false` — this round's verdict is the hand-run gate you run below. Without it the resumed child inherits the first round's acceptance obligations — level `verified` plus an attestation report — and a completed fix ends `rejected` with "Structured acceptance report not found" before any check runs.)
 
 Two rules the platform forces:
 
@@ -238,7 +240,7 @@ cd <coderWorktree> && node <this-package>/scripts/mechanical-report.js --base <t
 Its stdout is that round's report and its exit code is that round's gate; the `settled` `--gate` summary for the round comes from the fresh report's `testResult`, same source as round one.
 - Judge the fix by **git truth** (new HEAD SHA on the coder's branch), never by run status — a rejected run may still contain the finished work.
 
-Then `git branch -f ticket-<NN> <newSha>`, rebuild the bundle, and dispatch a fresh review round. If the resume fails because the retained worktree is gone, fall back to a fresh coder with `worktree: true, baseRef: "refs/heads/ticket-<NN>"` — the ticket branch carries the accumulated commits; record that fallback as a `fix` event too (new `--key`，`--resume-run-id` = the run it replaces).
+Then `git branch -f ticket-<NN> <newSha>`, rebuild the bundle, and dispatch a fresh review round. If the resume fails because the retained worktree is gone, fall back to a fresh coder — the ticket branch carries the accumulated commits — dispatched as `worktree: true, baseRef: "refs/heads/ticket-<NN>", acceptance: false`, with **no gate**: a gate would arm the platform's acceptance-report duty and settle the round by platform checks, while a fix round has exactly one verdict source — your hand-run gate. Record that fallback as a `fix` event too (new `--key`，`--resume-run-id` = the run it replaces).
 
 ### Merge and close
 
@@ -295,7 +297,7 @@ brief are absolute main-repo paths (read-only). Everything you edit and commit s
 inside your own worktree. Other tickets under .scratch/ and anything else in the main
 repo are context, not scope — never implement them.
 
-You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report the headSha and branch by context pointer. You write no report — the typed gate assembles it mechanically from git truth and a real test run after you finish (so keep the tree fully committed: a dirty tree or an empty diff fails the gate).
+You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report the headSha and branch by context pointer. No work reports — never write prose about what you changed, why, or what risks remain. The typed gate assembles the round's report mechanically from git truth and a real test run after you finish (so keep the tree fully committed: a dirty tree or an empty diff fails the gate). If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).
 ```
 
 ### Reviewer brief
@@ -307,28 +309,28 @@ Implementer's report: the typed-gate report (`headSha` <sha>, `testResult` <one-
 Axis script: <absolute path to this package>/scripts/axis-axes.js (read-only) — you spawn both axes through it.
 Your worktree is checked out at refs/heads/ticket-07 — the post-change tree. Read the changed files there; review-bundle and findings paths are main-repo paths (read-only).
 
-Run your two-axis process and return the structured verdict.
+Run your two-axis process and return the structured verdict. If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).
 ```
 
 ### Fix follow-up (to the same coder, via resume)
 
 ```
 Review round <k> found issues: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/<NN>-r<k>.md.
-Fix them in your worktree, rerun the full suite, commit everything, and report the new headSha by context pointer. No report duties — the orchestrator hand-runs the gate for this round (see Fix loop).
+Fix them in your worktree, rerun the full suite, commit everything, and report the new headSha by context pointer. No report duties — the orchestrator hand-runs the gate for this round (see Fix loop). If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).
 ```
 
 ### Integration fixer (no isolation)
 
 ```
 The full suite is red after merging ticket <NN>: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/integration-<NN>.md.
-You are on the feature branch in the main checkout; this is an integration problem ticket-level reviews could not see. Fix it, run the full suite, commit on the feature branch, and report the new headSha by context pointer. No report duties — a pure-verdict gate re-runs the suite after you finish.
+You are on the feature branch in the main checkout; this is an integration problem ticket-level reviews could not see. Fix it, run the full suite, commit on the feature branch, and report the new headSha by context pointer. No work reports — never write prose about what you changed, why, or what risks remain. If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report). A pure-verdict gate re-runs the suite after you finish.
 ```
 
 ### Final fixer (no isolation)
 
 ```
 The final review found issues: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/final-r<k>.md.
-You are on the feature branch in the main checkout; fix every finding, run the full suite, commit on the feature branch, and report the new headSha by context pointer. No report duties — a pure-verdict gate re-runs the suite after you finish.
+You are on the feature branch in the main checkout; fix every finding, run the full suite, commit on the feature branch, and report the new headSha by context pointer. No work reports — never write prose about what you changed, why, or what risks remain. If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report). A pure-verdict gate re-runs the suite after you finish.
 ```
 
 ## Hard rules

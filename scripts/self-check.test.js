@@ -565,9 +565,11 @@ test('breakage simulation: a coder agent dropping the platform acceptance-form d
 });
 
 test('breakage simulation: a brief losing the form-duty sentence while another keeps it is flagged (issue #7, 五简报模板逐个断言)', () => {
+  const formDuty =
+    "If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).";
   const oneBriefDropsIt = skillText.replace(
-    "If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).\n\n### Fix follow-up",
-    '\n### Fix follow-up'
+    `return the structured verdict. ${formDuty}`,
+    'return the structured verdict.'
   );
   assert.notEqual(oneBriefDropsIt, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
   const problems = checkReportDutySplit(oneBriefDropsIt, coderAgentText);

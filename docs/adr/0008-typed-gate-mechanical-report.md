@@ -76,3 +76,31 @@ Node 脚本机械组装成 JSON 报告，stdout 即结构化输出，**退出码
   （派发块须为 gate 形态、schema 副本逐字一致、fix loop 须为手跑脚本语义）。
 - 代价：coder 派发多一次实跑测试命令的耗时（显式长超时）；gate 红的修复轮需要
   编排者手跑脚本而非自动 resume——接受这个代价，换取"测试跑过"从自述变成退出码事实。
+
+## 补记（2026-10-03，issue #7）：平台验收契约的三条事实
+
+0.3.0 实跑暴露修复轮假死：修复已提交、手跑门禁已过，run 却以
+「Structured acceptance report not found」判死。复盘平台（pi-subagents）验收面，
+三条契约事实决定修法（均已对照平台源码核实）：
+
+1. **gate 归一化 ≠ 免除 attestation 报告义务**。`gate` 对象等价于显式
+   `acceptance: { level: "verified", verify: [...] }`——验收级别提升，但孩子交回
+   「结构化验收表单」（fenced `acceptance-report`）的义务仍在；表单缺失时 run 立即
+   `rejected`，**后续证据核查与 gate 均不执行**（验收台账 `verifyRuns: []`）。
+   Decision 第 4 条的「退出码即判定」只有在表单义务被满足或被免除之后才轮得到退出码。
+2. **retained resume 保留验收契约但拒收 gate**。resume 复用首轮孩子的契约
+   （含 `acceptance`），而 `gate` 在 resume 上被平台直接拒收。于是修复轮 resume 继承了
+   `verified` + 报告义务，与「模型不产报告」的裁定叠加即必然拒绝——这正是本补记的起因。
+3. **`acceptance: false` 与 gate 同传视为省略**。gate 在场时平台直接剥掉
+   `acceptance: false` 再归一化出 `verified`，该写法**不能**用于 gate 派发除险；
+   它只在无 gate 的派发（read-only reviewer、修复轮 resume、完整性兜底 fresh coder）上生效。
+
+裁定随之落定（SKILL.md / 简报 / coder 定义同步改，self-check 断锚组钉死形态）：
+
+- **修复轮 resume 与完整性兜底 fresh coder 一律 `acceptance: false`**，该轮判定只剩
+  编排者手跑的机械报告门禁（第 6 条不变）；兜底 fresh coder **不挂 gate**——gate 会
+  重新武装报告义务，正是本 bug 的死因。「报告找不到」式拒绝在结构上不可能复发。
+- **报告职责二分措辞**：模型不写**工作报告**（改了什么/为什么/残余风险自评等主观内容，
+  第 2~3 条的禁区不变），但平台 system prompt 若要求 fenced `acceptance-report` 表单，
+  **必须如实填写（只含机械事实）**——表单是平台机制件而非工作报告，表单义务优先于
+  「无报告职责」句。首轮 gate 派发同样受益：通过不再依赖模型在两句冲突指令间的裁决方差。
