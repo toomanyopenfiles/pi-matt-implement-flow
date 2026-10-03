@@ -27,6 +27,10 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   with a false "Structured acceptance report not found": the fix is judged by the test run, so
   finished work is never mistaken for failed work. (#7)
   (Design: [ADR-0008](./docs/adr/0008-typed-gate-mechanical-report.md).)
+- Run briefs no longer carry a "no reports" rule: the commit and the head pointer are the only
+  deliverables, and anything the platform itself asks a run to fill in gets filled in exactly as
+  asked — run instructions can't fight the platform's own requirements.
+  (Design: [ADR-0008](./docs/adr/0008-typed-gate-mechanical-report.md).)
 - Subagent dispatching now works on current pi-subagents. Every dispatch — the coder waves, the
   per-ticket review, the fix loop, the integration fixer, and the reviewers' two-axis fan-out —
   ships its script as a file and calls it by path. The previous form (pasting the script into the

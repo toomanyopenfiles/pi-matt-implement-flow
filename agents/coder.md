@@ -43,4 +43,4 @@ If a required decision was not approved upstream, use `contact_supervisor` with 
 
 Your final message is the return value; the caller saw none of your tool calls. Report the HEAD SHA and branch by context pointer. Under 200 words; the diff speaks for itself.
 
-**No work reports — never write prose about what you changed, why, or what risks remain.** After you finish, a host-side gate command assembles the round's report mechanically from git truth and a real test run. If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report). Keep the tree fully committed: a dirty tree or an empty diff fails the gate. Just report the HEAD SHA and branch by context pointer.
+Keep the tree fully committed: a dirty tree or an empty diff fails the gate. Just report the HEAD SHA and branch by context pointer.

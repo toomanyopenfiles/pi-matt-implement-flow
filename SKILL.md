@@ -297,7 +297,7 @@ brief are absolute main-repo paths (read-only). Everything you edit and commit s
 inside your own worktree. Other tickets under .scratch/ and anything else in the main
 repo are context, not scope — never implement them.
 
-You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report the headSha and branch by context pointer. No work reports — never write prose about what you changed, why, or what risks remain. The typed gate assembles the round's report mechanically from git truth and a real test run after you finish (so keep the tree fully committed: a dirty tree or an empty diff fails the gate). If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).
+You are in your own pi-managed worktree on your own branch based at that commit; every command and edit stays inside it. Run the project's install step (e.g. `npm ci`) before the first test if node_modules is not linked. Build this ticket: work test-first at the pre-agreed seams, full suite once at the end, then commit everything and report the headSha and branch by context pointer. Keep the tree fully committed: a dirty tree or an empty diff fails the gate.
 ```
 
 ### Reviewer brief
@@ -309,28 +309,28 @@ Implementer's report: the typed-gate report (`headSha` <sha>, `testResult` <one-
 Axis script: <absolute path to this package>/scripts/axis-axes.js (read-only) — you spawn both axes through it.
 Your worktree is checked out at refs/heads/ticket-07 — the post-change tree. Read the changed files there; review-bundle and findings paths are main-repo paths (read-only).
 
-Run your two-axis process and return the structured verdict. If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).
+Run your two-axis process and return the structured verdict.
 ```
 
 ### Fix follow-up (to the same coder, via resume)
 
 ```
 Review round <k> found issues: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/<NN>-r<k>.md.
-Fix them in your worktree, rerun the full suite, commit everything, and report the new headSha by context pointer. No report duties — the orchestrator hand-runs the gate for this round (see Fix loop). If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report).
+Fix them in your worktree, rerun the full suite, commit everything, and report the new headSha by context pointer. The orchestrator hand-runs the gate for this round (see Fix loop).
 ```
 
 ### Integration fixer (no isolation)
 
 ```
 The full suite is red after merging ticket <NN>: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/integration-<NN>.md.
-You are on the feature branch in the main checkout; this is an integration problem ticket-level reviews could not see. Fix it, run the full suite, commit on the feature branch, and report the new headSha by context pointer. No work reports — never write prose about what you changed, why, or what risks remain. If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report). A pure-verdict gate re-runs the suite after you finish.
+You are on the feature branch in the main checkout; this is an integration problem ticket-level reviews could not see. Fix it, run the full suite, commit on the feature branch, and report the new headSha by context pointer. A pure-verdict gate re-runs the suite after you finish.
 ```
 
 ### Final fixer (no isolation)
 
 ```
 The final review found issues: read <absolute main-repo path>/.pi/matt-implement/<slug>/findings/final-r<k>.md.
-You are on the feature branch in the main checkout; fix every finding, run the full suite, commit on the feature branch, and report the new headSha by context pointer. No work reports — never write prose about what you changed, why, or what risks remain. If the platform's system prompt requires a fenced `acceptance-report` form, that duty comes first: fill it out truthfully with mechanical facts only (a platform form is not a work report). A pure-verdict gate re-runs the suite after you finish.
+You are on the feature branch in the main checkout; fix every finding, run the full suite, commit on the feature branch, and report the new headSha by context pointer. A pure-verdict gate re-runs the suite after you finish.
 ```
 
 ## Hard rules
