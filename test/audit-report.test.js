@@ -1025,3 +1025,125 @@ test('collect + render：lang=en 产出英文站点，lang 缺省保持中文基
     fx.cleanup();
   }
 });
+
+// #16 approved seams: synthetic events -> collect({runtimeDir, lang}) -> renderAll.
+// These fixtures exercise audit consumption, not the close CLI's write defaults/gates.
+test('collect + render：显式 abandoned 与完整交付区分，无 final 和未完成票不补造批准', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events.push({ v: 3, seq: 10, ts: '2026-09-18T19:20:00.000Z', type: 'close', payload: { outcome: 'abandoned', note: 'STOP_WITH_UNFINISHED_02' } });
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      assert.equal(model.run.sealed, true);
+      assert.equal(model.run.close.outcome, 'abandoned');
+      assert.equal(model.run.finals.length, 0, '不补造终审');
+      assert.equal(model.run.escalates.length, 0, '不补造逐票升级');
+      assert.equal(model.tickets.find((t) => t.id === '02').merges.length, 0, '未完成票保持未合并');
+      assert.ok(model.risks.some((r) => /验收被拒收|acceptance was rejected/.test(r.title)), '原有失败风险不因放弃而消失');
+      const out = path.join(fx.dir, `abandoned-${lang}`);
+      renderAll(model, out, null);
+      for (const name of ['index.html', 'final.html']) {
+        const page = fs.readFileSync(path.join(out, name), 'utf8');
+        assert.match(page, lang === 'zh' ? /用户放弃（abandoned）/ : /User abandoned \(abandoned\)/);
+        assert.match(page, lang === 'zh' ? /不代表代码就绪或完整交付/ : /does not mean the code is ready or fully delivered/);
+        assert.match(page, /STOP_WITH_UNFINISHED_02/);
+        assert.doesNotMatch(page, /pill ok[^>]*>[^<]*(?:已封账|sealed)/, '弃跑封账不使用成功样式');
+      }
+      const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+      const unfinishedRow = index.match(/<tr>\s*<td><a href="ticket-02.html">[\s\S]*?<\/tr>/)[0];
+      assert.match(unfinishedRow, lang === 'zh' ? /未合并/ : /not merged/i);
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original, '审计不修改事件流字节');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render + report CLI：completed 与 abandoned 在双语页面和分析简报中使用明确结果', () => {
+  const findings = '.pi/matt-implement/demo/findings/final-r1.md';
+  const fx = makeFinalFixture({ finals: [{ runId: FINAL_RUN_ID, verdict: 'ready_with_fixes', findings }], findingsFiles: { [findings]: 'RETAIN_REVIEW_FINDING: follow-up needed.\n' } });
+  try {
+    const { execFileSync } = require('child_process');
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    for (const outcome of ['completed', 'abandoned']) {
+      events[events.length - 1].payload = { outcome, note: 'EXPLICIT_CLOSE_NOTE' };
+      const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      fs.writeFileSync(file, original);
+      for (const lang of ['zh', 'en']) {
+        const expected = outcome === 'completed'
+          ? (lang === 'zh' ? /正常完成（completed）/ : /Completed \(completed\)/)
+          : (lang === 'zh' ? /用户放弃（abandoned）/ : /User abandoned \(abandoned\)/);
+        const model = collect({ runtimeDir: fx.runtimeDir, lang });
+        assert.equal(model.run.close.outcome, outcome);
+        const out = path.join(fx.dir, `${outcome}-${lang}`);
+        renderAll(model, out, null);
+        for (const name of ['index.html', 'final.html']) {
+          assert.match(fs.readFileSync(path.join(out, name), 'utf8'), expected, '页面封账结果明确');
+        }
+        execFileSync(process.execPath, [path.resolve(__dirname, '../audit-report/report.js'), '--runtime-dir', fx.runtimeDir, '--lang', lang, '--out', out, '--ai-brief'], { encoding: 'utf8' });
+        assert.match(fs.readFileSync(path.join(out, 'analysis-brief.md'), 'utf8'), expected, 'AI 简报不能把放弃或正常完成都概括成 sealed');
+        assert.match(fs.readFileSync(path.join(out, 'analysis-brief.md'), 'utf8'), /EXPLICIT_CLOSE_NOTE/);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(out, 'model.json'), 'utf8')).run.close.outcome, outcome);
+        assert.match(fs.readFileSync(path.join(out, 'final.html'), 'utf8'), /RETAIN_REVIEW_FINDING/, '两种封账结果均保留实际 findings 原文');
+      }
+      assert.equal(fs.readFileSync(file, 'utf8'), original, 'CLI 与公开收集渲染入口都只读事件流');
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render + report CLI：旧 close 缺 outcome 不猜历史意图，abandoned 保留 not_ready 与风险证据', () => {
+  const findings = '.pi/matt-implement/demo/findings/not-ready.md';
+  const fx = makeFinalFixture({ finals: [{ runId: FINAL_RUN_ID, verdict: 'not_ready', findings }], findingsFiles: { [findings]: 'KNOWN_NOT_READY_FINDING: unsafe behavior remains.\n' } });
+  try {
+    const { execFileSync } = require('child_process');
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    for (const outcome of [undefined, 'abandoned']) {
+      // The old prose remains evidence, not a substitute for an explicit close outcome.
+      events[events.length - 1].payload = { note: 'OLD_NOTE: 用户拍板放弃 / user chose to abandon', ...(outcome ? { outcome } : {}) };
+      const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      fs.writeFileSync(file, original);
+      for (const lang of ['zh', 'en']) {
+        const model = collect({ runtimeDir: fx.runtimeDir, lang });
+        assert.equal(model.run.close.outcome, outcome, '缺省读法不能借用新写入的 completed 默认');
+        assert.equal(Object.hasOwn(model.events.at(-1).payload, 'outcome'), outcome != null, '原始事件字段不补造');
+        const risk = model.risks.find((r) => r.title.includes('not_ready'));
+        assert.ok(risk, '旧账与显式放弃均保留封账时 not_ready 风险');
+        assert.equal(risk.severity, 'medium');
+        assert.ok(risk.evidence.some((e) => e.ref === FINAL_RUN_ID));
+        assert.ok(risk.evidence.some((e) => e.ref === 'seq 6'));
+        assert.doesNotMatch(risk.detail, /多半|most likely|legitimate abandoned exit/, '不得从 not_ready 封账推断旧 close 的放弃意图');
+        assert.match(risk.detail, lang === 'zh' ? /不代表问题已解决或代码就绪/ : /does not mean findings are resolved or the code is ready/);
+        const out = path.join(fx.dir, `historical-${outcome || 'missing'}-${lang}`);
+        renderAll(model, out, null);
+        for (const name of ['index.html', 'final.html']) {
+          const page = fs.readFileSync(path.join(out, name), 'utf8');
+          if (outcome == null) {
+            assert.match(page, lang === 'zh' ? /旧记录：封账结果未记录/ : /Legacy record: close outcome not recorded/);
+            assert.doesNotMatch(page, /pill (?:ok|warn)[^>]*>(?:用户放弃（abandoned）|User abandoned \(abandoned\)|正常完成（completed）|Completed \(completed\))/, '旧 prose 和 not_ready 不能补造结构化结果');
+          }
+          assert.match(page, /OLD_NOTE/);
+        }
+        const finalPage = fs.readFileSync(path.join(out, 'final.html'), 'utf8');
+        assert.match(finalPage, /KNOWN_NOT_READY_FINDING/);
+        assert.match(finalPage, lang === 'zh' ? /不可交付/ : /Not ready/);
+        execFileSync(process.execPath, [path.resolve(__dirname, '../audit-report/report.js'), '--runtime-dir', fx.runtimeDir, '--lang', lang, '--out', out, '--ai-brief'], { encoding: 'utf8' });
+        const brief = fs.readFileSync(path.join(out, 'analysis-brief.md'), 'utf8');
+        assert.match(brief, outcome == null
+          ? (lang === 'zh' ? /旧记录：封账结果未记录/ : /Legacy record: close outcome not recorded/)
+          : (lang === 'zh' ? /用户放弃（abandoned）/ : /User abandoned \(abandoned\)/));
+        assert.doesNotMatch(brief, /多半|most likely|legitimate abandoned exit/);
+      }
+      assert.equal(fs.readFileSync(file, 'utf8'), original, '旧 close 及其它历史事件字节保持原样');
+    }
+  } finally {
+    fx.cleanup();
+  }
+});

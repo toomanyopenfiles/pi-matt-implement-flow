@@ -22,8 +22,8 @@ const TERMS = [
     en: 'The act of writing one event into the event stream via script. Every state transition (dispatch, settle, verdict, fix, merge, escalate, seal) is recorded.',
   } },
   { id: 'close', zh: '封账', en: 'seal', def: {
-    zh: '记账 close 事件：台账头部标记运行终结。封账后记账命令拒绝一切新事件——终结的运行不可能再被误认为进行中。',
-    en: 'Recording a close event: the ledger header marks the run as ended. After sealing, the record command rejects all new events — an ended run can never be mistaken for one in progress.',
+    zh: '记账 close 事件：台账头部标记运行终结。completed 表示正常完成。显式 abandoned 表示用户放弃，不代表代码就绪或完整交付，不完成未完成票，也不解决历史问题。旧 close 缺少 outcome 时只表示封账结果未记录，不推断正常完成或放弃。封账后记账命令拒绝一切新事件。',
+    en: 'Recording a close event: the ledger header marks the run as ended. completed records normal completion. Explicit abandoned means user abandonment, not code readiness or full delivery; it neither completes unfinished tickets nor resolves historical findings. An old close without outcome is shown as outcome not recorded, never inferred as completed or abandoned. After sealing, the record command rejects all new events.',
   } },
   { id: 'reconcile', zh: '对账', en: 'reconcile', def: {
     zh: '核验台账记录与实际世界（git、工作树、票文件状态）的差异。每次派发与合并前执行；发现漂移会逐条列出并阻断。',

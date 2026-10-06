@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { TERMS, lookup } = require('./glossary');
 const { findBriefFor } = require('./collect');
-const { makeT, roleLabel, hasKey } = require('./i18n');
+const { makeT, roleLabel, hasKey, closeOutcomeLabel } = require('./i18n');
 
 // ---------------------------------------------------------------- 基础
 
@@ -87,6 +87,13 @@ function verdictLabel(T, code) {
   return [hasKey(T.lang, key) ? T(key) : code, VERDICT_CLS[code] || ''];
 }
 
+function closeSummary(T, close) {
+  const abandoned = close.outcome === 'abandoned';
+  const label = closeOutcomeLabel(T.lang, close.outcome);
+  return `<span class="pill ${close.outcome === 'completed' ? 'ok' : 'warn'}">${esc(label)}</span>`
+    + (abandoned ? `<div class="muted">${T('close.abandonedDetail')}</div>` : '');
+}
+
 // ---------------------------------------------------------------- 页面骨架
 
 function layout(T, title, body, extraHead = '') {
@@ -143,7 +150,7 @@ function renderOverview(model, T) {
     { label: term(T, '流程形态', 'flow shape'), value: flags + historicalBudget },
     { label: T('ov.tracker'), value: esc(init.tracker || '—') },
     { label: T('ov.pr'), value: pr ? (pr.url ? `<a href="${esc(pr.url)}">${esc(pr.state)}${T('ev.prUrl', { url: esc(pr.url) })}</a>` : esc(pr.state)) : T('ov.prNone') },
-    { label: term(T, '封账', 'seal'), value: r.sealed ? `<span class="pill ok">${T('ov.sealed')}</span> <span class="muted">${esc(fmtTs(r.close.ts))}</span>` : `<span class="pill bad">${T('ov.unsealed')}</span>` },
+    { label: term(T, '封账', 'seal'), value: r.sealed ? `${closeSummary(T, r.close)} <span class="muted">${esc(fmtTs(r.close.ts))}</span>` : `<span class="pill bad">${T('ov.unsealed')}</span>` },
   ];
 
   const s = model.stats;
@@ -287,7 +294,7 @@ function narrateEvent(e, T) {
       note: esc(p.note || T('ev.escalateDefault')),
     });
     case 'anomaly': return T('ev.anomaly', { anomaly: t('异常记录', 'anomaly'), note: esc(p.note) });
-    case 'close': return T('ev.close', { close: t('封账', 'close'), note: esc(p.note || '') });
+    case 'close': return T('ev.close', { close: t('封账', 'close'), outcome: closeSummary(T, p), note: esc(p.note || '') });
     default: return T('ev.unknown', { type: esc(e.type), payload: esc(JSON.stringify(p)).slice(0, 300) });
   }
 }
@@ -516,7 +523,7 @@ ${[...model.run.anomalies.map((a) => ({ ...a, kind: 'anomaly' })), ...model.run.
   if (model.run.sealed) {
     parts.push(`
 <section class="section"><h2>${term(T, '封账', 'close')}</h2>
-<div class="card">${esc(model.run.close.note || T('fp.sealNote'))} <span class="muted">· ${esc(fmtTs(model.run.close.ts))}</span></div>
+<div class="card">${closeSummary(T, model.run.close)}<p>${esc(model.run.close.note || T('fp.sealNote'))}</p> <span class="muted">· ${esc(fmtTs(model.run.close.ts))}</span></div>
 </section>`);
   } else {
     parts.push(`<section class="section"><div class="risk risk-medium"><div class="risk-head"><span class="pill medium">${T('sev.medium')}</span> ${T('fp.unsealedTitle')}</div><div class="risk-detail">${T('fp.unsealedDetail')}</div></div></section>`);

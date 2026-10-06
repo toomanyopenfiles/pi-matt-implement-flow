@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { collect } = require('./collect');
 const { renderAll } = require('./render');
-const { DEFAULT_LANG, makeT, normLang } = require('./i18n');
+const { DEFAULT_LANG, makeT, normLang, closeOutcomeLabel } = require('./i18n');
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -66,7 +66,10 @@ function buildAiBrief(model) {
   if (!model.run.anomalies.length && !model.run.escalates.length) lines.push(T('brief.none'));
   lines.push('');
   lines.push(T('brief.s5'));
-  lines.push(model.run.sealed ? T('brief.sealed', { note: model.run.close.note }) : T('brief.unsealed'));
+  lines.push(model.run.sealed ? T('brief.sealed', {
+    outcome: closeOutcomeLabel(T.lang, model.run.close.outcome), note: model.run.close.note,
+  }) : T('brief.unsealed'));
+  if (model.run.close && model.run.close.outcome === 'abandoned') lines.push(T('close.abandonedDetail'));
   const pr = model.run.prs[model.run.prs.length - 1];
   lines.push(T('brief.prLine', { value: pr ? `${pr.state} ${pr.url || ''}` : T('brief.noPr') }));
   lines.push('');

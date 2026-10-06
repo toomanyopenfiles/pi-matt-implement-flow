@@ -115,7 +115,7 @@ function buildRunModel(events) {
       case 'pr': run.prs.push({ ...p, seq: e.seq, ts: e.ts }); break;
       case 'anomaly': run.anomalies.push({ seq: e.seq, ts: e.ts, note: p.note || '', refSeq: refSeqNumber(p.refSeq) }); break;
       case 'escalate': run.escalates.push({ seq: e.seq, ts: e.ts, ticket: p.ticket, note: p.note || '' }); break;
-      case 'close': run.close = { seq: e.seq, ts: e.ts, note: p.note || '' }; break;
+      case 'close': run.close = { seq: e.seq, ts: e.ts, outcome: p.outcome, note: p.note || '' }; break;
       case 'final': {
         // run 级终审裁决：无 ticket，runId 必选（事件驱动审计与平台证据核验的唯一锚点）。
         // 多轮终审 = 多条事件，一律以最新一条为准；派发终审的动作本身不记事件。
@@ -570,7 +570,7 @@ function deriveRisks(model) {
   if (!model.run.sealed) {
     add('medium', T('risk.r6.title'), T('risk.r6.detail'), []);
   }
-  // R7 带伤封账：封账时最新终审裁决为 not_ready（用户拍板放弃的合法出口，但代码带着已知问题收场）
+  // R7 封账时最新已记录终审为 not_ready：保留已知问题，不从封账推断放弃或解决意图。
   const finals = model.run.finals || [];
   const latestFinal = finals.length ? finals[finals.length - 1] : null;
   if (model.run.sealed && latestFinal && latestFinal.finalVerdict === 'not_ready') {
