@@ -39,7 +39,7 @@ const {
   checkNoReportBans,
   checkGateCommandFlags,
   checkHardRulesRetained,
-  checkPureVerdictGateAndEscalation,
+  checkPureVerdictGateAndRepair,
   checkNoIsolationBriefs,
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
@@ -328,8 +328,59 @@ test('anchor-6: existing hard rules are retained (merge token, fix budget, verdi
   assert.deepEqual(checkHardRulesRetained(skillText), []);
 });
 
-test('anchor-7: no-isolation fixers carry a pure-verdict gate with two-consecutive-reds escalation', () => {
-  assert.deepEqual(checkPureVerdictGateAndEscalation(skillText), []);
+test('SKILL.md repair decisions use evidence and approved scope to continue or request the user', () => {
+  const decisions = skillText.match(/### Repair decisions[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  assert.match(decisions, /approved scope/i);
+  assert.match(decisions, /diagnostic evidence/i);
+  assert.match(decisions, /continuous failures/i);
+  assert.match(decisions, /request the user/i);
+  assert.match(decisions, /requirements.*permissions.*external conditions/i);
+  assert.match(decisions, /commit counts.*agent.*wording/i);
+  assert.match(decisions, /tests.*acceptance.*safety/i);
+});
+
+test('anchor-7: no-isolation fixers keep pure-verdict gates and use repair decisions rather than two-red stops', () => {
+  assert.deepEqual(checkPureVerdictGateAndRepair(skillText), []);
+  const stages = skillText.match(/### Merge[\s\S]*?(?=\n## Briefs)/)?.[0] ?? '';
+  assert.doesNotMatch(stages, /two consecutive reds/i);
+  for (const stage of stages.split('### Final gate')) {
+    assert.match(stage, /Repair decisions/);
+  }
+});
+
+test('SKILL.md reconciliation stops ordinary progress but permits explained integration recovery before merge accounting', () => {
+  const ledger = skillText.match(/## Ledger\n([\s\S]*?)(?=\n## The loop)/)?.[1] ?? '';
+  assert.match(ledger, /pause ordinary dispatches, new ticket merges, and closing/i);
+  assert.match(ledger, /verify and explain.*differences/i);
+  assert.match(ledger, /directly resolve.*differences/i);
+  assert.match(ledger, /unknown differences/i);
+  assert.match(ledger, /schema.*commit.*approval.*seal/i);
+  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  assert.match(resume, /unrecorded merge.*integration fixer/i);
+  assert.match(resume, /unrelated tickets/i);
+  const merge = skillText.match(/### Merge[^\n]*\n([\s\S]*?)(?=\n### Final gate)/)?.[1] ?? '';
+  assert.match(merge, /Only after.*validation.*passes.*record `merge`/i);
+  assert.match(merge, /premature.*merge.*ticket.*green/i);
+});
+
+test('SKILL.md final repairs check each finding and record evidence-based re-review choices', () => {
+  const final = skillText.match(/### Final gate\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(final, /each finding.*evidence/i);
+  assert.match(final, /local.*explicit/i);
+  assert.match(final, /requirements.*behavior.*broader impact.*insufficient evidence/i);
+  assert.match(final, /orchestration notes/i);
+  assert.match(final, /green tests.*old.*verdict.*coder.*alone/i);
+  assert.match(final, /latest.*not_ready.*new.*final verdict/i);
+});
+
+test('agents/coder.md follows the brief workspace for isolated tickets and serial main-feature repairs', () => {
+  assert.match(coderAgentText, /ticket.*pi-managed worktree/i);
+  assert.match(coderAgentText, /integration.*final.*main feature.*without isolation/i);
+  assert.match(coderAgentText, /sole writer/i);
+  assert.match(coderAgentText, /actual actions.*validation.*evidence pointers/i);
+  assert.doesNotMatch(coderAgentText, /Your cwd is a pi-managed worktree/);
+  const briefs = skillText.match(/### Integration fixer[\s\S]*?(?=\n## Hard rules)/)?.[0] ?? '';
+  assert.equal((briefs.match(/sole writer/g) ?? []).length, 2);
 });
 
 test('anchor-8: the fifth no-isolation brief exists with zero report duties', () => {
@@ -441,20 +492,20 @@ test('breakage simulation: hard rules losing the merge-token clause are flagged 
   assert.ok(problems.some((p) => p.includes('ticket-NN')));
 });
 
-test('breakage simulation: a no-isolation fixer without a gate or without escalation is flagged (anchor-7)', () => {
+test('breakage simulation: a no-isolation fixer without a gate or repair-decisions pointer is flagged (anchor-7)', () => {
   const noGate =
     '### Merge\ndispatch one coder without isolation on the feature branch.\n' +
     '### Final gate\ndispatch one coder without isolation to fix every finding.\n## Briefs\n';
-  const problems = checkPureVerdictGateAndEscalation(noGate);
+  const problems = checkPureVerdictGateAndRepair(noGate);
   assert.ok(problems.some((p) => p.includes('pure-verdict gate')));
-  assert.ok(problems.some((p) => p.includes('escalation anchor')));
+  assert.ok(problems.some((p) => p.includes('Repair decisions pointer')));
 });
 
 test('breakage simulation: a pure gate smuggling output/schema is flagged (anchor-7)', () => {
   const smuggled =
     '### Merge\ngate: { command: "<testCommand>", timeoutMs: 600000, output: "json", schema: {} }\n' +
-    'two consecutive reds escalate to the user.\n### Final gate\n## Briefs\n';
-  const problems = checkPureVerdictGateAndEscalation(smuggled);
+    'Repair decisions.\n### Final gate\n## Briefs\n';
+  const problems = checkPureVerdictGateAndRepair(smuggled);
   assert.ok(problems.some((p) => p.includes('must not carry output/schema')));
 });
 

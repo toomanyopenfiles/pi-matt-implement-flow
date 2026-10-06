@@ -314,7 +314,7 @@ module.exports = {
   checkNoReportBans,
   checkGateCommandFlags,
   checkHardRulesRetained,
-  checkPureVerdictGateAndEscalation,
+  checkPureVerdictGateAndRepair,
   checkNoIsolationBriefs,
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
@@ -666,8 +666,8 @@ function checkHardRulesRetained(skillText) {
 }
 
 // —— 断锚 7：无隔离修复者（集成修复者 / 终审修复者）挂纯判定 gate
-//（command + timeoutMs，无 output/schema）+ 连红 2 次停下升级给用户。
-function checkPureVerdictGateAndEscalation(skillText) {
+//（command + timeoutMs，无 output/schema）；继续/暂停归共享修复原则，不守护旧次数停线。
+function checkPureVerdictGateAndRepair(skillText) {
   const problems = [];
   const pureGateAnchor = `gate: { command: "<testCommand>", timeoutMs: ${GATE_VERIFY_TIMEOUT_MS} }`;
   for (const [name, start, end] of [
@@ -688,10 +688,11 @@ function checkPureVerdictGateAndEscalation(skillText) {
         problems.push(`SKILL.md ${name} pure-verdict gate must not carry output/schema: gate: {${body}}`);
       }
     }
-    for (const anchor of ['two consecutive reds', 'escalate to the user']) {
-      if (!normalized.includes(anchor)) {
-        problems.push(`SKILL.md ${name} section is missing the escalation anchor: ${anchor}`);
-      }
+    if (!normalized.includes('Repair decisions')) {
+      problems.push(`SKILL.md ${name} section is missing the Repair decisions pointer`);
+    }
+    if (/two consecutive reds/i.test(normalized)) {
+      problems.push(`SKILL.md ${name} section still carries the retired two-red stop rule`);
     }
   }
   return problems;
