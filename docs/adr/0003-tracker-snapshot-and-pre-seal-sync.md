@@ -5,6 +5,10 @@
 - **Deciders:** 本包维护者（经 brainstorm 会话定稿）
 - **Context tags:** tracker, snapshot, sync, run-continuation, matt-principle
 
+> **后续调整：** [ADR-0009](0009-prompt-driven-repair-and-run-continuation.md)（spec #12）。
+> 保留快照真相、封账前同步与不重拉；阶段性交付保持 run 开放，不同步、关闭 spec 或清理快照，尚未结束其生命周期。
+> 以下保留本 ADR 当时的决策与理由，不覆写历史解释。
+
 ## Context
 
 为非 local tracker（当时指 GitHub）提供一等公民支持，读写路径面临真实取舍：读侧有直读零落盘、每轮
