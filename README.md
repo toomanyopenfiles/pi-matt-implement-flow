@@ -12,7 +12,7 @@ English | [简体中文](./README.zh-CN.md)
 
 1. **Parallel by dependency, no context to fight over** — each ticket gets its own throwaway worktree and a fresh context; independent tickets run in parallel, blocked ones start automatically once their prerequisites close.
 2. **Throwaway workspaces managed for you** — temp worktrees and branches are created when needed and reclaimed when a ticket ends; nothing to maintain by hand.
-3. **Reviewed as soon as it is written, fixed until it passes** — each ticket gets a two-axis review right after coding — the repo's coding standards and the spec — and failures go back for fixes while there is a reasonable next step within the approved scope.
+3. **Reviewed as soon as it is written, fixed until it passes** — each ticket gets a two-axis review right after coding — the repo's coding standards and the spec — and failures go back for fixes while there is a reasonable next step within the approved scope; otherwise the run pauses for your input.
 4. **Coding and review are separate roles, configured separately** — coder and reviewer are independent agents; each role can have its own model and thinking level.
 5. **The full suite runs on every merge** — each ticket merged into the feature branch immediately triggers the project's full test suite, so integration problems surface on the ticket that caused them instead of piling up at the end.
 6. **A whole-branch final review** — after the last ticket merges, the entire feature branch is reviewed once more for what single-ticket reviews cannot see: cross-file drift, components contradicting each other, spec requirements no ticket implemented, docs that no longer match the code.
@@ -120,6 +120,33 @@ flowchart TD
 ```
 
 Ticket repair has no attempt quota. A clarification or withdrawal of one review finding is not approval to merge: the necessary full review and validation must still cover the current code. More than one repair can happen between reviews, and a fresh full review can happen without another code change.
+
+### Repairs and pauses
+
+Ticket, integration, and final-review repairs follow the same rule: continue when there is a
+reasonable, evidence-backed next step within the approved scope. Repeated failures prompt a
+fresh look at the diagnosis and approach, not an automatic stop after two attempts. New diagnostic
+evidence can justify continuing even while tests still fail; more commits or a different agent
+alone do not prove progress. Tests, acceptance criteria, and safety constraints are not weakened
+to make a repair appear successful.
+
+If the run needs a requirement decision, permission, an external condition, or cannot identify a
+justified next step, it pauses and explains what is missing in `notes.md`. A pause keeps the run
+open for continuation; it is not completion. Timeouts, concurrency limits, and cancellation still
+apply, but they do not cap total runtime or cost.
+
+If recorded progress disagrees with the branch or ticket status, ordinary work and finishing the
+run pause while the discrepancy is explained. Work needed to resolve that discrepancy can still
+continue. For example, a merge whose integration tests failed can be repaired after an interruption,
+without moving on to unrelated tickets or claiming the merged ticket is complete before validation
+passes. Unexplained discrepancies need investigation or your input.
+
+After final-review repairs, each finding is checked against the repair evidence. A clear, local
+correction can be checked without a full repeat review; changes to requirements or behavior,
+broader changes, or insufficient evidence require another final review. The notes explain the
+choice. Passing tests or an earlier favorable review alone do not prove the changed code is ready.
+
+For the design and its limits, see [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).
 
 ## Configuration
 

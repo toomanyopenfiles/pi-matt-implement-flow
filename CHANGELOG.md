@@ -18,8 +18,19 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   to be finite. (#13)
   (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
 
+- Integration and final-review repairs no longer stop automatically after two failed attempts.
+  Repairs continue when evidence supports a reasonable next step within the approved scope;
+  missing decisions, permissions, external conditions, or a justified next step prompt a pause
+  for your input instead. Pausing leaves the run open. (#14)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
 ### Fixed
 
+- An interrupted run can repair a merge that still needs passing integration tests, while
+  unrelated work waits and the ticket is not prematurely reported complete. Final-review
+  repairs are checked finding by finding, with another review when the change's impact or
+  missing evidence calls for one; green tests alone are not enough. (#14)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
 - A full ticket review can now follow multiple repairs, or happen again without another code
   change. Clarifying or withdrawing a finding still does not replace the approval needed for
   the current code. Audit reports retain historical repair limits without presenting them as
