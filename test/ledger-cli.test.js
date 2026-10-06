@@ -1978,3 +1978,83 @@ test('#16 help 区分 completed 默认与显式 abandoned，同步 abandon 成�
   assert.match(r.stdout, /缺省 completed/);
   assert.match(r.stdout, /abandon[^\n]*close --outcome abandoned/);
 });
+
+// #14 的缝仍是 CLI/git/票事实；此合成轨迹不证明编排器会自主派发 agent 或作出冷恢复判断。
+test('#14 未入账合并恢复：集成红→证据/build/check 非零→验证绿→正常 merge 记账/票完成/check', (t) => {
+  const f = makeFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'integration.test.js'), [
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "const fs = require('node:fs');",
+    "test('merged work satisfies integration contract', () => {",
+    "  assert.equal(fs.readFileSync('work-01.txt', 'utf8'), '01\\nvalidated\\n');",
+    '});',
+    '',
+  ].join('\n'));
+  sh(f.dir, 'git add integration.test.js && git commit -qm "Add integration contract"');
+  initRun(f, { 'test-command': 'node --test integration.test.js' });
+  writeTicketFile(f.dir, '01', '自检基线', { status: 'claimed' });
+  assert.equal(addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': '9ea3e64b' }).status, 0);
+  const { head, merge } = mergeTicket(f, '01');
+  assert.equal(addAll(f, 'settled', { ticket: '01', round: '1', 'head-sha': head }).status, 0);
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' }).status, 0);
+  const history = fs.readFileSync(f.eventsPath, 'utf8');
+  const ticketPath = path.join(f.dir, '.scratch/demo/issues/01-x.md');
+  const ticketBefore = fs.readFileSync(ticketPath, 'utf8');
+  // 子进程是独立的 fixture 验证命令，不继承外层 node:test 的递归运行标记。
+  const validationEnv = { ...process.env };
+  delete validationEnv.NODE_TEST_CONTEXT;
+  const validate = () => spawnSync(process.execPath, ['--test', 'integration.test.js'], {
+    cwd: f.dir, encoding: 'utf8', env: validationEnv,
+  });
+  const red = validate();
+  assert.equal(red.status, 1, red.stdout + red.stderr);
+  assert.match(red.stdout + red.stderr, /AssertionError|ERR_ASSERTION/);
+  fs.writeFileSync(path.join(f.runtime, 'integration-red.log'), red.stdout + red.stderr);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'),
+    `Actual merge ${merge} is pending integration validation. See integration-red.log; recover only this difference.\n`);
+
+  // 新进程重建事实，不通过提前记 merge / 完成票把暂停时的差异变绿。
+  const built = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(built.status, 0, built.stdout);
+  const pendingDiff = `git 有票 01 的合并提交 ${merge.slice(0, 7)}，事件流无 merge 事件`;
+  assert.ok(built.stdout.includes(pendingDiff), built.stdout);
+  const pending = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(pending.status, 1, pending.stdout);
+  assert.match(pending.stdout, /1 处账实差异/);
+  assert.ok(pending.stdout.includes(`1. ${pendingDiff}`), pending.stdout);
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), history);
+  assert.equal(fs.readFileSync(ticketPath, 'utf8'), ticketBefore);
+
+  // 仅在 fixture 主 feature 树中修复实际集成条件，保留测试与原 merge；不模拟 CLI 派 agent。
+  fs.writeFileSync(path.join(f.dir, 'work-01.txt'), '01\nvalidated\n');
+  sh(f.dir, 'git add work-01.txt && git commit -qm "Fix integration validation"');
+  const green = validate();
+  assert.equal(green.status, 0, green.stdout + green.stderr);
+  fs.writeFileSync(path.join(f.runtime, 'integration-green.log'), green.stdout + green.stderr);
+  const stillPending = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(stillPending.status, 1, stillPending.stdout);
+  assert.equal(stillPending.stdout, pending.stdout, '验证绿也不隐去未记账合并差异');
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), history);
+  assert.equal(fs.readFileSync(ticketPath, 'utf8'), ticketBefore);
+
+  const recorded = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(recorded.status, 0, recorded.stdout);
+  const beforeCleanup = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(beforeCleanup.status, 1, beforeCleanup.stdout);
+  assert.match(beforeCleanup.stdout, /2 处账实差异/);
+  assert.match(beforeCleanup.stdout, /票 01 文件 Status 为 claimed，账上已有 merge（应 resolved）/);
+  assert.match(beforeCleanup.stdout, /票 01 已合并但分支 ticket-01 仍存在（应清理）/);
+  assert.doesNotMatch(beforeCleanup.stdout, /事件流无 merge 事件/);
+  writeTicketFile(f.dir, '01', '自检基线', { status: 'resolved' });
+  f.git('branch -D ticket-01');
+  assert.equal(ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir }).status, 0);
+  const checked = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(checked.status, 0, checked.stdout);
+  assert.match(checked.stdout, /账实一致/);
+  assert.deepEqual(readEvents(f).map((e) => e.type), ['init', 'dispatch', 'settled', 'verdict', 'merge']);
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(history));
+  assert.equal(readEvents(f).at(-1).payload.mergeSha, merge);
+  assert.match(readLedger(f), /^state: running/m);
+  assert.match(fs.readFileSync(path.join(f.dir, '.scratch/demo/issues/02-x.md'), 'utf8'), /Status:\*\* ready-for-agent/);
+});
