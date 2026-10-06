@@ -293,7 +293,8 @@ function narrateEvent(e, T) {
       ticket: esc(p.ticket), escalate: t('升级', 'escalate'),
       note: esc(p.note || T('ev.escalateDefault')),
     });
-    case 'anomaly': return T('ev.anomaly', { anomaly: t('异常记录', 'anomaly'), note: esc(p.note) });
+    case 'anomaly': return T('ev.anomaly', { anomaly: t('异常记录', 'anomaly'), note: esc(p.note) })
+      + (p.refSeq != null ? T('history.refSeq', { seq: esc(p.refSeq) }) : '');
     case 'close': return T('ev.close', { close: t('封账', 'close'), outcome: closeSummary(T, p), note: esc(p.note || '') });
     default: return T('ev.unknown', { type: esc(e.type), payload: esc(JSON.stringify(p)).slice(0, 300) });
   }
@@ -437,6 +438,10 @@ function renderTicket(model, t, idx, total, T) {
       ${brief ? details(T('tp.fixBrief'), codeBlock(brief.text)) : `<div class="muted">${T('tp.fixBriefMissing')}</div>`}
       </div>`);
   }
+  for (const e of model.run.escalates.filter((e) => e.ticket === t.id)) {
+    push(e.seq, `<div class="step"><div class="step-title">${term(T, '升级', 'escalate')} <span class="muted">· #${esc(e.seq)} · ${esc(fmtTs(e.ts))}</span></div>
+      <div class="card">${esc(e.note || T('ev.escalateDefault'))}</div></div>`);
+  }
   const mergeHtml = t.merges.map((m) => `
     <div class="step"><div class="step-title">${T('tp.mergeStep')} <span class="muted">· ${esc(fmtTs(m.ts))}</span></div>
     <div class="card">${T('tp.mergeCard', { mergeSha: sha(m.mergeSha), headSha: sha(m.headSha), note: m.note ? ` · ${esc(m.note)}` : '' })}${model.git[m.mergeSha] ? `<div class="muted small">${T('tp.mergeSubject', { subject: esc(model.git[m.mergeSha].subject) })}</div>` : model.git[m.mergeSha] === undefined ? '' : `<div class="muted small">${T('tp.mergeUnreachable')}</div>`}</div>
@@ -513,10 +518,11 @@ function renderFinal(model, T) {
   if (model.run.anomalies.length || model.run.escalates.length) {
     parts.push(`
 <section class="section"><h2>${T('fp.anomaliesTitle', { anomaly: term(T, '异常记录', 'anomaly'), escalate: term(T, '升级', 'escalate') })}</h2>
+<p class="muted">${T('history.checkDisposition')}</p>
 <ol class="timeline">
 ${[...model.run.anomalies.map((a) => ({ ...a, kind: 'anomaly' })), ...model.run.escalates.map((e) => ({ ...e, kind: 'escalate' }))]
       .sort((a, b) => a.seq - b.seq)
-      .map((x) => `<li class="tl-item"><div class="tl-meta">#${esc(x.seq)} · ${esc(fmtTs(x.ts))}</div><div class="tl-text">${x.kind === 'anomaly' ? T('fp.anomalyEntry', { note: esc(x.note) }) : T('fp.escalateEntry', { ticket: esc(x.ticket), note: esc(x.note || '') })}</div></li>`).join('')}
+      .map((x) => `<li class="tl-item"><div class="tl-meta">#${esc(x.seq)} · ${esc(fmtTs(x.ts))}</div><div class="tl-text">${x.kind === 'anomaly' ? T('fp.anomalyEntry', { note: esc(x.note) }) + (x.refSeq != null ? T('history.refSeq', { seq: esc(x.refSeq) }) : '') : T('fp.escalateEntry', { ticket: esc(x.ticket), note: esc(x.note || '') })}</div></li>`).join('')}
 </ol></section>`);
   }
 

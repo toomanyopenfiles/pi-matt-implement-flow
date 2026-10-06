@@ -558,12 +558,17 @@ function deriveRisks(model) {
         T('risk.r3.detailCorrected', { note: a.note, tseq: fix.target.seq, ttype: fix.target.type, tticket: fix.target.payload.ticket, cseq: fix.correction.seq }),
         [{ label: T('ev.event'), ref: `seq ${a.seq}` }, { label: T('ev.correction'), ref: `seq ${fix.correction.seq}` }]);
     } else {
-      add('high', T('risk.r3.title', { seq: a.seq }), a.note, [{ label: T('ev.event'), ref: `seq ${a.seq}` }]);
+      add('high', T('risk.r3.title', { seq: a.seq }), `${a.note} | ${T('history.checkDisposition')}`,
+        [{ label: T('ev.event'), ref: `seq ${a.seq}` }, ...(a.refSeq != null ? [{ label: 'refSeq', ref: `seq ${a.refSeq}` }] : [])]);
     }
   }
   // R4 升级
   for (const e of model.run.escalates) {
-    add('medium', T('risk.r4.title', { ticket: e.ticket }), e.note || T('risk.r4.defaultDetail'), [{ label: T('ev.event'), ref: `seq ${e.seq}` }]);
+    const ticket = [...model.tickets.values()].find((t) => t.id === e.ticket);
+    const merge = ticket && ticket.merges.find((m) => m.seq > e.seq);
+    add('medium', T('risk.r4.title', { ticket: e.ticket }),
+      `${e.note || T('risk.r4.defaultDetail')}${merge ? T('risk.r4.mergedDetail', { seq: merge.seq, sha: merge.mergeSha }) : T('risk.r4.unmergedDetail')}`,
+      [{ label: T('ev.event'), ref: `seq ${e.seq}` }, ...(merge ? [{ label: T('ev.event'), ref: `seq ${merge.seq}` }] : [])]);
   }
   // R5 retired: historical fix budgets remain in init but do not imply a current risk (ADR-0009).
   // R6 未封账

@@ -61,7 +61,10 @@ function buildAiBrief(model) {
   }
   lines.push('');
   lines.push(T('brief.s4'));
-  for (const a of model.run.anomalies) lines.push(T('brief.anomalyLine', { seq: a.seq, note: a.note }));
+  if (model.run.anomalies.length || model.run.escalates.length) lines.push(T('history.checkDisposition'));
+  for (const a of model.run.anomalies) lines.push(T('brief.anomalyLine', {
+    seq: a.seq, note: a.note, refSeq: a.refSeq != null ? T('history.refSeq', { seq: a.refSeq }) : '',
+  }));
   for (const e of model.run.escalates) lines.push(T('brief.escalateLine', { seq: e.seq, ticket: e.ticket, note: e.note }));
   if (!model.run.anomalies.length && !model.run.escalates.length) lines.push(T('brief.none'));
   lines.push('');
@@ -83,6 +86,11 @@ function buildAiBrief(model) {
     lines.push(T('brief.runLine', { runId: r.runId, role: r.role, ref, key: r.key, status }));
   }
   lines.push('');
+  if (model.notes) {
+    lines.push(T('brief.notesTitle'));
+    lines.push(model.notes);
+    lines.push('');
+  }
   return lines.join('\n');
 }
 
