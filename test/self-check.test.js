@@ -409,6 +409,43 @@ test('SKILL.md final repairs check each finding and record evidence-based re-rev
   assert.match(final, /latest.*not_ready.*new.*final verdict/i);
 });
 
+test('SKILL.md user abandonment stops children and preserves unfinished code/evidence before tracker actions', () => {
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /user explicitly.*abandon/i);
+  assert.match(abandon, /stop.*child.*confirm/i);
+  assert.match(abandon, /preserve.*code.*evidence/i);
+  assert.match(abandon, /completed.*unfinished.*branch.*SHA/i);
+  assert.match(abandon, /decision.*notes/i);
+  assert.match(abandon, /existing commits.*merges.*remain/i);
+  assert.ok(abandon.indexOf('Stop') < abandon.indexOf('Preserve'));
+});
+
+test('SKILL.md abandonment sync must succeed before explicit abandoned close and never declares ready', () => {
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /sync .*--mode abandon .*--claimant .*--reason/);
+  assert.match(abandon, /fail.*open.*anomaly/i);
+  assert.match(abandon, /retry.*missing.*actions/i);
+  assert.match(abandon, /contract.*no.*write surface.*no.*sync/i);
+  assert.match(abandon, /success.*add close.*--outcome abandoned/i);
+  assert.ok(abandon.indexOf('--mode abandon') < abandon.indexOf('--outcome abandoned'));
+  assert.match(abandon, /no.*final.*escalate/i);
+  assert.match(abandon, /never close unfinished tickets.*mark.*ready/i);
+  assert.match(abandon, /delayed tracker.*evidence/i);
+});
+
+test('SKILL.md completed close rejects latest not_ready/escalation completion and preserves old close intent', () => {
+  const final = skillText.match(/### Final gate\n([\s\S]*?)(?=\n### User abandonment)/)?.[1] ?? '';
+  assert.match(final, /--outcome completed.*omitt/i);
+  assert.match(final, /latest.*not_ready.*reject.*normal/i);
+  assert.match(final, /escalat.*not.*complet/i);
+  assert.match(final, /User abandonment/);
+  assert.doesNotMatch(final, /give-up through at warning level|record `close`.*as usual/i);
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /valid input.*initialized.*unsealed/i);
+  assert.match(abandon, /sealed.*reject.*all.*events.*anomaly/i);
+  assert.match(abandon, /old.*close.*outcome.*readable.*infer.*intent.*rewrite/i);
+});
+
 test('agents/coder.md follows the brief workspace for isolated tickets and serial main-feature repairs', () => {
   assert.match(coderAgentText, /ticket.*pi-managed worktree/i);
   assert.match(coderAgentText, /integration.*final.*main feature.*without isolation/i);
