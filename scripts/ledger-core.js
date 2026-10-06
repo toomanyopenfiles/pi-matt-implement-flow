@@ -2,7 +2,7 @@
 
 // 台账核心判定（纯逻辑，真相层 IO 由 CLI 注入为 truth 对象）：
 //   - gateAdd     add 写点的三档校验：拒绝（schema/枚举/状态机/确定矛盾）→ 警告（此刻尚不可核实）→ 矛盾拒绝
-//   - closeBlockers 封账资格：每票须有 merge/escalate 事件，或属非任务票（spec 母票 / resolved 研究票）
+//   - closeBlockers 正常封账资格：每票须有 merge 事件，或属非任务票（spec 母票 / resolved 研究票）
 //   - finalEvidenceWarnings 终审平台证据的 best-effort 核验（仅 check 使用，警告级、不影响退出码）
 //   - reconcile   账实差异核验（check 子命令与 build 的对账结论段共用同一判定）
 //   - renderLedger 四段台账再生：头部 / 表格 / 时间线 / 对账结论（临时文件+原子替换由 CLI 负责）
@@ -116,7 +116,7 @@ function closeBlockers({ events, truth }) {
       }
     }
     const t = idx.get(num);
-    if (t && (t.merges.length || t.escalates.length)) return;
+    if (t && t.merges.length) return;
     blockers.push({ num, reason: file ? `Status=${file.status ?? '?'}` : '票文件缺失' });
   };
   for (const t of truth.tickets) consider(t.num, t);
@@ -282,29 +282,31 @@ function gateAdd({ events, type, payload, truth }) {
       break;
     }
     case 'close': {
+      // 显式放弃只豁免完成/终审门；schema、初始化与已封账拒写仍在此前执法。
+      if (payload.outcome === 'abandoned') break;
       const blockers = closeBlockers({ events, truth });
       if (blockers.length) {
         reasons.push(
           `封账被拒：${blockers.length} 张票未闭环——` +
-            blockers.map((b) => `票 ${b.num}（${b.reason}，无 merge/escalate）`).join('；') +
-            '。先合并或升级；spec 母票 / resolved 研究票等非任务票不阻塞'
+            blockers.map((b) => `票 ${b.num}（${b.reason}，无 merge）`).join('；') +
+            '。先完成合并，升级不代表完成；spec 母票 / resolved 研究票等非任务票不阻塞'
         );
       }
-      // 封账门（分层，ADR-0002 Decision 5）：有合并工作的运行须已有终审裁决入账；
-      // 最新裁决 not_ready 警告放行（用户拍板放弃的合法出口——强拒绝会让放弃的 run 永远卡在 running）；
-      // 零合并票的运行（全 escalate / 空跑）没有终审环节，不检查。
+      // 正常完成（ADR-0009）：有合并须有终审；凡最新 not_ready 均拒绝。
+      // 零合并不要求补 final，但已有裁决仍须遵守；用户放弃须显式 abandoned。
       const mergeCount = events.filter((e) => e.type === 'merge').length;
       const latest = latestFinal(events);
       if (mergeCount && !latest) {
         reasons.push(
           `封账被拒：本 run 有合并工作（${mergeCount} 条 merge 事件）但尚无终审裁决——先记账 ` +
-            'final --final-verdict(ready|ready_with_fixes|not_ready) --run-id <runId>；' +
-            '封账门：有合并工作的运行须已有终审裁决入账（零合并票的运行不检查终审）'
+            'final --final-verdict(ready|ready_with_fixes) --run-id <runId>；' +
+            '正常完成须最新终审就绪（零合并票的运行不要求补终审）'
         );
-      } else if (mergeCount && latest.payload.finalVerdict === 'not_ready') {
-        warnings.push(
-          `封账警告：最新终审裁决为 not_ready（runId ${shortRunId(latest.payload.runId)}，seq ${latest.seq}）——` +
-            '按弃跑放行（用户拍板放弃的合法出口），本账在此标注警告'
+      }
+      if (latest?.payload.finalVerdict === 'not_ready') {
+        reasons.push(
+          `封账被拒：最新终审裁决为 not_ready（runId ${shortRunId(latest.payload.runId)}，seq ${latest.seq}）——` +
+            '正常完成须 ready / ready_with_fixes；用户明确放弃时用 close --outcome abandoned'
         );
       }
       break;
@@ -573,6 +575,7 @@ function renderHeader({ events, truth }) {
   }
   const p = init.payload;
   lines.push(close ? `state: complete（封账 ${compactTime(close.ts)}）` : 'state: running');
+  if (close) lines.push(`outcome: ${close.payload?.outcome ?? 'unknown（旧记录未记录结果）'}`);
   lines.push(`branch: ${p.branch}`);
   lines.push(`branchBase: ${p.branchBase}`);
   lines.push(`baselineSha: ${p.baselineSha}`);
@@ -666,6 +669,7 @@ function renderEvent(e) {
       }
       break;
     case 'close':
+      parts.push(`outcome=${p.outcome ?? 'unknown（旧记录未记录结果）'}`);
       break;
     default:
       for (const [k, v] of Object.entries(p)) parts.push(`${k}=${v}`);

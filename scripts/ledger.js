@@ -69,7 +69,10 @@ init（run 初始化，票 04——契约驱动）:
               # refSeq 指向本异常所针对/更正的既有事件序号：须为正整数、小于当前序号，
               # 且该序号的事件已入账；违规拒绝（无绕过旗标）。指不到对应事件时去掉 --ref-seq 重记。
   pr          --state(opened-draft|ready) [--url] [--note]
-  close       [--note]
+  close       [--outcome(completed|abandoned)] [--note]
+              # 缺省 completed 并记录结果；正常完成不以 escalate 代替 merge，latest not_ready 拒绝。
+              # 显式 abandoned 仅豁免票完成/终审；仍须已初始化、合法输入、未封账。
+              # 旧 close 无 outcome 显示 unknown，不补写；封账后拒绝全部事件。
 
 快照初始化 (snapshot-init，契约驱动——tracker 由 setup 产物自动识别):
   snapshot-init --spec <契约声明的 spec 引用形态> [--tickets 01,02,1042]
@@ -88,6 +91,7 @@ init（run 初始化，票 04——契约驱动）:
               # 把 tracker/ 快照的待推送状态幂等推送到 tracker 本体（票 06；执行 03 的
               # 同步规划）。seal（缺省）：合并票关票附 merge SHA、escalate 票留评保持开放、
               # spec 母票收尾关闭；abandon：撤占坑（--claimant）+ 留评说明（--reason）。
+              # abandon 成功后 add close --outcome abandoned，不关未完成票、不标 PR ready。
               # 幂等键（票 02）：每条同步评论携带隐藏机器 marker
               # \`<!-- matt-implement:<runId>:<kind> -->\`（runId = 本 run 的运行目录名，
               # kind = merge|escalate|closing|abandon；HTML 注释，tracker 上人类不可见）。
@@ -512,6 +516,8 @@ function cmdAdd({ runtimeDir, rest }) {
     out(`✗ 拒绝（未入账）：`, ...errors.map((e) => `  - ${e}`));
     return 1;
   }
+  // 只对新 close 写入默认结果；读取旧 close 不推断、不补写历史意图。
+  if (type === 'close' && payload.outcome === undefined) payload.outcome = 'completed';
   return recordEvent({ runtimeDir, type, payload });
 }
 
@@ -913,8 +919,8 @@ function syncCleanupLines(mode, runtimeDir) {
     `  - 留存 findings：${runtime}/findings/（事件流引用其路径，不可删）`,
     `  - 留存账本三件套：${runtime}/events.jsonl、ledger.md、notes.md（长存）`,
     mode === 'abandon'
-      ? '  随后：封账（add close）——放弃路径已撤占坑留评，tracker 不留假占坑。'
-      : '  随后：PR 标 ready（add pr --state ready）→ 封账（add close）——同步已先行，PR closing keywords 不会抢关已关的票。',
+      ? '  随后：放弃封账（add close --outcome abandoned）——放弃路径已撤占坑留评；未完成票保持开放，不标 PR ready。'
+      : '  随后：PR 标 ready（add pr --state ready）→ 正常封账（add close --outcome completed）——同步已先行，PR closing keywords 不会抢关已关的票。',
   ];
 }
 

@@ -7,9 +7,9 @@
 // 本模块不知道文件系统与 git——真相层查询由 ledger.js 注入。
 
 // 信封格式版本：事件分类学演进时 +1，旧运行账本按此识别（v=2 起含 run 级 final 事件；
-// v=3 起 anomaly 可带 optional 键 refSeq——补正链指针）。
+// v=3 起 anomaly 可带 optional 键 refSeq——补正链指针；v=4 起 close 记录 outcome）。
 // 现无代码消费该字段——升版是分类学自家教义的显式动作，不是迁移触发器（旧账不迁移）。
-const EVENT_VERSION = 3;
+const EVENT_VERSION = 4;
 
 // kebab-case CLI 旗标 → payload 字段（camelCase）
 const FLAG_TO_KEY = {
@@ -37,6 +37,7 @@ const FLAG_TO_KEY = {
   'max-fix-rounds': 'maxFixRounds',
   'max-concurrent': 'maxConcurrent',
   state: 'state',
+  outcome: 'outcome',
   url: 'url',
   note: 'note',
   'ref-seq': 'refSeq',
@@ -52,6 +53,7 @@ const ENUMS = {
   // （ADR-0002 Decision 1）。
   finalVerdict: ['ready', 'ready_with_fixes', 'not_ready'],
   state: ['opened-draft', 'ready'],
+  outcome: ['completed', 'abandoned'],
   // tracker 字段值域（事件格式零迁移，票 04）：识别出的契约预设只有随包发布的预设
   //（tracker-contracts，票 05 起按预设键派生，不再硬编码名单）——字段校验照旧有效，
   // 既有账本照常渲染与对账。
@@ -89,7 +91,7 @@ const EVENT_TYPES = {
   // 核验的唯一锚点（票级还有 dispatch/fix 兜底，终审没有）。多轮终审 = 多条事件，不去重。
   final: { required: ['finalVerdict', 'runId'], optional: ['findings', 'note'] },
   pr: { required: ['state'], optional: ['url', 'note'] },
-  close: { required: [], optional: ['note'] },
+  close: { required: [], optional: ['outcome', 'note'] },
 };
 
 // 票号归一（单一转换点，ADR-0004）：票号一律采用 tracker 原生编号——local 是 feature 局部
