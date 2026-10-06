@@ -23,8 +23,8 @@ const MARK = (kind) => `<!-- matt-implement:${RUN}:${kind} -->`;
 
 // --- gh 桩（Node 脚本）：状态存 GH_STUB_STATE 指向的 JSON 文件，调用追加进 GH_STUB_LOG ---
 // GH_STUB_FAIL：所有调用模拟失败（网络不可用）；GH_STUB_FAIL_WRITE=<num>：该号的写入
-// 动作（close/comment/edit）模拟失败——部分同步状态的注入点（每次 gh 调用是独立进程，
-// 同号多次写入各自都会拦；用例用它拦最后一个动作，此前的动作照常推送）。
+// 动作（close/comment/edit）模拟失败；<num>:<command> 只拦该号的指定写命令。
+// 每次 gh 调用是独立进程，匹配的调用都会失败；重试去掉环境变量后恢复。
 // issue view 的失败不设专门开关：从桩状态里删号即真实缺票（同步对象缺失用例）。
 
 const GH_STUB = `#!/usr/bin/env node
@@ -49,7 +49,7 @@ const writeFail = () => {
   const f = process.env.GH_STUB_FAIL_WRITE;
   if (!f) return false;
   delete process.env.GH_STUB_FAIL_WRITE; // 只防同进程内重入——每个 gh 调用是独立进程，跨调用各自判定
-  return num === f;
+  return num === f || num + ':' + kind === f;
 };
 if (kind === 'view') {
   if (!it) die('issue #' + num + ' not found');
@@ -400,6 +400,135 @@ test('sync 部分失败：报告已完成/未完成；重跑续作（已完成�
 // abandon 路径：撤占坑（移除 assignee）+ 留评说明
 // ====================================================================
 
+// #16：sync 是公开 CLI seam；真实 init 保证开放状态不是测试手写的结论。
+// 故障只注入外部 gh 命令，sync 不负责封账、ready 或停止平台 child。
+function initOpenRun(f) {
+  const git = (...args) => {
+    const r = spawnSync('git', args, { cwd: f.dir, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return r.stdout.trim();
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@example.com');
+  git('config', 'user.name', 'T');
+  fs.writeFileSync(path.join(f.dir, 'README.md'), 'fixture\n');
+  git('add', 'README.md');
+  git('commit', '-qm', 'baseline');
+  const baseline = git('rev-parse', 'HEAD');
+  git('checkout', '-q', '-b', 'feat/demo');
+  const r = spawnSync(process.execPath, [LEDGER, 'init', '--runtime-dir', f.runtime,
+    '--branch', 'feat/demo', '--branch-base', 'main', '--baseline-sha', baseline,
+    '--spec', path.join(f.tracker, 'spec.md'), '--test-command', 'npm test'], {
+    cwd: f.dir, encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户明确放弃；未完成票保留，代码与验证证据已保存。\n');
+}
+
+function runEvidence(f) {
+  return Object.fromEntries([
+    'events.jsonl', 'ledger.md', 'notes.md', 'tracker/spec.md',
+    ...fs.readdirSync(path.join(f.tracker, 'issues')).map((name) => `tracker/issues/${name}`),
+  ].map((name) => [name, fs.readFileSync(path.join(f.runtime, name), 'utf8')]));
+}
+
+function assertOpenEvidence(f, before) {
+  assert.deepEqual(runEvidence(f), before, 'sync 不修改事件、台账、笔记或快照（失败与成功都可核查）');
+  assert.match(before['ledger.md'], /state: running/);
+  const events = before['events.jsonl'].trim().split('\n').map((line) => JSON.parse(line));
+  assert.ok(!events.some((e) => e.type === 'close' || (e.type === 'pr' && e.payload.state === 'ready')),
+    '放弃同步不封账、不标 ready');
+}
+
+function seedAbandonFixture(f) {
+  seedSealFixture(f); // 即使存在 merge/escalate/closing 事实，abandon 也不执行 seal。
+  const state = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
+  state.issues['3001'].assignees = ['alice', 'bob'];
+  fs.writeFileSync(f.stateFile, JSON.stringify(state));
+  initOpenRun(f);
+}
+
+const ABANDON_ARGS = ['--mode', 'abandon', '--claimant', 'alice', '--reason', '用户明确放弃，保留未完成项'];
+
+function assertAbandonTicketsUntouched(f) {
+  for (const num of [1043, 1044, 1102]) {
+    assert.deepEqual(stateOf(f, num), { state: 'open', assignees: [], comments: [] },
+      `abandon 不同步票 ${num}，包括未完成票与远程延迟的已合并票`);
+  }
+  assert.doesNotMatch(rawLog(f), /issue (view|close|comment|edit) (1043|1044|1102)\b/);
+  assert.doesNotMatch(rawLog(f), /issue close |\bpr\b/);
+}
+
+test('sync abandon：说明失败保持开放与占坑；重试补说明和撤占坑，不执行 seal/ready', (t) => {
+  const f = makeFixture(t);
+  seedAbandonFixture(f);
+  const before = runEvidence(f);
+  const failed = sync(f, ABANDON_ARGS, { ...withGh(f), GH_STUB_FAIL_WRITE: '3001:comment' });
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+  assert.match(failed.stdout, /同步失败：comment 3001/);
+  assert.match(failed.stdout, /已完成（0\/2）/);
+  assert.doesNotMatch(failed.stdout, /清理指引/);
+  assert.deepEqual(stateOf(f, 3001), { state: 'open', assignees: ['alice', 'bob'], comments: [] });
+  assert.doesNotMatch(rawLog(f), /--remove-assignee/, '说明失败不提前撤占坑');
+  assertOpenEvidence(f, before);
+  assertAbandonTicketsUntouched(f);
+
+  const offset = rawLog(f).length;
+  const retried = sync(f, ABANDON_ARGS, withGh(f));
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.match(retried.stdout, /同步完成：2 个动作/);
+  assert.doesNotMatch(retried.stdout, /PR 标 ready/);
+  assert.deepEqual(stateOf(f, 3001), {
+    state: 'open', assignees: ['bob'],
+    comments: [`This run has been abandoned: 用户明确放弃，保留未完成项\n\n${MARK('abandon')}`],
+  });
+  const retryLog = rawLog(f).slice(offset);
+  assert.equal((retryLog.match(/issue comment 3001 /g) ?? []).length, 1);
+  assert.equal((retryLog.match(/issue edit 3001 --remove-assignee alice/g) ?? []).length, 1);
+  assertOpenEvidence(f, before);
+  assertAbandonTicketsUntouched(f);
+});
+
+test('sync abandon：撤占坑失败保留已推说明与开放状态；重试只撤占坑，之后零动作', (t) => {
+  const f = makeFixture(t);
+  seedAbandonFixture(f);
+  const before = runEvidence(f);
+  const failed = sync(f, ABANDON_ARGS, { ...withGh(f), GH_STUB_FAIL_WRITE: '3001:edit' });
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+  assert.match(failed.stdout, /同步失败：unassign 3001/);
+  assert.match(failed.stdout, /已完成（1\/2）/);
+  assert.doesNotMatch(failed.stdout, /清理指引/);
+  assert.deepEqual(stateOf(f, 3001), {
+    state: 'open', assignees: ['alice', 'bob'],
+    comments: [`This run has been abandoned: 用户明确放弃，保留未完成项\n\n${MARK('abandon')}`],
+  });
+  assertOpenEvidence(f, before);
+  assertAbandonTicketsUntouched(f);
+
+  // 人可改写说明正文，marker 仍是重试判重依据。
+  const state = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
+  state.issues['3001'].comments = [`用户已终结此 run；未完成范围仍开放。\n\n${MARK('abandon')}`];
+  fs.writeFileSync(f.stateFile, JSON.stringify(state));
+  const offset = rawLog(f).length;
+  const retried = sync(f, ABANDON_ARGS, withGh(f));
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.match(retried.stdout, /同步完成：1 个动作/);
+  assert.doesNotMatch(retried.stdout, /PR 标 ready/);
+  const retryLog = rawLog(f).slice(offset);
+  assert.doesNotMatch(retryLog, /issue (comment|close) /);
+  assert.equal((retryLog.match(/issue edit 3001 --remove-assignee alice/g) ?? []).length, 1);
+  assert.deepEqual(stateOf(f, 3001), { ...state.issues['3001'], assignees: ['bob'] });
+  assertOpenEvidence(f, before);
+  assertAbandonTicketsUntouched(f);
+
+  const afterRetry = rawLog(f).length;
+  const again = sync(f, ABANDON_ARGS, withGh(f));
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /已同步：无待推送动作/);
+  assert.doesNotMatch(rawLog(f).slice(afterRetry), /issue (close|comment|edit) /);
+  assertOpenEvidence(f, before);
+});
+
 test('sync abandon：spec 留评放弃说明 + 撤占坑；重跑零动作', (t) => {
   const f = makeFixture(t);
   writeSpec(f, { closing: false });
@@ -615,6 +744,30 @@ test('claim local 契约 / 缺 setup 产物 / 缺 --spec：显式停下不猜测
   assert.equal(bogus.status, 2);
   assert.match(bogus.stdout, /未知旗标 --bogus/);
   assert.equal(callLog(f).length, 0, '拒绝面不触碰 tracker');
+});
+
+test('sync abandon（local）：无远程说明或占坑写面，保留开放 run、本地票与证据', (t) => {
+  const f = makeFixture(t, { trackerDoc: 'issue-tracker-local.md' });
+  fs.writeFileSync(path.join(f.tracker, 'spec.md'), '# Spec: local\n\n**Status:** ready-for-agent\n');
+  writeTicket(f, '01', 'unfinished', { status: 'claimed' });
+  initOpenRun(f);
+  const before = runEvidence(f);
+  const r = sync(f, ABANDON_ARGS, withGh(f));
+  assert.equal(r.status, 1, r.stdout + r.stderr); // local 的既有公开接口：不经 sync CLI。
+  assert.match(r.stdout, /tracker=local 无需同步/);
+  assert.match(r.stdout, /本地票文件即真相层/);
+  assert.doesNotMatch(r.stdout, /PR 标 ready|清理指引/);
+  assertOpenEvidence(f, before);
+
+  const claim = spawnSync(process.execPath, [LEDGER, 'claim', '--runtime-dir', f.runtime,
+    '--spec', path.join(f.tracker, 'spec.md')], {
+    cwd: f.dir, encoding: 'utf8',
+    env: { ...process.env, PATH: `${f.bin}${path.delimiter}${process.env.PATH}`, ...withGh(f) },
+  });
+  assert.equal(claim.status, 1, claim.stdout + claim.stderr);
+  assert.match(claim.stdout, /tracker=local 无 tracker 写面/);
+  assert.equal(callLog(f).length, 0, 'local claim/abandon 不触碰外部 tracker');
+  assertOpenEvidence(f, before);
 });
 
 test('sync 拒绝：local 契约（快照/同步为无操作）——票文件即真相层', (t) => {
