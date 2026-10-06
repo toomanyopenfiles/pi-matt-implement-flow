@@ -99,7 +99,7 @@ test('init（local 范本）：自动识别 local tracker，事件 payload 与�
   const events = fs.readFileSync(eventsPath, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
   assert.equal(events.length, 1);
   const e = events[0];
-  assert.equal(e.v, 3, '信封版本随事件分类学（事件格式零迁移）');
+  assert.equal(e.v, 4, '信封版本随事件分类学（close outcome，旧事件不迁移）');
   assert.equal(e.seq, 1);
   assert.equal(e.type, 'init');
   assert.deepEqual(e.payload, {
