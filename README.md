@@ -79,11 +79,11 @@ npm test
 
 ### What you get
 
-When the run finishes, you have:
+After normal, complete delivery, you have:
 
 - a merged **feature branch** — every accepted ticket's changes on it, with the full test suite green;
 - with GitHub / GitLab: a **draft PR / MR marked ready for review**, and your tracker tickets updated (see [Tracker support](#tracker-support));
-- a **run directory** `.pi/matt-implement/<feature>/` (see [Run directory](#run-directory)): a human-readable progress ledger (`ledger.md`), notes (`notes.md`), and the record of any tickets handed to you (also in the end-of-run summary);
+- a **run directory** `.pi/matt-implement/<feature>/` (see [Run directory](#run-directory)): a human-readable progress ledger (`ledger.md`), notes (`notes.md`), and the evidence behind the result (also summarized at the end);
 - optionally, a browsable [audit report](#audit-report) of the whole run.
 
 ## How it works
@@ -105,8 +105,8 @@ A run has four roles. The last three take a model and thinking level (see [Confi
 2. Pick the tickets with no unfinished prerequisites and dispatch coders up to the concurrency cap — one ticket per coder, one worktree per ticket.
 3. When a coder finishes: the ticket's gate tests run → (if per-ticket review is on) the reviewer does a two-axis review → failures go back to the same coder while there is a reasonable next step within the approved scope.
 4. Merge into the feature branch and immediately run the full suite; if it is red, fix the integration problem on the feature branch.
-5. Recompute the next batch of doable tickets and repeat 2–4 until everything is done or handed to you.
-6. The final-reviewer reviews the whole branch; with GitHub or GitLab, the draft PR / MR opened at the start is marked ready for review.
+5. Recompute the next batch of doable tickets and repeat 2–4 until everything is done, pausing when your input is needed.
+6. The final-reviewer reviews the whole branch. Only after the work is complete and the branch has passed the necessary validation and final review does the run finish normally; with GitHub or GitLab, the draft PR / MR is marked ready for review.
 
 ```mermaid
 flowchart TD
@@ -116,7 +116,10 @@ flowchart TD
     D --> E{"Tickets left?"}
     E -- yes --> B
     E -- no --> F["Whole-branch final review"]
-    F --> G["Draft PR / MR ready"]
+    F --> G{"Ready?"}
+    G -- no --> H["Repair or pause for your input<br>check evidence; repeat review if needed"]
+    H --> G
+    G -- yes --> I["Complete delivery<br>PR / MR ready"]
 ```
 
 Ticket repair has no attempt quota. A clarification or withdrawal of one review finding is not approval to merge: the necessary full review and validation must still cover the current code. More than one repair can happen between reviews, and a fresh full review can happen without another code change.
@@ -147,6 +150,24 @@ broader changes, or insufficient evidence require another final review. The note
 choice. Passing tests or an earlier favorable review alone do not prove the changed code is ready.
 
 For the design and its limits, see [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).
+
+### Ending a run
+
+**Normal completion** means the agreed work is complete and the required validation and final
+review support delivery. A final review that says “not ready” prevents normal completion;
+handing an unfinished ticket to you is not a substitute for completing it.
+
+**Explicit abandonment** is different: tell the run that you want to abandon it, not merely pause.
+It stops the related agents, saves the code and evidence, and explains the completed and unfinished
+work. Existing commits and merges are not undone. For GitHub or GitLab, it posts the abandonment
+explanation and releases the feature claim before closing the run; if that fails, the run stays
+open while the problem is handled and the missing actions can be retried. Local markdown runs
+save the same results without remote updates.
+
+Abandonment needs neither a new final review nor a hand-off for every unfinished ticket. It does
+**not** close unfinished tickets, mark the feature ready, or claim complete delivery. The run
+summary and audit report distinguish abandonment from normal completion. Closing is irreversible:
+an abandoned or otherwise closed run cannot be reopened. A pause does not close the run.
 
 ## Configuration
 
@@ -240,6 +261,11 @@ the blocker and evidence, and provide the missing input. A pause does not close 
 
 **The run was interrupted (or my context was compacted). Do I start over?**
 No — run the same command again and it continues from the recorded state (see [Run directory](#run-directory)). Older runs that are still open also use the new repair rules: their old attempt limits no longer apply. Closed runs stay closed.
+
+**Can I stop without losing the work?**
+Ask to pause if you may continue later; the run stays open. If you explicitly abandon it, the
+code, evidence, and unfinished-work summary are saved, but the run closes and cannot be reopened.
+Neither choice means the unfinished feature is ready (see [Ending a run](#ending-a-run)).
 
 **What exactly did the run do, and are there hidden problems?**
 Generate an [audit report](#audit-report): a browsable, per-ticket account of the whole run, with

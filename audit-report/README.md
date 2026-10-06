@@ -49,14 +49,22 @@ When it finishes, open `report/index.html` in a browser.
 
 | Page | Contents |
 |---|---|
-| `index.html` | Run overview (branch / spec / flow shape / test gate / PR / closing record), run stats, the **anomalies & risks** section (found by rules), the ticket table, a narrated event timeline, usage & cost, glossary |
+| `index.html` | Run overview (branch / spec / flow shape / test gate / PR / closing result), run stats, the **anomalies & risks** section (found by rules), the ticket table, a narrated event timeline, usage & cost, glossary |
 | `ticket-NN.html` | The full story of each ticket: the ticket text → what the implementer was asked to do → their report and acceptance details (including the test-gate output) → the review verdict with the full findings list → the review diff → fix rounds → merge |
-| `final.html` | The whole-branch final review: verdict and full text, anomalies and escalations, the closing record (with a note when the run never closed cleanly), and the orchestration notes |
+| `final.html` | The whole-branch final review: verdict and full text, anomalies and escalations, the closing result (normal completion, explicit abandonment, or an older record without a stated result), and the orchestration notes |
 
 If any source of evidence is missing, the affected pages say so; everything else still works.
 Historical repair limits remain visible as historical records, not as current attempt quotas or
 reasons a run cannot continue. Actual repairs and full review evidence remain available; a
 clarified or withdrawn finding is not a full approval.
+
+The closing result tells you how the run ended, not whether every saved change is ready to use.
+Explicit abandonment preserves the work and evidence but is not complete delivery or approval;
+unfinished tickets remain open. A pause leaves the run open, while a closed run cannot be reopened.
+For older closing records without a stated result, the report does not guess completion or
+abandonment. A new normal completion cannot proceed with a “not ready” final review; abandoned
+runs and historical records may still contain that verdict, which remains visible.
+See [ADR-0009](../docs/adr/0009-prompt-driven-repair-and-run-continuation.md) for the design.
 
 ## Anomalies & risks (found by rules, not by a model)
 
@@ -107,6 +115,8 @@ believing them.
 
 - **Some items say evidence is missing?** — a layer of evidence was not found (e.g. the pi session
   records were cleaned up); the affected pages name what is missing, everything else is unaffected.
+- **The report says the run was abandoned?** — the saved work is not being presented as ready.
+  Check the unfinished-work summary, review findings, and evidence before using it.
 - **Wrong language?** — rerun with `--lang zh|en`.
 - **Where is the report?** — in `report/` under the run directory by default, or wherever `--out`
   points.

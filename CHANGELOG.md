@@ -24,8 +24,21 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   for your input instead. Pausing leaves the run open. (#14)
   (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
 
+### Added
+
+- You can explicitly abandon a run without arranging a new final review or handing off every
+  unfinished ticket. The run stops related agents, saves code and evidence, explains unfinished
+  work, and handles the feature claim before closing. Failures leave it open for retry.
+  Abandonment does not close unfinished tickets or mark the feature ready; closed runs cannot
+  be reopened. The run summary and audit report distinguish abandonment from normal completion,
+  without guessing the intent of older closing records. (#16)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
 ### Fixed
 
+- Normal completion no longer accepts a “not ready” final review or treats a hand-off of
+  unfinished work as complete delivery. Pausing remains different from closing the run. (#16)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
 - An interrupted run can repair a merge that still needs passing integration tests, while
   unrelated work waits and the ticket is not prematurely reported complete. Final-review
   repairs are checked finding by finding, with another review when the change's impact or
