@@ -116,6 +116,29 @@ test('init（local 范本）：自动识别 local tracker，事件 payload 与�
   assert.match(ledger, /state: running/);
 });
 
+test('init 拒绝退役的 --max-fix-rounds，移除后可重试且不写预算字段', (t) => {
+  const f = makeFixture(t);
+  f.git('checkout -q -b feat/demo');
+  const args = [
+    '--branch', 'feat/demo', '--branch-base', 'main', '--baseline-sha', f.baseline(),
+    '--spec', '.scratch/demo/spec.md', '--test-command', 'npm test',
+    '--reviewer', 'on', '--max-concurrent', '4',
+  ];
+  const retired = initRun(f, [...args, '--max-fix-rounds', '3']);
+  assert.equal(retired.status, 1, retired.stdout);
+  assert.match(retired.stdout, /退役.*修复次数不再限制未封账 run/);
+  assert.match(retired.stdout, /移除.*重试/);
+  assert.ok(!fs.existsSync(path.join(f.runtime, 'events.jsonl')));
+  const retry = initRun(f, args);
+  assert.equal(retry.status, 0, retry.stdout);
+  const init = JSON.parse(fs.readFileSync(path.join(f.runtime, 'events.jsonl'), 'utf8'));
+  assert.equal(Object.hasOwn(init.payload, 'maxFixRounds'), false);
+  assert.equal(init.payload.reviewer, 'on');
+  assert.equal(init.payload.maxConcurrent, '4');
+  const help = f.run(['--help']);
+  assert.doesNotMatch(help.stdout, /\[--max-fix-rounds N\]/);
+});
+
 test('init（local 范本，用户编辑过正文）：判型只依赖 H1 + 锚点，正文编辑不影响识别', (t) => {
   const f = makeFixture(t, { trackerDoc: EDITED_LOCAL_DOC });
   f.git('checkout -q -b feat/demo');
