@@ -67,8 +67,8 @@ const ENUMS = {
 const EVENT_TYPES = {
   init: {
     required: ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand', 'tracker'],
-    // 可选流程形态快照：reviewer=on|off、maxFixRounds、maxConcurrent。
-    // 省略 = 默认形态（on / 2 / 3）——旧账本自然兼容。
+    // 可选流程形态快照：reviewer=on|off、maxConcurrent，省略 = on / 3。
+    // maxFixRounds 仅保留历史载荷兼容，不再生效；新 init CLI 拒绝此退役旗标。
     // 可选票集边界（票 04）：init 票号清单——三层兜底的兜底层，init 时冻结 run 的票集边界
     // （此后边界外的票号记账被拒，中途偷加票被拒）。省略 = 无冻结边界（旧形态零变化）。
     optional: ['reviewer', 'maxFixRounds', 'maxConcurrent', 'tickets'],
