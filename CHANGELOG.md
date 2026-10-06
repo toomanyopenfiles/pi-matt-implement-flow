@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe what each release means for users of the package. Design decisions and
 implementation history live in [`docs/adr/`](./docs/adr/).
 
+## [Unreleased]
+
+### Changed
+
+- Ticket repairs no longer have an attempt quota. Older runs that are still open also ignore
+  their historical limits, without changing saved settings or past records. Timeouts,
+  concurrency limits, and cancellation remain, but total runtime and cost are not guaranteed
+  to be finite. (#13)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
+### Fixed
+
+- A full ticket review can now follow multiple repairs, or happen again without another code
+  change. Clarifying or withdrawing a finding still does not replace the approval needed for
+  the current code. Audit reports retain historical repair limits without presenting them as
+  a current reason to stop. (#13)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
 ## [0.3.1] - 2026-10-03
 ### Added
 

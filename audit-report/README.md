@@ -54,6 +54,9 @@ When it finishes, open `report/index.html` in a browser.
 | `final.html` | The whole-branch final review: verdict and full text, anomalies and escalations, the closing record (with a note when the run never closed cleanly), and the orchestration notes |
 
 If any source of evidence is missing, the affected pages say so; everything else still works.
+Historical repair limits remain visible as historical records, not as current attempt quotas or
+reasons a run cannot continue. Actual repairs and full review evidence remain available; a
+clarified or withdrawn finding is not a full approval.
 
 ## Anomalies & risks (found by rules, not by a model)
 
@@ -64,7 +67,6 @@ inference. What gets flagged:
 - a rejected acceptance
 - an anomaly record
 - an escalation
-- a ticket that used up its fix-round budget
 - a run that never finished cleanly
 - a run closed with the final review still saying `not_ready`
 - missing evidence for a recorded run
