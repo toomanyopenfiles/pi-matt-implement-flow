@@ -324,8 +324,44 @@ test('anchor-5: every mechanical-report gate command carries --base and --test-c
   assert.deepEqual(checkGateCommandFlags(skillText), []);
 });
 
-test('anchor-6: existing hard rules are retained (merge token, fix budget, verdict values, ledger write authority)', () => {
+test('anchor-6: existing hard rules are retained (merge token, verdict values, ledger write authority)', () => {
   assert.deepEqual(checkHardRulesRetained(skillText), []);
+});
+
+test('SKILL.md flow configuration and new init expose reviewer/concurrency without a fix quota', () => {
+  const config = skillText.match(/## Flow configuration\n([\s\S]*?)(?=\n## Ledger)/)?.[1] ?? '';
+  const round0 = skillText.match(/### Round 0[^\n]*\n([\s\S]*?)(?=\n### Each round)/)?.[1] ?? '';
+  assert.doesNotMatch(config + round0, /maxFixRounds|--max-fix-rounds|per-ticket fix budget/);
+  assert.match(config, /--reviewer on\|off --max-concurrent N/);
+});
+
+test('SKILL.md ticket repairs use repair decisions and sequential attempts without budget escalation', () => {
+  const ticket = skillText.match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
+  assert.match(ticket, /Repair decisions/);
+  assert.match(ticket, /fix-no.*attempt.*sequence/i);
+  assert.doesNotMatch(ticket, /budget is consumed|rejects a third fix|two rounds are already dispatched|rejection is the escalation trigger/i);
+  assert.doesNotMatch(skillText, /Fix budget then escalate|maxFixRounds|--max-fix-rounds/);
+  const quotaFreeRules = '## Hard rules\nticket-NN approved changes_requested blocked\nNever hand-write or edit the ledger or the event stream.\n';
+  assert.deepEqual(checkHardRulesRetained(quotaFreeRules), []);
+});
+
+test('SKILL.md formal review rounds are independent, deduplicated, and require approval for the current candidate', () => {
+  const ticket = skillText.match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
+  assert.match(ticket, /formal-review.*independent.*fix/i);
+  assert.match(ticket, /same ticket.*same round.*duplicate/i);
+  assert.match(ticket, /multiple repairs.*one review/i);
+  assert.match(ticket, /without.*new.*fix.*fresh.*gate.*bundle.*settled/i);
+  assert.match(ticket, /clarification.*withdrawal.*notes.*anomaly.*approved/i);
+  assert.match(ticket, /approval.*validation.*current candidate/i);
+  assert.match(ticket, /latest.*changes_requested.*merge/i);
+});
+
+test('SKILL.md cold resume explains retired quotas without rewriting old settings/events or reopening sealed runs', () => {
+  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  assert.match(resume, /historical.*budget.*no longer.*limit/i);
+  assert.match(resume, /explain.*new repair rules/i);
+  assert.match(resume, /settings.*init.*event.*unchanged/i);
+  assert.match(resume, /sealed.*historical.*never reopen/i);
 });
 
 test('SKILL.md repair decisions use evidence and approved scope to continue or request the user', () => {
@@ -371,6 +407,43 @@ test('SKILL.md final repairs check each finding and record evidence-based re-rev
   assert.match(final, /orchestration notes/i);
   assert.match(final, /green tests.*old.*verdict.*coder.*alone/i);
   assert.match(final, /latest.*not_ready.*new.*final verdict/i);
+});
+
+test('SKILL.md user abandonment stops children and preserves unfinished code/evidence before tracker actions', () => {
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /user explicitly.*abandon/i);
+  assert.match(abandon, /stop.*child.*confirm/i);
+  assert.match(abandon, /preserve.*code.*evidence/i);
+  assert.match(abandon, /completed.*unfinished.*branch.*SHA/i);
+  assert.match(abandon, /decision.*notes/i);
+  assert.match(abandon, /existing commits.*merges.*remain/i);
+  assert.ok(abandon.indexOf('Stop') < abandon.indexOf('Preserve'));
+});
+
+test('SKILL.md abandonment sync must succeed before explicit abandoned close and never declares ready', () => {
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /sync .*--mode abandon .*--claimant .*--reason/);
+  assert.match(abandon, /fail.*open.*anomaly/i);
+  assert.match(abandon, /retry.*missing.*actions/i);
+  assert.match(abandon, /contract.*no.*write surface.*no.*sync/i);
+  assert.match(abandon, /success.*add close.*--outcome abandoned/i);
+  assert.ok(abandon.indexOf('--mode abandon') < abandon.indexOf('--outcome abandoned'));
+  assert.match(abandon, /no.*final.*escalate/i);
+  assert.match(abandon, /never close unfinished tickets.*mark.*ready/i);
+  assert.match(abandon, /delayed tracker.*evidence/i);
+});
+
+test('SKILL.md completed close rejects latest not_ready/escalation completion and preserves old close intent', () => {
+  const final = skillText.match(/### Final gate\n([\s\S]*?)(?=\n### User abandonment)/)?.[1] ?? '';
+  assert.match(final, /--outcome completed.*omitt/i);
+  assert.match(final, /latest.*not_ready.*reject.*normal/i);
+  assert.match(final, /escalat.*not.*complet/i);
+  assert.match(final, /User abandonment/);
+  assert.doesNotMatch(final, /give-up through at warning level|record `close`.*as usual/i);
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /valid input.*initialized.*unsealed/i);
+  assert.match(abandon, /sealed.*reject.*all.*events.*anomaly/i);
+  assert.match(abandon, /old.*close.*outcome.*readable.*infer.*intent.*rewrite/i);
 });
 
 test('agents/coder.md follows the brief workspace for isolated tickets and serial main-feature repairs', () => {
@@ -488,7 +561,7 @@ test('breakage simulation: a gate command losing --base is flagged (anchor-5)', 
 });
 
 test('breakage simulation: hard rules losing the merge-token clause are flagged (anchor-6)', () => {
-  const problems = checkHardRulesRetained('## Hard rules\nFix budget then escalate.\n');
+  const problems = checkHardRulesRetained('## Hard rules\napproved changes_requested.\n');
   assert.ok(problems.some((p) => p.includes('ticket-NN')));
 });
 
