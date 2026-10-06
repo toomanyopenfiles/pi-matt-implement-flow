@@ -66,6 +66,14 @@ abandonment. A new normal completion cannot proceed with a “not ready” final
 runs and historical records may still contain that verdict, which remains visible.
 See [ADR-0009](../docs/adr/0009-prompt-driven-repair-and-run-continuation.md) for the design.
 
+A ticket merged after an earlier hand-off shows as complete, with the escalation, its reason,
+and the later work still visible. A hand-off without a merge is not completion or proof that its
+dependents can start. An escalation or anomaly in the history does not by itself prove a current
+blocker or unresolved fault. Read the orchestration notes and supporting evidence for the decision,
+handling, and continuation details. When those cannot be verified, the report asks you to check;
+it does not claim recovery or approval from notes alone. Failure history and evidence-backed
+recovery or correction labels remain visible.
+
 ## Anomalies & risks (found by rules, not by a model)
 
 Every item is found mechanically by rule and traces back to its source — nothing is model
@@ -73,8 +81,8 @@ inference. What gets flagged:
 
 - a worker run that failed
 - a rejected acceptance
-- an anomaly record
-- an escalation
+- an anomaly record in the history
+- an escalation in the history
 - a run that never finished cleanly
 - a run closed with the final review still saying `not_ready`
 - missing evidence for a recorded run
@@ -115,6 +123,10 @@ believing them.
 
 - **Some items say evidence is missing?** — a layer of evidence was not found (e.g. the pi session
   records were cleaned up); the affected pages name what is missing, everything else is unaffected.
+- **An anomaly or escalation is still listed after work continued?** — history is kept even
+  after a successful retry or later merge. Check the current ticket status, orchestration notes,
+  and evidence; a historical item alone does not mean the problem is still present. Missing
+  evidence means the outcome needs checking, not that recovery has been established.
 - **The report says the run was abandoned?** — the saved work is not being presented as ready.
   Check the unfinished-work summary, review findings, and evidence before using it.
 - **Wrong language?** — rerun with `--lang zh|en`.

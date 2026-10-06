@@ -36,6 +36,13 @@ implementation history live in [`docs/adr/`](./docs/adr/).
 
 ### Fixed
 
+- After you answer a hand-off question, the same open run can continue the original ticket
+  once the new conditions and evidence have been checked. A later validated merge shows the
+  ticket as complete and closes it normally, without erasing the hand-off history. Past
+  anomalies are not treated as permanent faults: a checked successful tracker-update retry
+  lets the run continue, while failures and risks remain visible. Where evidence is missing,
+  the audit report asks you to check rather than claiming recovery. (#15)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
 - Normal completion no longer accepts a “not ready” final review or treats a hand-off of
   unfinished work as complete delivery. Pausing remains different from closing the run. (#16)
   (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
