@@ -138,6 +138,20 @@ justified next step, it pauses and explains what is missing in `notes.md`. A pau
 open for continuation; it is not completion. Timeouts, concurrency limits, and cancellation still
 apply, but they do not cap total runtime or cost.
 
+When a ticket is handed to you for a decision (an escalation), `notes.md` keeps the question,
+your decision, and the continuation details. After you provide the missing input, the same open
+run can continue the original ticket: rerun the same command after an interruption. The run checks
+the new conditions against the recorded work and evidence; saying “continue” alone does not prove
+that every blocker is gone or that the current code is approved. A hand-off does not complete the
+ticket or unlock its dependents. Once that ticket is later merged and validated, it shows as
+complete and closes normally in the tracker at the end, while its hand-off history remains.
+
+Past anomalies remain in the history, but do not by themselves mean the run is still broken or
+prevent it from finishing. The handling and supporting evidence are kept in `notes.md`; missing
+evidence calls for a check, not an invented recovery. For example, if a tracker update fails,
+finishing pauses while the failure is handled. After the retry succeeds and the result is checked,
+the run can continue without erasing the failure from its history.
+
 If recorded progress disagrees with the branch or ticket status, ordinary work and finishing the
 run pause while the discrepancy is explained. Work needed to resolve that discrepancy can still
 continue. For example, a merge whose integration tests failed can be repaired after an interruption,
@@ -258,6 +272,11 @@ Your tracker setup file is not one of the three supported templates. Regenerate 
 There is no ticket repair quota to extend. The run asks when it needs a requirement decision,
 permission, an external condition, or help finding a justified next step. Read `notes.md` for
 the blocker and evidence, and provide the missing input. A pause does not close the run.
+
+**A tracker update failed. Is the run permanently blocked?**
+No. Finishing pauses until the failed update is handled. Check `notes.md` for the failure and
+needed permissions or other conditions, then retry once they are addressed. A checked successful
+retry lets the open run continue; the earlier failure stays visible as history.
 
 **The run was interrupted (or my context was compacted). Do I start over?**
 No — run the same command again and it continues from the recorded state (see [Run directory](#run-directory)). Older runs that are still open also use the new repair rules: their old attempt limits no longer apply. Closed runs stay closed.
