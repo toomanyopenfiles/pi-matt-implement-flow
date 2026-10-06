@@ -324,8 +324,44 @@ test('anchor-5: every mechanical-report gate command carries --base and --test-c
   assert.deepEqual(checkGateCommandFlags(skillText), []);
 });
 
-test('anchor-6: existing hard rules are retained (merge token, fix budget, verdict values, ledger write authority)', () => {
+test('anchor-6: existing hard rules are retained (merge token, verdict values, ledger write authority)', () => {
   assert.deepEqual(checkHardRulesRetained(skillText), []);
+});
+
+test('SKILL.md flow configuration and new init expose reviewer/concurrency without a fix quota', () => {
+  const config = skillText.match(/## Flow configuration\n([\s\S]*?)(?=\n## Ledger)/)?.[1] ?? '';
+  const round0 = skillText.match(/### Round 0[^\n]*\n([\s\S]*?)(?=\n### Each round)/)?.[1] ?? '';
+  assert.doesNotMatch(config + round0, /maxFixRounds|--max-fix-rounds|per-ticket fix budget/);
+  assert.match(config, /--reviewer on\|off --max-concurrent N/);
+});
+
+test('SKILL.md ticket repairs use repair decisions and sequential attempts without budget escalation', () => {
+  const ticket = skillText.match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
+  assert.match(ticket, /Repair decisions/);
+  assert.match(ticket, /fix-no.*attempt.*sequence/i);
+  assert.doesNotMatch(ticket, /budget is consumed|rejects a third fix|two rounds are already dispatched|rejection is the escalation trigger/i);
+  assert.doesNotMatch(skillText, /Fix budget then escalate|maxFixRounds|--max-fix-rounds/);
+  const quotaFreeRules = '## Hard rules\nticket-NN approved changes_requested blocked\nNever hand-write or edit the ledger or the event stream.\n';
+  assert.deepEqual(checkHardRulesRetained(quotaFreeRules), []);
+});
+
+test('SKILL.md formal review rounds are independent, deduplicated, and require approval for the current candidate', () => {
+  const ticket = skillText.match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
+  assert.match(ticket, /formal-review.*independent.*fix/i);
+  assert.match(ticket, /same ticket.*same round.*duplicate/i);
+  assert.match(ticket, /multiple repairs.*one review/i);
+  assert.match(ticket, /without.*new.*fix.*fresh.*gate.*bundle.*settled/i);
+  assert.match(ticket, /clarification.*withdrawal.*notes.*anomaly.*approved/i);
+  assert.match(ticket, /approval.*validation.*current candidate/i);
+  assert.match(ticket, /latest.*changes_requested.*merge/i);
+});
+
+test('SKILL.md cold resume explains retired quotas without rewriting old settings/events or reopening sealed runs', () => {
+  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  assert.match(resume, /historical.*budget.*no longer.*limit/i);
+  assert.match(resume, /explain.*new repair rules/i);
+  assert.match(resume, /settings.*init.*event.*unchanged/i);
+  assert.match(resume, /sealed.*historical.*never reopen/i);
 });
 
 test('SKILL.md repair decisions use evidence and approved scope to continue or request the user', () => {
@@ -488,7 +524,7 @@ test('breakage simulation: a gate command losing --base is flagged (anchor-5)', 
 });
 
 test('breakage simulation: hard rules losing the merge-token clause are flagged (anchor-6)', () => {
-  const problems = checkHardRulesRetained('## Hard rules\nFix budget then escalate.\n');
+  const problems = checkHardRulesRetained('## Hard rules\napproved changes_requested.\n');
   assert.ok(problems.some((p) => p.includes('ticket-NN')));
 });
 

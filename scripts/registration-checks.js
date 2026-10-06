@@ -656,7 +656,6 @@ function checkHardRulesRetained(skillText) {
     normalized,
     [
       'ticket-NN',
-      'Fix budget then escalate',
       'blocked',
       'approved',
       'Never hand-write or edit the ledger or the event stream',
