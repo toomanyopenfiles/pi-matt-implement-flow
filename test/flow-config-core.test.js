@@ -7,6 +7,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { pathToFileURL } = require('node:url');
 const {
   CLEAR,
   ROLES,
@@ -260,10 +263,10 @@ test('constants: the documented timeout contract values', () => {
 
 // --- 流程配置（settings 顶层自定义节） ---
 
-test('flowSectionFor normalizes one layer: boolean reviewer, >=1 integer budgets, junk ignored', () => {
+test('flowSectionFor ignores historical fix limits while retaining reviewer and concurrency', () => {
   assert.deepEqual(
     flowSectionFor({ [FLOW_SECTION]: { reviewer: false, maxFixRounds: 3, maxConcurrent: 4 } }),
-    { reviewer: false, maxFixRounds: 3, maxConcurrent: 4 },
+    { reviewer: false, maxConcurrent: 4 },
   );
   assert.deepEqual(
     flowSectionFor({ [FLOW_SECTION]: { reviewer: 'yes', maxFixRounds: 0, maxConcurrent: 2.5, bogus: 1 } }),
@@ -275,13 +278,14 @@ test('flowSectionFor normalizes one layer: boolean reviewer, >=1 integer budgets
 
 test('resolveFlowConfigDetailed: project wins per field, user-only survives, defaults fill the rest', () => {
   const r = resolveFlowConfigDetailed(
-    { [FLOW_SECTION]: { reviewer: false, maxConcurrent: 4 } },
-    { [FLOW_SECTION]: { maxConcurrent: 5 } },
+    { [FLOW_SECTION]: { reviewer: false, maxConcurrent: 4, maxFixRounds: 1 } },
+    { [FLOW_SECTION]: { maxConcurrent: 5, maxFixRounds: 99 } },
   );
-  assert.deepEqual(r.values, { reviewer: false, maxFixRounds: 2, maxConcurrent: 5 });
-  assert.deepEqual(r.sources, { reviewer: 'user', maxFixRounds: 'default', maxConcurrent: 'project' });
-  assert.deepEqual(resolveFlowConfigDetailed().values, FLOW_DEFAULTS);
-  assert.deepEqual(resolveFlowConfigDetailed().sources, { reviewer: 'default', maxFixRounds: 'default', maxConcurrent: 'default' });
+  assert.deepEqual(r.values, { reviewer: false, maxConcurrent: 5 });
+  assert.deepEqual(r.sources, { reviewer: 'user', maxConcurrent: 'project' });
+  assert.deepEqual(resolveFlowConfigDetailed().values, { reviewer: true, maxConcurrent: 3 });
+  assert.deepEqual(FLOW_DEFAULTS, { reviewer: true, maxConcurrent: 3 });
+  assert.deepEqual(resolveFlowConfigDetailed().sources, { reviewer: 'default', maxConcurrent: 'default' });
 });
 
 test('withFlowConfig creates/updates the section, CLEAR deletes, empty section collapses; input untouched', () => {
@@ -290,17 +294,22 @@ test('withFlowConfig creates/updates the section, CLEAR deletes, empty section c
   assert.deepEqual(next[FLOW_SECTION], { reviewer: false });
   assert.deepEqual(before, { subagents: {} }, 'input must stay untouched');
   assert.deepEqual(
-    withFlowConfig(next, { reviewer: CLEAR, maxFixRounds: 3 }),
-    { subagents: {}, [FLOW_SECTION]: { maxFixRounds: 3 } },
+    withFlowConfig(next, { reviewer: CLEAR, maxConcurrent: 3 }),
+    { subagents: {}, [FLOW_SECTION]: { maxConcurrent: 3 } },
   );
   assert.deepEqual(withFlowConfig({ [FLOW_SECTION]: { reviewer: true } }, { reviewer: CLEAR }), {});
+  assert.deepEqual(
+    withFlowConfig({ [FLOW_SECTION]: { reviewer: true, maxFixRounds: 2 } }, { reviewer: CLEAR }),
+    { [FLOW_SECTION]: { maxFixRounds: 2 } },
+    'clearing an active setting must not remove a historical key',
+  );
 });
 
 test('buildShowView renders the Flow section with sources and hints, then agents as one line each', () => {
   const view = buildShowView({
     frontmatterByRole: { coder: { thinking: 'high', timeoutMs: '3600000' } },
     userSettings: {
-      [FLOW_SECTION]: { reviewer: false },
+      [FLOW_SECTION]: { reviewer: false, maxFixRounds: 1 },
       subagents: { agentOverrides: { [fullName('coder')]: { model: 'a/x' } } },
     },
     projectSettings: { [FLOW_SECTION]: { maxConcurrent: 4 } },
@@ -309,9 +318,81 @@ test('buildShowView renders the Flow section with sources and hints, then agents
     parentModel: 'p/parent-model',
   });
   assert.match(view, /reviewer\s+off\s+\[user\]\s+per-ticket two-axis review/);
-  assert.match(view, /maxFixRounds\s+2\s+\[default\]\s+fix attempts per ticket/);
+  assert.doesNotMatch(view, /maxFixRounds|fix attempts per ticket|fix budget/);
   assert.match(view, /maxConcurrent\s+4\s+\[project\]\s+parallel coders/);
   assert.match(view, /Agents \(effective model \/ thinking\)/);
   assert.match(view, /model=a\/x \[settings override\]/);
   assert.match(view, /scope: project → \/p\/\.pi\/settings\.json · user → \/u\/settings\.json/);
+});
+
+// Load the unchanged extension with only its external pi SDK boundary stubbed.
+// Exercise the registered command against real temporary settings files.
+test('matt-flow-config UI offers only reviewer and concurrency and preserves legacy settings on save', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-config-ui-'));
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  t.after(() => {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const put = (relative, text) => {
+    const target = path.join(root, relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, text);
+    return target;
+  };
+  for (const [name, exports] of [
+    ['pi-coding-agent', "export const CONFIG_DIR_NAME = '.pi';"],
+    ['pi-tui', 'export class Box {} export class Text {}'],
+  ]) {
+    put(`node_modules/@earendil-works/${name}/package.json`, JSON.stringify({ type: 'module', exports: './index.js' }));
+    put(`node_modules/@earendil-works/${name}/index.js`, exports);
+  }
+  put('scripts/flow-config-core.js', readText(PKG_ROOT, 'scripts/flow-config-core.js'));
+  const extension = put('extensions/matt-flow-config.mjs', readText(PKG_ROOT, 'extensions/matt-flow-config.js'));
+  const settingsPath = put('user/settings.json', serializeSettings({
+    [FLOW_SECTION]: { reviewer: false, maxFixRounds: 1, maxConcurrent: 3, futureKey: 'keep' },
+    subagents: { agentOverrides: { [fullName('coder')]: { model: 'a/x', thinking: 'high' } } },
+    unrelated: true,
+  }));
+  process.env.PI_CODING_AGENT_DIR = path.dirname(settingsPath);
+  let command;
+  (await import(pathToFileURL(extension).href)).default({
+    registerEntryRenderer() {},
+    registerCommand(name, registered) {
+      assert.equal(name, 'matt-flow-config');
+      command = registered;
+    },
+  });
+  const menus = [];
+  const notifications = [];
+  await command.handler('', {
+    hasUI: true,
+    cwd: root,
+    ui: {
+      async select(title, choices) {
+        menus.push({ title, choices });
+        if (title === 'matt-flow-config') return choices.find((s) => s.startsWith('Configure flow options'));
+        if (title === 'Where should the override live?') return choices.find((s) => s.startsWith('user'));
+        if (title === 'Which flow setting?') return choices.find((s) => s.startsWith('maxConcurrent'));
+        return '4';
+      },
+      async confirm() { return true; },
+      notify(message, level) { notifications.push({ message, level }); },
+    },
+  });
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, 'info');
+  const fields = menus.find((menu) => menu.title === 'Which flow setting?').choices;
+  assert.equal(fields.length, 2);
+  assert.match(fields[0], /^reviewer /);
+  assert.match(fields[1], /^maxConcurrent /);
+  assert.doesNotMatch(JSON.stringify(menus), /maxFixRounds|fix budget|Fix attempts per ticket/);
+  const saved = readSettingsFile(settingsPath);
+  assert.deepEqual(saved, {
+    [FLOW_SECTION]: { reviewer: false, maxFixRounds: 1, maxConcurrent: 4, futureKey: 'keep' },
+    subagents: { agentOverrides: { [fullName('coder')]: { model: 'a/x', thinking: 'high' } } },
+    unrelated: true,
+  });
+  assert.deepEqual(resolveFlowConfigDetailed(saved).values, { reviewer: false, maxConcurrent: 4 });
 });

@@ -17,7 +17,8 @@ const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ma
 // 生效值作为 init 事件旗标冻结进台账，此后 ledger 校验按快照执行，中途改配置
 // 不影响进行中的 run。
 const FLOW_SECTION = 'mattImplementFlow';
-const FLOW_DEFAULTS = { reviewer: true, maxFixRounds: 2, maxConcurrent: 3 };
+// 历史 maxFixRounds 仍留在 settings 文件中，但不参与有效配置解析。
+const FLOW_DEFAULTS = { reviewer: true, maxConcurrent: 3 };
 const FLOW_KEYS = Object.keys(FLOW_DEFAULTS);
 
 // 三个 agent frontmatter 的 run 级墙钟默认（每个 dispatch child 一个死线，
@@ -331,7 +332,6 @@ function extractFrontmatterFields(text) {
 const FLOW_HINTS = {
   reviewer:
     'per-ticket two-axis review + fix loop; off = merge straight after the platform gate (final-reviewer still runs)',
-  maxFixRounds: 'fix attempts per ticket; only meaningful when reviewer=on',
   maxConcurrent: 'parallel coders; /pi-matt-implement-flow <N> wins',
 };
 
