@@ -8,6 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe what each release means for users of the package. Design decisions and
 implementation history live in [`docs/adr/`](./docs/adr/).
 
+## [Unreleased]
+
+### Changed
+
+- Ticket repairs no longer have an attempt quota. Older runs that are still open also ignore
+  their historical limits, without changing saved settings or past records. Timeouts,
+  concurrency limits, and cancellation remain, but total runtime and cost are not guaranteed
+  to be finite. (#13)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
+- Integration and final-review repairs no longer stop automatically after two failed attempts.
+  Repairs continue when evidence supports a reasonable next step within the approved scope;
+  missing decisions, permissions, external conditions, or a justified next step prompt a pause
+  for your input instead. Pausing leaves the run open. (#14)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
+### Added
+
+- You can explicitly abandon a run without arranging a new final review or handing off every
+  unfinished ticket. The run stops related agents, saves code and evidence, explains unfinished
+  work, and handles the feature claim before closing. Failures leave it open for retry.
+  Abandonment does not close unfinished tickets or mark the feature ready; closed runs cannot
+  be reopened. The run summary and audit report distinguish abandonment from normal completion,
+  without guessing the intent of older closing records. (#16)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
+### Fixed
+
+- Normal completion no longer accepts a “not ready” final review or treats a hand-off of
+  unfinished work as complete delivery. Pausing remains different from closing the run. (#16)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+- An interrupted run can repair a merge that still needs passing integration tests, while
+  unrelated work waits and the ticket is not prematurely reported complete. Final-review
+  repairs are checked finding by finding, with another review when the change's impact or
+  missing evidence calls for one; green tests alone are not enough. (#14)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+- A full ticket review can now follow multiple repairs, or happen again without another code
+  change. Clarifying or withdrawing a finding still does not replace the approval needed for
+  the current code. Audit reports retain historical repair limits without presenting them as
+  a current reason to stop. (#13)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
 ## [0.3.1] - 2026-10-03
 ### Added
 
