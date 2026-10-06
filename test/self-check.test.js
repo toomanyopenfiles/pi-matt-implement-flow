@@ -356,6 +356,45 @@ test('SKILL.md formal review rounds are independent, deduplicated, and require a
   assert.match(ticket, /latest.*changes_requested.*merge/i);
 });
 
+test('SKILL.md human handoff preserves escalation history without completing tickets or satisfying dependencies', () => {
+  const handoff = skillText.match(/### Human handoff[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  assert.match(handoff, /ticket-level.*escalate.*handoff.*history/i);
+  assert.match(handoff, /not.*completion.*dependenc.*normal seal.*permanent/i);
+  assert.match(handoff, /pending decisions.*user decisions.*pause stage.*recovery.*notes/i);
+  assert.match(handoff, /ordinary.*decisions.*not.*anomaly/i);
+  assert.match(handoff, /no.*pause.*resume.*authorization.*events/i);
+  assert.match(handoff, /merged.*completed.*escalation history/i);
+  assert.match(handoff, /unmerged.*facts.*notes.*current action/i);
+  assert.match(handoff, /unmerged.*open.*downstream.*blocked/i);
+  const ledger = skillText.match(/## Ledger\n([\s\S]*?)(?=\n## The loop)/)?.[1] ?? '';
+  assert.doesNotMatch(ledger, /Every state transition is recorded/);
+  assert.match(ledger, /structured facts.*recorded/i);
+});
+
+test('SKILL.md anomaly history retains facts while notes hold disposition evidence, not mechanical resolution', () => {
+  const history = skillText.match(/### Human handoff[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  assert.match(history, /anomaly.*refSeq.*immutable history/i);
+  assert.match(history, /disposition.*evidence pointers.*notes/i);
+  assert.match(history, /historical anomaly.*not.*closing.*unresolved/i);
+  assert.match(history, /cannot.*revoke facts.*reset.*approval.*validation/i);
+  assert.match(history, /evidence.*missing.*verify.*user/i);
+  assert.match(history, /scripts.*not.*parse notes.*authoriz.*resolv/i);
+  assert.match(history, /no.*anomaly-resolved.*event/i);
+});
+
+test('SKILL.md cold resume verifies user-provided conditions against notes and facts without replaying completed work', () => {
+  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  assert.match(resume, /skip init.*pull/i);
+  assert.match(resume, /rebuild.*reconcile/i);
+  assert.match(resume, /notes.*referenced evidence.*git/i);
+  assert.match(resume, /verify.*user.*new conditions.*evidence/i);
+  assert.match(resume, /continue.*not.*all.*resolved/i);
+  assert.match(resume, /necessary.*validation.*formal approval/i);
+  assert.match(resume, /remaining.*not.*reimplement.*remerge.*completed/i);
+  assert.match(resume, /running.*unsealed.*not.*child/i);
+  assert.ok(resume.indexOf('Verify the user') < resume.indexOf('Recover the interrupted stage'));
+});
+
 test('SKILL.md cold resume explains retired quotas without rewriting old settings/events or reopening sealed runs', () => {
   const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
   assert.match(resume, /historical.*budget.*no longer.*limit/i);
@@ -397,6 +436,17 @@ test('SKILL.md reconciliation stops ordinary progress but permits explained inte
   const merge = skillText.match(/### Merge[^\n]*\n([\s\S]*?)(?=\n### Final gate)/)?.[1] ?? '';
   assert.match(merge, /Only after.*validation.*passes.*record `merge`/i);
   assert.match(merge, /premature.*merge.*ticket.*green/i);
+});
+
+test('SKILL.md pre-seal sync records failure but allows verified idempotent recovery with notes evidence', () => {
+  const sync = skillText.match(/\*\*Pre-seal sync\*\*([\s\S]*?)(?=\n5\. )/)?.[1] ?? '';
+  assert.match(sync, /failed sync must not seal/i);
+  assert.match(sync, /record.*anomaly.*sync failed/i);
+  assert.match(sync, /verify.*handle.*failure.*retry.*idempotent/i);
+  assert.match(sync, /success.*evidence.*notes.*continue/i);
+  assert.match(sync, /historical anomaly.*not.*permanent/i);
+  assert.doesNotMatch(sync, /anomaly.*and stop to report/i);
+  assert.match(sync, /sync always precedes.*ready/i);
 });
 
 test('SKILL.md final repairs check each finding and record evidence-based re-review choices', () => {
