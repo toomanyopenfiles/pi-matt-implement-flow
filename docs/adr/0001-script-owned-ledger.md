@@ -5,6 +5,10 @@
 - **Deciders:** 本包维护者（经 grill 会话定稿）
 - **Context tags:** orchestrator-memory, ledger, enforcement
 
+> **后续调整：** [ADR-0009](0009-prompt-driven-repair-and-run-continuation.md)（spec #12）。
+> 保留脚本独占写权与 append-only；预算执法、全转换入事件及差异一律停止的范围由新决策调整，人工暂停/决定/恢复上下文不新增事件。
+> 以下保留本 ADR 当时的决策与理由，不覆写历史解释。
+
 ## Context
 
 编排器在 compaction 之间唯一的跨会话记忆曾是一个手工维护的台账文件（markdown 表格 + 散文

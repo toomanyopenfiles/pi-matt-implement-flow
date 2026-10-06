@@ -6,6 +6,10 @@
 - **Deciders:** 本包维护者（经 spec 会审定稿）
 - **Context tags:** dispatch, gate, mechanical-report, acceptance-contract, anti-overconfidence
 
+> **后续调整：** [ADR-0009](0009-prompt-driven-repair-and-run-continuation.md)（spec #12）。
+> 仅替代 Decision 6 的集成/终审连红两次强制停止；typed gate、机械报告、retained resume 手跑门禁及补记二负空间裁定仍有效。
+> 以下保留本 ADR 当时的决策与理由，不覆写历史解释。
+
 ## Context
 
 2026-09 的一次 feature run 里，两票 coder run 被平台验收拒绝：模型在最后一次

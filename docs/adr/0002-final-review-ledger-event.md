@@ -5,6 +5,10 @@
 - **Deciders:** 本包维护者（经 grill 会话定稿）
 - **Context tags:** orchestrator-memory, ledger, final-review, enforcement, audit
 
+> **后续调整：** [ADR-0009](0009-prompt-driven-repair-and-run-continuation.md)（spec #12）。
+> 保留 final 事件与正常完成终审要求；Decision 5 的 not_ready 警告及全升级隐式放弃出口改为显式 abandoned，正常完成拒绝 not_ready，用户放弃无需补终审。旧记录不推断意图。
+> 以下保留本 ADR 当时的决策与理由，不覆写历史解释。
+
 ## Context
 
 整分支终审（final review）目前不在事件流：台账十类事件全部围绕票建模（required 含
