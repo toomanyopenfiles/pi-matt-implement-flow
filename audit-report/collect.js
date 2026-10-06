@@ -125,8 +125,8 @@ function buildRunModel(events) {
       }
       case 'dispatch': {
         const t = ticketOf(p.ticket);
-        // 修复后的重派发（fallback fresh coder）事件无 round 字段：按该票已消耗的修复数归入下一轮
-        const round = p.round != null ? Number(p.round) : t.fixes.length + 1;
+        // 正式评审与修复次数独立；缺少显式轮号时不从修复数补造。
+        const round = p.round != null ? Number(p.round) : null;
         t.dispatches.push({ seq: e.seq, ts: e.ts, key: p.key, runId: p.runId, worktree: p.worktree, note: p.note || '', round });
         if (p.runId) runRefs.push({ runId: p.runId, ticket: p.ticket, key: p.key, role: RUN_ROLE_BY_TYPE.dispatch, seq: e.seq, ts: e.ts });
         break;
@@ -565,15 +565,7 @@ function deriveRisks(model) {
   for (const e of model.run.escalates) {
     add('medium', T('risk.r4.title', { ticket: e.ticket }), e.note || T('risk.r4.defaultDetail'), [{ label: T('ev.event'), ref: `seq ${e.seq}` }]);
   }
-  // R5 修复预算耗尽
-  const budget = model.run.init && model.run.init.maxFixRounds != null ? Number(model.run.init.maxFixRounds) : 2;
-  for (const t of model.tickets.values()) {
-    if (t.fixes.length >= budget && !model.run.escalates.some((e) => e.ticket === t.id)) {
-      add('medium', T('risk.r5.title', { id: t.id, used: t.fixes.length, budget }),
-        T('risk.r5.detail'),
-        [{ label: T('ev.ticket'), ref: `ticket-${t.id}.html` }]);
-    }
-  }
+  // R5 retired: historical fix budgets remain in init but do not imply a current risk (ADR-0009).
   // R6 未封账
   if (!model.run.sealed) {
     add('medium', T('risk.r6.title'), T('risk.r6.detail'), []);
@@ -663,7 +655,7 @@ function incidentRefs(model, liveRefs) {
 function recoveryFor(model, ref, incidents) {
   if (ref.ticket === 'final') return null; // run 级终审无票：不存在「同票后续运行」这一判据
   // model.tickets 即真相来源（collect 产物是渲染用的排序数组、测试装置是 Map）：
-  // 用 .values() 统一取票（与 R5/R9/R10 同一取法），不再为此重建一份 Map。
+  // 用 .values() 统一取票（与 R9/R10 同一取法），不再为此重建一份 Map。
   const ticket = [...(model.tickets || []).values()].find((t) => t.id === ref.ticket);
   if (!ticket || !(ticket.settles || []).length) return null;
   const seq = Number(ref.seq) || 0;

@@ -123,13 +123,15 @@ ${body}
 function renderOverview(model, T) {
   const r = model.run;
   const init = r.init || {};
-  const flags = init.reviewer != null || init.maxFixRounds != null || init.maxConcurrent != null
+  const flags = init.reviewer != null || init.maxConcurrent != null
     ? T('ov.flowFlags', {
       state: init.reviewer === 'off' ? T('ov.off') : T('ov.on'),
-      fix: init.maxFixRounds ?? 2,
       conc: init.maxConcurrent ?? 3,
     })
     : T('ov.flowFlagsDefault');
+  const historicalBudget = init.maxFixRounds != null
+    ? `<div class="muted">${T('ov.historicalFixBudget', { budget: esc(init.maxFixRounds) })}</div>`
+    : '';
   const pr = r.prs.length ? r.prs[r.prs.length - 1] : null;
 
   const cards = [
@@ -138,7 +140,7 @@ function renderOverview(model, T) {
     { label: T('ov.branch'), value: init.branch ? `<code>${esc(init.branch)}</code>${T('ov.baseline', { sha: sha(init.baselineSha) })}` : '—' },
     { label: 'spec', value: init.spec ? `<code>${esc(init.spec)}</code>` : '—' },
     { label: T('ov.gate'), value: init.testCommand ? `<code>${esc(init.testCommand)}</code>` : '—' },
-    { label: term(T, '流程形态', 'flow shape'), value: flags },
+    { label: term(T, '流程形态', 'flow shape'), value: flags + historicalBudget },
     { label: T('ov.tracker'), value: esc(init.tracker || '—') },
     { label: T('ov.pr'), value: pr ? (pr.url ? `<a href="${esc(pr.url)}">${esc(pr.state)}${T('ev.prUrl', { url: esc(pr.url) })}</a>` : esc(pr.state)) : T('ov.prNone') },
     { label: term(T, '封账', 'seal'), value: r.sealed ? `<span class="pill ok">${T('ov.sealed')}</span> <span class="muted">${esc(fmtTs(r.close.ts))}</span>` : `<span class="pill bad">${T('ov.unsealed')}</span>` },
@@ -148,8 +150,8 @@ function renderOverview(model, T) {
   const statCards = [
     { label: T('ov.stat.tickets'), value: model.tickets.length },
     { label: T('ov.stat.dispatches'), value: model.runRefs.filter((x) => x.role === 'coder').length },
-    { label: T('ov.stat.reviews'), value: model.runRefs.filter((x) => x.role === 'reviewer').length },
-    { label: T('ov.stat.fixes'), value: model.runRefs.filter((x) => x.role === 'coder-resume').length },
+    { label: T('ov.stat.reviews'), value: model.tickets.reduce((count, t) => count + t.verdicts.length, 0) },
+    { label: T('ov.stat.fixes'), value: model.tickets.reduce((count, t) => count + t.fixes.length, 0) },
     { label: T('ov.stat.finals'), value: s.finalReviews || 0 },
     { label: T('ov.stat.cost'), value: fmtCost(s.totalCost) },
     { label: T('ov.stat.tokens'), value: fmtTokens(s.totalTokens) },
@@ -378,12 +380,13 @@ function runSummaryCard(model, ref, T) {
 }
 
 function renderTicket(model, t, idx, total, T) {
-  const rounds = new Map(); // round -> html parts
-  const push = (k, html) => { if (!rounds.has(k)) rounds.set(k, []); rounds.get(k).push(html); };
+  // Event order is authoritative: fix attempts and formal review rounds are independent.
+  const steps = [];
+  const push = (seq, html) => steps.push({ seq, html });
 
   for (const d of t.dispatches) {
     const brief = findBriefForSafe(model, d.key, d.ts);
-    push(Number(d.round || 1), `
+    push(d.seq, `
       <div class="step"><div class="step-title">${term(T, '派发', 'dispatch')} <code>${esc(d.key)}</code> <span class="muted">${T('tp.seqMeta', { ts: esc(fmtTs(d.ts)), seq: esc(d.seq) })}</span></div>
       ${runSummaryCard(model, { runId: d.runId, role: 'coder', ticket: t.id, key: d.key }, T)}
       ${brief
@@ -392,7 +395,7 @@ function renderTicket(model, t, idx, total, T) {
       </div>`);
   }
   for (const s of t.settles) {
-    push(Number(s.round || 1), `
+    push(s.seq, `
       <div class="step"><div class="step-title">${term(T, '实现结算', 'settled')} <span class="muted">· ${esc(fmtTs(s.ts))}</span></div>
       <div class="card">${T('tp.commitAnchor', { sha: sha(s.headSha) })}${s.gate ? T('tp.gateSummary', { gate: esc(s.gate) }) : ''}${s.worktree ? T('tp.worktreePart', { path: esc(s.worktree) }) : ''}</div>
       </div>`);
@@ -402,7 +405,7 @@ function renderTicket(model, t, idx, total, T) {
     const findings = v.findings && model.findingsFiles[v.findings];
     const bundleKey = Object.keys(model.bundles).find((k) => k.includes(`/${String(t.id).padStart(2, '0')}-r${v.round || 1}.diff`));
     const bundle = bundleKey ? model.bundles[bundleKey] : null;
-    push(Number(v.round || 1), `
+    push(v.seq, `
       <div class="step"><div class="step-title">${T('tp.verdictStep', { verdict: term(T, '评审裁决', 'verdict'), round: esc(v.round) })} <span class="muted">· ${esc(fmtTs(v.ts))}</span></div>
       ${runSummaryCard(model, { runId: v.revRunId, role: 'reviewer', ticket: t.id, key: `rev-${t.id}` }, T)}
       <div class="card">${T('tp.verdictResult', { pill: `<span class="pill ${cls}">${esc(label)}</span>`, note: v.note ? ` · ${esc(v.note)}` : '' })}</div>
@@ -420,7 +423,7 @@ function renderTicket(model, t, idx, total, T) {
   }
   for (const f of t.fixes) {
     const brief = findBriefForSafe(model, f.key, f.ts);
-    push(Number((f.fixNo || 1)) + 0.5, `
+    push(f.seq, `
       <div class="step"><div class="step-title">${T('tp.fixRoundLabel', { n: esc(f.fixNo) })} <span class="muted">· ${esc(fmtTs(f.ts))}</span></div>
       ${f.note ? `<div class="card">${T('tp.fixNote', { note: esc(f.note) })}</div>` : ''}
       ${runSummaryCard(model, { runId: f.resumeRunId, role: 'coder-resume', ticket: t.id, key: f.key }, T)}
@@ -432,11 +435,8 @@ function renderTicket(model, t, idx, total, T) {
     <div class="card">${T('tp.mergeCard', { mergeSha: sha(m.mergeSha), headSha: sha(m.headSha), note: m.note ? ` · ${esc(m.note)}` : '' })}${model.git[m.mergeSha] ? `<div class="muted small">${T('tp.mergeSubject', { subject: esc(model.git[m.mergeSha].subject) })}</div>` : model.git[m.mergeSha] === undefined ? '' : `<div class="muted small">${T('tp.mergeUnreachable')}</div>`}</div>
     </div>`).join('');
 
-  const roundKeys = [...rounds.keys()].sort((a, b) => a - b);
-  const roundsHtml = roundKeys.map((k) => {
-    const label = Number.isInteger(k) ? T('tp.roundLabel', { n: k }) : T('tp.fixRoundLabel', { n: Math.floor(k) });
-    return `<div class="round"><h3>${esc(label)}</h3>${rounds.get(k).join('')}</div>`;
-  }).join('');
+  const stepsHtml = steps.sort((a, b) => a.seq - b.seq)
+    .map((s) => `<div class="round">${s.html}</div>`).join('');
 
   const nav = `
   <div class="pager">
@@ -451,7 +451,7 @@ function renderTicket(model, t, idx, total, T) {
   <p class="muted">${t.file ? T('tp.ticketFile', { path: esc(t.file) }) : T('tp.ticketFileMissing')}</p>
 </div>
 ${t.body ? details(T('tp.ticketBody'), codeBlock(t.body)) : ''}
-<div class="rounds">${roundsHtml || `<p class="muted">${T('tp.noDispatch')}</p>`}</div>
+<div class="rounds">${stepsHtml || `<p class="muted">${T('tp.noDispatch')}</p>`}</div>
 ${mergeHtml ? `<div class="round"><h3>${T('tp.mergeStep')}</h3>${mergeHtml}</div>` : ''}
 ${nav}`;
   return layout(T, `${T('ev.ticket')} ${t.id} · ${model.slug}`, body);
