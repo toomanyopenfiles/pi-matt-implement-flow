@@ -67,8 +67,8 @@ const M = {
     'risk.r4.defaultDetail': '移交人工裁决，原因未记录。',
     'risk.r6.title': '运行未封账',
     'risk.r6.detail': '事件流中没有 close 记账，运行可能中途停止或仍进行中——报告反映的可能不是终局。',
-    'risk.r7.title': '封账时最新终审裁决为 not_ready（带伤封账）',
-    'risk.r7.detail': '整分支终审判定未就绪，运行仍被封账——多半是用户拍板放弃的合法出口，但代码带着已知问题收场，值得回看终审问题清单。',
+    'risk.r7.title': '封账时最新终审裁决为 not_ready',
+    'risk.r7.detail': '最新已记录终审判定未就绪；封账不代表问题已解决或代码就绪。请复核终审问题清单与相关证据；无明确封账结果的旧记录不推断历史意图。',
     'risk.r8.title': '{{count}} 次运行的平台侧证据缺失',
     'risk.r8.detail': '可能已被平台清理或落在其他项目的会话目录。相关票页会标注证据不可用，时间线与 git 事实不受影响。',
     'risk.r8.titleCorrected': '{{count}} 次运行的平台侧证据缺失{{tag}}',
@@ -115,6 +115,10 @@ const M = {
     'ov.tracker': '票务',
     'ov.pr': '代码评审 PR',
     'ov.prNone': '无（本地分支）',
+    'close.legacy': '旧记录：封账结果未记录',
+    'close.completed': '正常完成（completed）',
+    'close.abandoned': '用户放弃（abandoned）',
+    'close.abandonedDetail': '不代表代码就绪或完整交付；未完成票保持未完成，历史问题与风险保留。',
     'ov.sealed': '已封账',
     'ov.unsealed': '未封账',
     'ov.stat.tickets': '票数',
@@ -169,7 +173,7 @@ const M = {
     'ev.escalate': '票 {{ticket}} <b class="bad-text">{{escalate}}</b>：{{note}}',
     'ev.escalateDefault': '移交维护者，原因未记录。',
     'ev.anomaly': '<b class="bad-text">{{anomaly}}</b>：{{note}}',
-    'ev.close': '<b>{{close}}</b>：运行终结。{{note}}',
+    'ev.close': '<b>{{close}}</b>：{{outcome}}。{{note}}',
     'ev.unknown': '<b>{{type}}</b>：<code>{{payload}}</code>',
 
     // ---------------------------------------------------------------- 时间线 / 成本 / 名词表
@@ -307,7 +311,7 @@ const M = {
     'brief.roleLine': '- {{role}}: {{runs}} 次运行, ${{cost}}, {{tokens}} tokens',
     'brief.anomalyLine': '- anomaly #{{seq}}: {{note}}',
     'brief.escalateLine': '- escalate #{{seq}} 票 {{ticket}}: {{note}}',
-    'brief.sealed': '- 封账: 是（{{note}}）',
+    'brief.sealed': '- 封账: {{outcome}}（{{note}}）',
     'brief.unsealed': '- 封账: 否 —— 运行未终结',
     'brief.prLine': '- PR: {{value}}',
     'brief.noPr': '无',
@@ -385,8 +389,8 @@ const M = {
     'risk.r4.defaultDetail': 'Handed to a human decision; no reason was recorded.',
     'risk.r6.title': 'Run not sealed',
     'risk.r6.detail': 'No close event in the stream: the run may have stopped midway or still be in progress — this report may not reflect the end state.',
-    'risk.r7.title': 'Sealed with the latest final verdict not_ready (sealed with a wound)',
-    'risk.r7.detail': 'The whole-branch final review judged it not ready, yet the run was sealed — most likely a legitimate abandoned exit, but the code ends with known issues; worth re-reading the final findings.',
+    'risk.r7.title': 'Sealed with the latest final verdict not_ready',
+    'risk.r7.detail': 'The latest recorded final review judged it not ready; sealing does not mean findings are resolved or the code is ready. Revisit the final findings and supporting evidence; do not infer historical intent when an old close record has no explicit outcome.',
     'risk.r8.title': 'Platform-side evidence missing for {{count}} {{count|run|runs}}',
     'risk.r8.detail': 'Probably cleaned up by the platform or living in another project\u2019s session directory. Affected ticket pages are marked as evidence-unavailable; the timeline and git facts are unaffected.',
     'risk.r8.titleCorrected': 'Platform-side evidence missing for {{count}} {{count|run|runs}}{{tag}}',
@@ -433,6 +437,10 @@ const M = {
     'ov.tracker': 'Ticket tracker',
     'ov.pr': 'Code review PR',
     'ov.prNone': 'none (local branch)',
+    'close.legacy': 'Legacy record: close outcome not recorded',
+    'close.completed': 'Completed (completed)',
+    'close.abandoned': 'User abandoned (abandoned)',
+    'close.abandonedDetail': 'This does not mean the code is ready or fully delivered; unfinished tickets remain unfinished, and historical findings and risks are retained.',
     'ov.sealed': 'sealed',
     'ov.unsealed': 'not sealed',
     'ov.stat.tickets': 'Tickets',
@@ -487,7 +495,7 @@ const M = {
     'ev.escalate': 'ticket {{ticket}} <b class="bad-text">{{escalate}}</b>: {{note}}',
     'ev.escalateDefault': 'handed to the maintainer; no reason was recorded.',
     'ev.anomaly': '<b class="bad-text">{{anomaly}}</b>: {{note}}',
-    'ev.close': '<b>{{close}}</b>: run ended. {{note}}',
+    'ev.close': '<b>{{close}}</b>: {{outcome}}. {{note}}',
     'ev.unknown': '<b>{{type}}</b>: <code>{{payload}}</code>',
 
     // ---------------------------------------------------------------- timeline / cost / glossary
@@ -626,7 +634,7 @@ Notes:
     'brief.roleLine': '- {{role}}: {{runs}} {{runs|run|runs}}, ${{cost}}, {{tokens}} tokens',
     'brief.anomalyLine': '- anomaly #{{seq}}: {{note}}',
     'brief.escalateLine': '- escalate #{{seq}} ticket {{ticket}}: {{note}}',
-    'brief.sealed': '- Sealed: yes ({{note}})',
+    'brief.sealed': '- Sealed: {{outcome}} ({{note}})',
     'brief.unsealed': '- Sealed: no \u2014 the run never ended',
     'brief.prLine': '- PR: {{value}}',
     'brief.noPr': 'none',
@@ -691,4 +699,12 @@ function hasKey(lang, key) {
   return Object.prototype.hasOwnProperty.call(M[l], key) || Object.prototype.hasOwnProperty.call(M[DEFAULT_LANG], key);
 }
 
-module.exports = { DEFAULT_LANG, M, normLang, makeT, roleLabel, hasKey };
+// HTML 与离线分析简报共用封账结果词表。
+function closeOutcomeLabel(lang, outcome) {
+  const T = makeT(lang);
+  // 新写入的 completed 默认只属于写点；读旧 close 时不补造历史意图。
+  if (outcome == null) return T('close.legacy');
+  return outcome === 'completed' || outcome === 'abandoned' ? T(`close.${outcome}`) : String(outcome);
+}
+
+module.exports = { DEFAULT_LANG, M, normLang, makeT, roleLabel, hasKey, closeOutcomeLabel };
