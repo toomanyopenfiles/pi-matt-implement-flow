@@ -14,12 +14,12 @@ const TERMS = [
     en: 'An append-only JSONL machine-fact file: one structured event per line, stamped by script with authoritative timestamps, monotonic sequence numbers and git anchors. It is the orchestrator’s only state-writing surface, and the main data source for this report’s timeline and state machine.',
   } },
   { id: 'notes', zh: '编排笔记', en: 'orchestration notes', def: {
-    zh: '散文记忆：过程叙事、教训、维护者口头拍板等非结构化内容。「何时何事」归事件流，「为何学到什么」归编排笔记。',
-    en: 'Prose memory: process narrative, lessons learned, verbal maintainer decisions — the unstructured stuff. “When and what” belongs to the event stream; “why and what we learned” belongs to the orchestration notes.',
+    zh: '散文记忆：过程叙事、教训、待决策问题、用户决定、暂停阶段与恢复说明，并引用处置证据。笔记不替代事件、git 或正式裁决；报告不解析散文生成已授权、已恢复、已解决或已批准的结论。',
+    en: 'Prose memory for narrative, lessons, pending decisions, user decisions, pause stages and continuation context, with evidence references. Notes do not replace events, git or formal verdicts; the report does not interpret prose as authorization, resumption, resolution or approval.',
   } },
   { id: 'record', zh: '记账', en: 'record', def: {
-    zh: '编排器通过脚本向事件流写入一条事件的动作。每个状态转换（派发、结算、裁决、修复、合并、升级、封账）都要记账。',
-    en: 'The act of writing one event into the event stream via script. Every state transition (dispatch, settle, verdict, fix, merge, escalate, seal) is recorded.',
+    zh: '编排器通过脚本向事件流写入协议内结构化事实（派发、结算、裁决、修复、合并、升级、封账）的动作。人工暂停、用户决定和恢复上下文归编排笔记，不新增事件。',
+    en: 'Writing protocol facts (dispatch, settle, verdict, fix, merge, escalate, seal) into the event stream via script. Human pauses, user decisions and continuation context belong in orchestration notes, not new events.',
   } },
   { id: 'close', zh: '封账', en: 'seal', def: {
     zh: '记账 close 事件：台账头部标记运行终结。completed 表示正常完成。显式 abandoned 表示用户放弃，不代表代码就绪或完整交付，不完成未完成票，也不解决历史问题。旧 close 缺少 outcome 时只表示封账结果未记录，不推断正常完成或放弃。封账后记账命令拒绝一切新事件。',
@@ -60,8 +60,8 @@ const TERMS = [
     en: 'An attempt to fix a problem, usually by sending findings back to the same coder (resuming the original session). The number records attempt order, with no attempt quota; one review may be followed by multiple fixes, and a later formal review need not have a new fix.',
   } },
   { id: 'escalate', zh: '升级', en: 'escalate', def: {
-    zh: '票移交维护者裁决的记录。原因以事件原文为准，不根据修复次数或旧预算推断。',
-    en: 'A record of handing a ticket to the maintainer for a decision. The reason comes from the recorded event, not from fix counts or an old budget.',
+    zh: '票移交用户决策的交接历史，既不是票完成，也不满足依赖或正常封账条件，不表示永久暂停。后续合并显示完成并保留升级历史；未合并时须结合事实、编排笔记与证据核对当前行动。原因以事件原文为准，不根据修复次数或旧预算推断。',
+    en: 'The history of handing a ticket to the user for a decision: not ticket completion, dependency satisfaction, eligibility for normal sealing or a permanent pause. A later merge shows completion while keeping escalation history; without a merge, check current actions against facts, orchestration notes and evidence. Reasons come from the event, not fix counts or old budgets.',
   } },
   { id: 'integration-gate', zh: '集成测试门', en: 'integration gate', def: {
     zh: '每票合并到功能分支后立即运行全量测试套件。票级评审看不到的跨票集成问题在此暴露，红了就派无隔离修复者当场修。',
@@ -72,8 +72,8 @@ const TERMS = [
     en: 'After all tickets merge, one whole-branch two-axis review of the entire feature branch, concluding: ready / ready_with_fixes / not_ready.',
   } },
   { id: 'anomaly', zh: '异常记录', en: 'anomaly', def: {
-    zh: '编排器与校验器意见不合时的正式出路：不伪造事实、不绕过校验，把分歧原样记入事件流并停下上报。异常记录是审计的重点关注对象。',
-    en: 'The formal escape hatch when the orchestrator and the validator disagree: no faked facts, no bypassing checks — the disagreement is recorded verbatim into the event stream and escalated. Anomalies are a primary focus of the audit.',
+    zh: '协议中的不可变异常历史，可引用旧事件。处置办法与证据指针归编排笔记；历史本身不证明当前仍未解决，也不自动禁止收尾。报告保留有依据的补正或恢复标注与风险证据，无法机械核验时提示阅读笔记和证据，不从散文断言已解决；不伪造事实或绕过校验。',
+    en: 'Immutable anomaly history in the protocol, optionally referencing an earlier event. Disposition and evidence pointers belong in orchestration notes; history alone neither establishes a current unresolved issue nor automatically blocks closeout. The report keeps supported correction or recovery annotations and risk evidence, and asks readers to inspect notes and evidence when disposition cannot be checked mechanically, without treating prose as resolution or bypassing validation.',
   } },
 
   // —— 平台词 ——

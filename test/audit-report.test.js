@@ -1147,3 +1147,136 @@ test('collect + render + report CLI：旧 close 缺 outcome 不猜历史意图�
     fx.cleanup();
   }
 });
+
+// #15 approved seams: runtime fixtures -> public collect/renderAll and report CLI.
+test('collect + render：升级后合并显示完成，原升级原因与合并依据保留', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events.splice(6, 0, { v: 3, type: 'escalate', payload: { ticket: '01', note: 'HUMAN_DECISION_NEEDED: clarify requirement' } });
+    events.forEach((e, i) => { e.seq = i + 1; });
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      assert.equal(model.run.escalates[0].note, 'HUMAN_DECISION_NEEDED: clarify requirement');
+      assert.equal(model.tickets[0].merges[0].seq, 8);
+      const risk = model.risks.find((r) => /升级|escalated/.test(r.title));
+      assert.equal(risk.severity, 'medium', '历史风险不删除或变更等级');
+      assert.match(risk.detail, /HUMAN_DECISION_NEEDED/);
+      assert.match(risk.detail, lang === 'zh' ? /后续已合并/ : /later merged/);
+      assert.ok(risk.evidence.some((e) => e.ref === 'seq 7'), '升级事件证据保留');
+      assert.ok(risk.evidence.some((e) => e.ref === 'seq 8'), '完成依据指向后续 merge 事件');
+      const out = path.join(fx.dir, `escalated-merged-${lang}`);
+      renderAll(model, out, null);
+      const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+      const row = index.match(/<tr>\s*<td><a href="ticket-01.html">[\s\S]*?<\/tr>/)[0];
+      assert.match(row, lang === 'zh' ? /pill ok">已合并/ : /pill ok">merged/);
+      for (const name of ['index.html', 'ticket-01.html', 'final.html']) {
+        assert.match(fs.readFileSync(path.join(out, name), 'utf8'), /HUMAN_DECISION_NEEDED/, '每个相关页面均保留原升级原因');
+      }
+      assert.match(fs.readFileSync(path.join(out, 'ticket-01.html'), 'utf8'), /5 pass 0 fail/, '实际验证证据不删除');
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original, '只读审计不覆写升级或合并历史');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：已升级未合并不由 notes 推断恢复或批准，缺证据继续可见', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse).slice(0, 5);
+    events.push({ v: 3, seq: 6, ts: '2026-09-18T18:45:00.000Z', type: 'escalate', payload: { ticket: '01', note: 'AWAIT_REQUIREMENT_DECISION' } });
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    const notes = '# notes\nUSER_AUTHORIZED_RESUME: issue withdrawn; everything resolved and approved.\nEvidence: findings/01-r1.md\n';
+    fs.writeFileSync(path.join(fx.runtimeDir, 'notes.md'), notes);
+    fs.rmSync(path.join(fx.ad, '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa_pi-matt-implement-flow.coder_meta.json'));
+    fs.rmSync(path.join(fx.ad, '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa_pi-matt-implement-flow.coder_output.md'));
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      assert.equal(model.tickets[0].merges.length, 0);
+      assert.equal(model.tickets[0].verdicts.at(-1).verdict, 'changes_requested', '单问题撤回 prose 不成为完整批准');
+      assert.equal(model.run.sealed, false);
+      assert.equal(model.notes, notes, 'notes 原文保留供读者核对，不解释为状态');
+      const escalation = model.risks.find((r) => /升级|escalated/.test(r.title));
+      assert.equal(escalation.severity, 'medium');
+      assert.match(escalation.detail, /AWAIT_REQUIREMENT_DECISION/);
+      assert.match(escalation.detail, lang === 'zh' ? /尚无后续合并记录.*阅读编排笔记与证据/ : /No later merge recorded.*read orchestration notes and evidence/);
+      assert.doesNotMatch(escalation.title, /已恢复|已批准|has resumed|is approved|永久|permanently/);
+      assert.deepEqual(escalation.evidence.map((e) => e.ref), ['seq 6'], '无后续 merge 时不伪造恢复证据');
+      assert.ok(model.risks.some((r) => r.severity === 'low' && /证据缺失|evidence missing/.test(r.title)), '证据缺失仍显式降级');
+      assert.ok(model.warnings.some((w) => w.code === 'run-evidence-missing'));
+      const out = path.join(fx.dir, `escalated-unmerged-${lang}`);
+      renderAll(model, out, null);
+      const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+      const row = index.match(/<tr>\s*<td><a href="ticket-01.html">[\s\S]*?<\/tr>/)[0];
+      assert.match(row, lang === 'zh' ? /未合并（有升级历史）/ : /not merged \(escalation history\)/);
+      assert.doesNotMatch(row, /pill ok">(?:已合并|merged)/);
+      assert.match(fs.readFileSync(path.join(out, 'ticket-01.html'), 'utf8'), /证据缺失|Evidence missing/i);
+      assert.match(fs.readFileSync(path.join(out, 'final.html'), 'utf8'), /USER_AUTHORIZED_RESUME/, '原 notes 可读但不当机械结论');
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render + report CLI：anomaly 是历史而非当前故障，notes 处置须读证据不机械宣称解决', () => {
+  const fx = makeFixture();
+  try {
+    const { execFileSync } = require('child_process');
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events[8].payload = { note: 'SYNC_FAILED_HISTORY', refSeq: '8' };
+    events.push(
+      { v: 3, seq: 10, ts: '2026-09-18T19:20:00.000Z', type: 'fix', payload: { ticket: '02', fixNo: 1, key: 'fix-02-1', resumeRunId: '33333333-cccc-4ccc-8ccc-cccccccccccc', note: 'ANOMALY_REPAIR_ATTEMPT' } },
+      { v: 3, seq: 11, ts: '2026-09-18T19:30:00.000Z', type: 'settled', payload: { ticket: '02', round: 1, headSha: 'dd3333', gate: 'REPAIR_VALIDATION_PASSED' } },
+    );
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    const notesFile = path.join(fx.runtimeDir, 'notes.md');
+    const notes = '# notes\nDISPOSITION_NOTE: Sync retry succeeded; anomaly resolved.\nEvidence: sync-retry.log (not mechanically checked).\n';
+    for (const lang of ['zh', 'en']) {
+      fs.writeFileSync(notesFile, '');
+      const withoutNotes = collect({ runtimeDir: fx.runtimeDir, lang });
+      const beforeRisk = withoutNotes.risks.find((r) => /异常|anomaly/.test(r.title));
+      fs.writeFileSync(notesFile, notes);
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      const risk = model.risks.find((r) => /异常|anomaly/.test(r.title));
+      assert.deepEqual(risk, beforeRisk, 'notes 不改变机械风险、等级和补正状态');
+      assert.equal(model.run.anomalies[0].refSeq, 8, '旧 string refSeq 仍可读');
+      assert.equal(risk.severity, 'high', '无机械补正依据，不凭 notes 降级或删除历史风险');
+      assert.match(risk.detail, /SYNC_FAILED_HISTORY/);
+      assert.match(risk.detail, lang === 'zh' ? /历史记录不等于当前未解决.*阅读编排笔记与证据/ : /History does not establish a current unresolved issue.*read orchestration notes and evidence/);
+      assert.doesNotMatch(risk.title, /已解决|resolved|已补正|corrected/i);
+      assert.ok(risk.evidence.some((e) => e.ref === 'seq 9'));
+      assert.ok(risk.evidence.some((e) => e.ref === 'seq 8'), '原 refSeq 证据指针可见');
+      assert.ok(model.risks.some((r) => r.severity === 'low' && /证据缺失|evidence missing/.test(r.title)));
+      const out = path.join(fx.dir, `anomaly-history-${lang}`);
+      renderAll(model, out, null);
+      for (const name of ['index.html', 'final.html']) {
+        const page = fs.readFileSync(path.join(out, name), 'utf8');
+        assert.match(page, /SYNC_FAILED_HISTORY/);
+        assert.match(page, /refSeq[^<]*8/, '页面仍显示原异常引用');
+        assert.match(page, lang === 'zh' ? /历史记录不等于当前未解决/ : /History does not establish a current unresolved issue/);
+      }
+      const ticket = fs.readFileSync(path.join(out, 'ticket-02.html'), 'utf8');
+      assert.match(ticket, /ANOMALY_REPAIR_ATTEMPT/);
+      assert.match(ticket, /REPAIR_VALIDATION_PASSED/);
+      assert.match(fs.readFileSync(path.join(out, 'final.html'), 'utf8'), /DISPOSITION_NOTE/);
+      execFileSync(process.execPath, [path.resolve(__dirname, '../audit-report/report.js'), '--runtime-dir', fx.runtimeDir, '--lang', lang, '--out', out, '--ai-brief'], { encoding: 'utf8' });
+      const brief = fs.readFileSync(path.join(out, 'analysis-brief.md'), 'utf8');
+      assert.match(brief, /anomaly #9.*refSeq.*8.*SYNC_FAILED_HISTORY/);
+      assert.match(brief, /DISPOSITION_NOTE/);
+      assert.match(brief, /sync-retry.log/);
+      assert.match(brief, lang === 'zh' ? /历史记录不等于当前未解决/ : /History does not establish a current unresolved issue/);
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original, '异常、修复与其他历史均不被改写');
+  } finally {
+    fx.cleanup();
+  }
+});
