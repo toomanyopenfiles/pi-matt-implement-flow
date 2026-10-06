@@ -22,8 +22,8 @@ const MARK = (kind) => `<!-- matt-implement:${RUN}:${kind} -->`;
 
 // --- glab 有状态桩：状态存 GLAB_STUB_STATE 指向的 JSON 文件，调用追加进 GLAB_STUB_LOG ---
 // 有状态：note/close/update 真实改写桩状态（幂等矩阵在外部行为面端到端验证）；
-// GLAB_STUB_FAIL：所有调用模拟失败；GLAB_STUB_FAIL_WRITE=<iid>：该号的写入动作模拟失败
-//（部分同步状态的注入点；每个 glab 调用是独立进程，同号多次写入各自拦一次——拦截时序见用例）。
+// GLAB_STUB_FAIL：所有调用模拟失败；GLAB_STUB_FAIL_WRITE=<iid>：该号的写入动作模拟失败。
+// <iid>:<command> 只拦指定写命令（note/close/update）；匹配的调用每次都失败，重试移除旗标。
 // close 携带 --message / --comment 时桩真实报错：closeWithComment=false 的能力差异由桩硬编码。
 const GLAB_STUB = `#!/usr/bin/env node
 'use strict';
@@ -50,8 +50,7 @@ const save = (s) => fs.writeFileSync(stateFile, JSON.stringify(s));
 const writeFail = () => {
   const f = process.env.GLAB_STUB_FAIL_WRITE;
   if (!f) return false;
-  delete process.env.GLAB_STUB_FAIL_WRITE; // 只拦一次
-  return num === f;
+  return num === f || num + ':' + kind === f;
 };
 if (kind === 'view') {
   const it = state().issues[num];
@@ -439,6 +438,126 @@ test('sync 部分同步续作（gitlab）：合并票被抢跑 close、评论未
 // ====================================================================
 // abandon（GitLab 形态）：留评说明 + 撤占坑（update --unassign）
 // ====================================================================
+
+// #16：真实 init + 外部 PATH 桩故障；不模拟编排器的封账/ready/停止 child 决定。
+function seedAbandonFixture(f) {
+  seedSealFixture(f);
+  const state = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
+  state.issues['7042'].assignees = ['alice', 'bob'];
+  fs.writeFileSync(f.stateFile, JSON.stringify(state));
+  const git = (...args) => {
+    const r = spawnSync('git', args, { cwd: f.dir, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return r.stdout.trim();
+  };
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 't@example.com');
+  git('config', 'user.name', 'T');
+  fs.writeFileSync(path.join(f.dir, 'README.md'), 'fixture\n');
+  git('add', 'README.md');
+  git('commit', '-qm', 'baseline');
+  const baseline = git('rev-parse', 'HEAD');
+  git('checkout', '-q', '-b', 'feat/demo');
+  const r = runLedger(f, 'init', ['--branch', 'feat/demo', '--branch-base', 'main',
+    '--baseline-sha', baseline, '--spec', path.join(f.tracker, 'spec.md'), '--test-command', 'npm test']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户明确放弃；未完成票保留，代码与验证证据已保存。\n');
+}
+
+function runEvidence(f) {
+  return Object.fromEntries([
+    'events.jsonl', 'ledger.md', 'notes.md', 'tracker/spec.md',
+    ...lsIssues(f).map((name) => `tracker/issues/${name}`),
+  ].map((name) => [name, fs.readFileSync(path.join(f.runtime, name), 'utf8')]));
+}
+
+function assertOpenEvidence(f, before) {
+  assert.deepEqual(runEvidence(f), before, 'sync 不修改事件、台账、笔记或快照（失败与成功都可核查）');
+  assert.match(before['ledger.md'], /state: running/);
+  const events = before['events.jsonl'].trim().split('\n').map((line) => JSON.parse(line));
+  assert.ok(!events.some((e) => e.type === 'close' || (e.type === 'pr' && e.payload.state === 'ready')),
+    '放弃同步不封账、不标 ready');
+}
+
+const ABANDON_ARGS = ['--mode', 'abandon', '--claimant', 'alice', '--reason', '用户明确放弃，保留未完成项'];
+
+function assertAbandonTicketsUntouched(f) {
+  for (const num of [7043, 7045, 7046]) {
+    assert.deepEqual(stateOf(f, num), { state: 'open', assignees: [], comments: [] },
+      `abandon 不同步票 ${num}，包括未完成票与远程延迟的已合并票`);
+  }
+  assert.doesNotMatch(rawLog(f), /issue (view|close|note|update) (7043|7045|7046)\b/);
+  assert.doesNotMatch(rawLog(f), /issue close |\bmr\b/);
+}
+
+test('sync abandon（gitlab）：说明失败保持开放与占坑；重试补 note 和撤占坑，不执行 seal/ready', (t) => {
+  const f = makeFixture(t);
+  seedAbandonFixture(f);
+  const before = runEvidence(f);
+  const failed = runLedger(f, 'sync', ABANDON_ARGS, { ...withGlab(f), GLAB_STUB_FAIL_WRITE: '7042:note' });
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+  assert.match(failed.stdout, /同步失败：comment 7042/);
+  assert.match(failed.stdout, /已完成（0\/2）/);
+  assert.doesNotMatch(failed.stdout, /清理指引/);
+  assert.deepEqual(stateOf(f, 7042), { state: 'open', assignees: ['alice', 'bob'], comments: [] });
+  assert.doesNotMatch(rawLog(f), /--unassign/, '说明失败不提前撤占坑');
+  assertOpenEvidence(f, before);
+  assertAbandonTicketsUntouched(f);
+
+  const offset = rawLog(f).length;
+  const retried = runLedger(f, 'sync', ABANDON_ARGS, withGlab(f));
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.match(retried.stdout, /同步完成：2 个动作/);
+  assert.doesNotMatch(retried.stdout, /PR 标 ready/);
+  assert.deepEqual(stateOf(f, 7042), {
+    state: 'open', assignees: ['bob'],
+    comments: [`This run has been abandoned: 用户明确放弃，保留未完成项\n\n${MARK('abandon')}`],
+  });
+  const retryLog = rawLog(f).slice(offset);
+  assert.equal((retryLog.match(/issue note 7042 /g) ?? []).length, 1);
+  assert.equal((retryLog.match(/issue update 7042 --unassign alice/g) ?? []).length, 1);
+  assertOpenEvidence(f, before);
+  assertAbandonTicketsUntouched(f);
+});
+
+test('sync abandon（gitlab）：撤占坑失败保留 note 与开放状态；重试只 unassign，之后零动作', (t) => {
+  const f = makeFixture(t);
+  seedAbandonFixture(f);
+  const before = runEvidence(f);
+  const failed = runLedger(f, 'sync', ABANDON_ARGS, { ...withGlab(f), GLAB_STUB_FAIL_WRITE: '7042:update' });
+  assert.equal(failed.status, 1, failed.stdout + failed.stderr);
+  assert.match(failed.stdout, /同步失败：unassign 7042/);
+  assert.match(failed.stdout, /已完成（1\/2）/);
+  assert.doesNotMatch(failed.stdout, /清理指引/);
+  assert.deepEqual(stateOf(f, 7042), {
+    state: 'open', assignees: ['alice', 'bob'],
+    comments: [`This run has been abandoned: 用户明确放弃，保留未完成项\n\n${MARK('abandon')}`],
+  });
+  assertOpenEvidence(f, before);
+  assertAbandonTicketsUntouched(f);
+
+  const state = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
+  state.issues['7042'].comments = [`用户已终结此 run；未完成范围仍开放。\n\n${MARK('abandon')}`];
+  fs.writeFileSync(f.stateFile, JSON.stringify(state));
+  const offset = rawLog(f).length;
+  const retried = runLedger(f, 'sync', ABANDON_ARGS, withGlab(f));
+  assert.equal(retried.status, 0, retried.stdout + retried.stderr);
+  assert.match(retried.stdout, /同步完成：1 个动作/);
+  assert.doesNotMatch(retried.stdout, /PR 标 ready/);
+  const retryLog = rawLog(f).slice(offset);
+  assert.doesNotMatch(retryLog, /issue (note|close) /);
+  assert.equal((retryLog.match(/issue update 7042 --unassign alice/g) ?? []).length, 1);
+  assert.deepEqual(stateOf(f, 7042), { ...state.issues['7042'], assignees: ['bob'] });
+  assertOpenEvidence(f, before);
+  assertAbandonTicketsUntouched(f);
+
+  const afterRetry = rawLog(f).length;
+  const again = runLedger(f, 'sync', ABANDON_ARGS, withGlab(f));
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.match(again.stdout, /已同步：无待推送动作/);
+  assert.doesNotMatch(rawLog(f).slice(afterRetry), /issue (close|note|update) /);
+  assertOpenEvidence(f, before);
+});
 
 test('sync abandon（gitlab）：note 先行留评、撤占坑走 update --unassign；重跑零动作', (t) => {
   const f = makeFixture(t);
