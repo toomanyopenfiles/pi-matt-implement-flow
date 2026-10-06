@@ -39,7 +39,7 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
 
 用法:
   node ledger.js init --runtime-dir <dir> --branch <branch> --branch-base <base> --baseline-sha <sha>
-               --spec <spec 文件路径> --test-command <cmd> [--reviewer on|off] [--max-fix-rounds N]
+               --spec <spec 文件路径> --test-command <cmd> [--reviewer on|off]
                [--max-concurrent N] [--tickets 01,02,1042]
   node ledger.js add <type> --runtime-dir <dir> [--flag value ...]
   node ledger.js build --runtime-dir <dir>
@@ -51,9 +51,9 @@ init（run 初始化，票 04——契约驱动）:
   # 选中契约预设；识别结果（tracker 字段）照旧入账，事件格式零迁移。
   # 缺 setup 产物 → 指引运行 /setup-matt-pocock-skills；范本认不出 → 贴出「仅支持
   # local / github / gitlab 三种」并列出支持面——两者都是显式停下，不猜测不降级。
-  # --tracker 旗标已废除（配置单源是 setup 产物，不再重复声明）。票集边界 --tickets、
-  # 流程形态快照 --reviewer/--max-fix-rounds/--max-concurrent 与既往 init 同参同对：
-  # 流程形态冻结后校验按其执行；票集边界冻结后，边界外的票号记账被拒。
+  # --tracker 旗标已废除（配置单源是 setup 产物，不再重复声明）。
+  # 流程形态快照 --reviewer/--max-concurrent 与票集边界 --tickets 冻结后按其校验。
+  # --max-fix-rounds 已退役：修复次数不再限制未封账 run；历史预算仅保留为无效记录。
 
 事件类型与参数集 (add):
   dispatch    --ticket --key --run-id [--worktree] [--note]
@@ -361,11 +361,11 @@ function atomicWrite(filePath, content) {
 
 // init 子命令（票 04）：契约驱动的 run 初始化——Round 0 的首条（也是唯一一条）init。
 // 与 add 的唯一区分：tracker 不是旗标而是识别结果——setup 产物判型选契约预设；
-// 事件里 tracker 字段照旧（零迁移），载荷参数集与既往 init 事件完全一致。
+// 事件里 tracker 字段照旧（零迁移）；新 init 不再接受已退役的修复预算旗标。
 // 识别先于一切写入（零半成品）：缺 setup 产物 → 指引运行 /setup-matt-pocock-skills；
 // 范本认不出 → 「仅支持三种」，都停下不猜测不降级；词表违约指到文件+行+列+期望。
 const INIT_REQUIRED = ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand'];
-const INIT_OPTIONAL = ['reviewer', 'maxFixRounds', 'maxConcurrent', 'tickets'];
+const INIT_OPTIONAL = ['reviewer', 'maxConcurrent', 'tickets'];
 
 
 // setup 产物 → tracker（契约驱动）：判型输入是 repo 内的两份上游文档。
@@ -436,6 +436,10 @@ function cmdInit({ runtimeDir, rest }) {
       } else {
         errors.push(`未知旗标 --${flag}（init 的参数集见 --help）；本脚本无任何绕过校验的旗标`);
       }
+      continue;
+    }
+    if (key === 'maxFixRounds') {
+      errors.push('--max-fix-rounds 已退役：修复次数不再限制未封账 run；移除此旗标后重试（历史预算记录仍可读取）');
       continue;
     }
     if (!INIT_REQUIRED.includes(key) && !INIT_OPTIONAL.includes(key)) {
