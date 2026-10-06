@@ -550,22 +550,22 @@ test('init 前置核验：spec 文件不存在被拒（未经验证的结论不�
   assert.ok(!fs.existsSync(f.eventsPath));
 });
 
-test('fix 预算：第 2 次 fix 仍准入（边界），第 3 次被拒并提示应升级上报', (t) => {
+test('fix 尝试无默认配额：第 3、4 次修复仍可在同一 run 入账', (t) => {
   const f = makeFixture(t);
   seedFixes(f, 2);
-  const third = addAll(f, 'fix', {
-    ticket: '01',
-    'fix-no': '3',
-    key: 'fix-01-r4',
-    'resume-run-id': 'aaaaaaaa',
-  });
-  assert.equal(third.status, 1, '第 3 次 fix 必须在写点被机械拒绝');
-  assert.match(third.stdout, /预算已耗尽/);
-  assert.match(third.stdout, /escalate/);
-  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 2, '被拒的 fix 不得入账');
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const n of [3, 4]) {
+    const r = addAll(f, 'fix', {
+      ticket: '01', 'fix-no': String(n), key: `fix-01-${n}`, 'resume-run-id': 'aaaaaaaa',
+    });
+    assert.equal(r.status, 0, r.stdout);
+    assert.doesNotMatch(r.stdout, /预算已耗尽|应升级/);
+  }
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 4);
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(before), '既有事件行保持原字节');
 });
 
-test('结算被拒（坏 SHA）不返还预算：计数于派发时刻', (t) => {
+test('结算被拒（坏 SHA）不归零 fixNo，下一次尝试仍按顺序入账', (t) => {
   const f = makeFixture(t);
   seedFixes(f, 2);
   const badSettle = addAll(f, 'settled', {
@@ -575,16 +575,23 @@ test('结算被拒（坏 SHA）不返还预算：计数于派发时刻', (t) => 
   });
   assert.equal(badSettle.status, 1, 'headSha 不存在是确定矛盾');
   assert.match(badSettle.stdout, /不存在/);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const fixNo of ['1', '2', '4']) {
+    const invalid = addAll(f, 'fix', {
+      ticket: '01', 'fix-no': fixNo, key: 'fix-01', 'resume-run-id': 'aaaaaaaa',
+    });
+    assert.equal(invalid.status, 1, invalid.stdout);
+    assert.match(invalid.stdout, /期望 3/);
+  }
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before, '坏结算和非法修复序号不改历史');
   const third = addAll(f, 'fix', {
-    ticket: '01',
-    'fix-no': '3',
-    key: 'fix-01-r4',
-    'resume-run-id': 'aaaaaaaa',
+    ticket: '01', 'fix-no': '3', key: 'fix-01-r4', 'resume-run-id': 'aaaaaaaa',
   });
-  assert.equal(third.status, 1, '结算被拒也不改变已消耗的修复预算');
+  assert.equal(third.status, 0, third.stdout);
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 3);
 });
 
-test('同票同轮 verdict 去重；轮号恒等式（round = fix 数 + 1）交叉核对', (t) => {
+test('无新增 fix 可正式重评，同票同轮 verdict 仍去重', (t) => {
   const f = makeFixture(t);
   initRun(f);
   addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
@@ -594,12 +601,34 @@ test('同票同轮 verdict 去重；轮号恒等式（round = fix 数 + 1）交�
   const dup = addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' });
   assert.equal(dup.status, 1);
   assert.match(dup.stdout, /去重/);
-  const skip = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved' });
-  assert.equal(skip.status, 1, '没有任何 fix 事件时 verdict 轮号只能是 1');
-  assert.match(skip.stdout, /恒等式/);
-  const again = addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' });
+  const second = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved' });
+  assert.equal(second.status, 0, second.stdout);
+  const again = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'changes_requested' });
   assert.equal(again.status, 1);
-  assert.equal(readEvents(f).filter((e) => e.type === 'verdict').length, 1);
+  assert.match(again.stdout, /去重/);
+  assert.equal(readEvents(f).filter((e) => e.type === 'verdict').length, 2);
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 0);
+});
+
+test('一次评审后多次修复再重评，settled 不以 fix 数推导轮次', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  assert.equal(addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' }).status, 0);
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'changes_requested' }).status, 0);
+  for (const n of [1, 2]) {
+    const fix = addAll(f, 'fix', {
+      ticket: '01', 'fix-no': String(n), key: `fix-01-${n}`, 'resume-run-id': 'aaaaaaaa',
+    });
+    assert.equal(fix.status, 0, fix.stdout);
+  }
+  const sha = step(f, 'candidate after two fixes');
+  const settled = addAll(f, 'settled', { ticket: '01', round: '2', 'head-sha': sha });
+  assert.equal(settled.status, 0, settled.stdout);
+  assert.doesNotMatch(settled.stdout, /fix 事件数|非常规轮次/);
+  assert.equal(readEvents(f).at(-1).warn, undefined);
+  const review = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved' });
+  assert.equal(review.status, 0, review.stdout);
+  assert.match(readLedger(f), /verdict ticket=01 round=2 verdict=approved/);
 });
 
 test('merge 门：无 verdict / 最近 verdict 非 approved 被拒', (t) => {
@@ -615,6 +644,108 @@ test('merge 门：无 verdict / 最近 verdict 非 approved 被拒', (t) => {
   const cr = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
   assert.equal(cr.status, 1);
   assert.match(cr.stdout, /changes_requested/);
+});
+
+test('#11 恢复：旧预算两次修复与升级后无需第三次 fix，可取得新的正式批准并合并', (t) => {
+  const f = makeFixture(t);
+  seedFixes(f, 2);
+  // 旧未封账 run fixture：预算与既有裁决/修复原样导入，不迁移历史。
+  const legacy = fs.readFileSync(f.eventsPath, 'utf8').split('\n');
+  const init = JSON.parse(legacy[0]);
+  init.payload.maxFixRounds = '2';
+  legacy[0] = JSON.stringify(init);
+  fs.writeFileSync(f.eventsPath, legacy.join('\n'));
+  const blocked = addAll(f, 'verdict', { ticket: '01', round: '3', verdict: 'changes_requested' });
+  assert.equal(blocked.status, 0, blocked.stdout);
+  assert.equal(addAll(f, 'escalate', { ticket: '01', note: '阻塞问题需要用户澄清' }).status, 0);
+  const history = fs.readFileSync(f.eventsPath, 'utf8');
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户澄清；单个问题撤回，等待新的完整正式评审。\n');
+  const { head, merge } = mergeTicket(f, '01');
+  const premature = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(premature.status, 1, premature.stdout);
+  assert.match(premature.stdout, /最近 verdict=approved.*changes_requested/);
+  assert.equal(addAll(f, 'settled', { ticket: '01', round: '4', 'head-sha': head, gate: 'validated candidate' }).status, 0);
+  const approved = addAll(f, 'verdict', {
+    ticket: '01', round: '4', verdict: 'approved', findings: 'findings/01-r4.md', 'rev-run-id': 'bbbbbbbb',
+  });
+  assert.equal(approved.status, 0, approved.stdout);
+  const merged = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(merged.status, 0, merged.stdout);
+  writeTicketFile(f.dir, '01', '自检基线', { status: 'resolved' });
+  f.git('branch -D ticket-01');
+  assert.equal(ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir }).status, 0);
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 2, '不伪造第三次代码修复');
+  assert.equal(readEvents(f).filter((e) => e.type === 'merge').length, 1);
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(history));
+  assert.match(readLedger(f), /escalate ticket=01 note="阻塞问题需要用户澄清"/);
+  assert.match(readLedger(f), /verdict ticket=01 round=4 verdict=approved/);
+  // merge 后的当前 status 优先级属 #15，此处只检验正式裁决、合并及历史留存。
+});
+
+test('最新正式裁决才是批准门：旧 approved、notes 与 anomaly 不覆盖后续阻塞裁决', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const { head, merge } = mergeTicket(f, '01');
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' }).status, 0);
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'changes_requested' }).status, 0);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户说继续，不代表正式批准。\n');
+  assert.equal(addAll(f, 'anomaly', { note: '此前对账差异的处置证据见 notes；这不是完整 approved' }).status, 0);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  const denied = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(denied.status, 1);
+  assert.match(denied.stdout, /最近 verdict=approved.*changes_requested/);
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+});
+
+test('独立轮次与修复序号仍拒绝非法正数、非法字段，拒绝时历史不变', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const n of ['0', '-1', '1.5', 'abc']) {
+    for (const type of ['settled', 'verdict', 'fix']) {
+      const flags = type === 'fix'
+        ? { ticket: '01', 'fix-no': n, key: 'fix-01', 'resume-run-id': 'aaaaaaaa' }
+        : type === 'verdict'
+          ? { ticket: '01', round: n, verdict: 'approved' }
+          : { ticket: '01', round: n, 'head-sha': f.baseline() };
+      const denied = addAll(f, type, flags);
+      assert.equal(denied.status, 1, `${type} ${n}: ${denied.stdout}`);
+      assert.match(denied.stdout, /正整数/);
+    }
+  }
+  const extra = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved', 'fix-no': '1' });
+  assert.equal(extra.status, 1);
+  assert.match(extra.stdout, /不属于事件 verdict/);
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+});
+
+test('旧封账 run 的预算与 close 原样可读，所有后续写入仍拒绝', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  // 导入没有 outcome 的旧 close（不追溯执行新写入门），保持已有历史字节。
+  const init = readEvents(f)[0];
+  init.payload.maxFixRounds = '2';
+  const close = { v: 3, seq: 2, ts: init.ts, head: init.head, type: 'close', payload: { note: '旧封账' } };
+  fs.writeFileSync(f.eventsPath, JSON.stringify(init) + '\n' + JSON.stringify(close) + '\n');
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(build.status, 0, build.stdout);
+  assert.match(build.stdout, /state: complete/);
+  assert.match(build.stdout, /historicalMaxFixRounds: 2（历史记录，不再生效）/);
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(check.status, 0, check.stdout);
+  const attempts = [
+    ['fix', { ticket: '01', 'fix-no': '1', key: 'fix-01', 'resume-run-id': 'aaaaaaaa' }],
+    ['verdict', { ticket: '01', round: '2', verdict: 'approved' }],
+    ['anomaly', { note: '不能重开' }],
+    ['close', {}],
+  ];
+  for (const [type, flags] of attempts) {
+    const denied = addAll(f, type, flags);
+    assert.equal(denied.status, 1, denied.stdout);
+    assert.match(denied.stdout, /已封账/);
+  }
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
 });
 
 test('merge git 交叉核对：不存在 / 非祖先 / 无令牌 / headSha 非被合并工作，全部矛盾拒绝', (t) => {
@@ -811,7 +942,7 @@ test('事件流里的票没有票文件：表格有行、对账报缺失、封�
 });
 
 // ====================================================================
-// 流程形态快照（init 旗标）：reviewer 开关 / 修复预算参数化
+// 流程形态快照（init 旗标）：reviewer 开关 / 历史预算兼容
 // ====================================================================
 
 test('reviewer=off：verdict/fix 被拒、merge 无 verdict 放行、台账 header 标注形态', (t) => {
@@ -840,32 +971,36 @@ test('reviewer=off：verdict/fix 被拒、merge 无 verdict 放行、台账 head
   const m = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
   assert.equal(m.status, 0, 'off 形态 merge 无需 verdict——平台测试门 + 集成门是仅存防线');
   const md = readLedger(f);
-  assert.match(md, /flow: reviewer=off, maxFixRounds=2, maxConcurrent=5/);
+  assert.match(md, /flow: reviewer=off, maxConcurrent=5/);
+  assert.doesNotMatch(md, /maxFixRounds/);
   assert.match(md, /reviewer=off maxConcurrent=5/, 'init 时间线行带快照旗标（缺省旗标不进 payload，header 显示补全后的形态）');
 });
 
-test('maxFixRounds=3：init 快照放宽预算，第 3 次 fix 可入账，第 4 次拒绝', (t) => {
+test('旧 init 预算仅显示为历史无效值，超出旧配额仍可修复且 build/check 不改旧行', (t) => {
   const f = makeFixture(t);
-  f.git('checkout -q -b feat/demo');
-  const r = initAll(f, {
-    branch: 'feat/demo',
-    'branch-base': 'main',
-    'baseline-sha': f.baseline(),
-    spec: '.scratch/demo/spec.md',
-    'test-command': 'npm test',
-    'max-fix-rounds': '3',
-  });
-  assert.equal(r.status, 0, r.stdout);
-  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
-  const sha = step(f, 'work r1');
-  addAll(f, 'settled', { ticket: '01', round: '1', 'head-sha': sha });
-  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'changes_requested' }).status, 0);
-  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '1', key: 'fix-01-r2', 'resume-run-id': 'bbbbbbbb' }).status, 0);
-  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '2', key: 'fix-01-r3', 'resume-run-id': 'cccccccc' }).status, 0);
-  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '3', key: 'fix-01-r4', 'resume-run-id': 'dddddddd' }).status, 0);
-  const fourth = addAll(f, 'fix', { ticket: '01', 'fix-no': '4', key: 'fix-01-r5', 'resume-run-id': 'eeeeeeee' });
-  assert.equal(fourth.status, 1, '快照预算耗尽必须拒绝');
-  assert.match(fourth.stdout, /上限 3/);
+  initRun(f);
+  // 导入旧事件 fixture；运行中的事件写入仍全部经真实 CLI。
+  const legacy = readEvents(f)[0];
+  legacy.payload.maxFixRounds = '3';
+  fs.writeFileSync(f.eventsPath, JSON.stringify(legacy) + '\n');
+  const original = fs.readFileSync(f.eventsPath, 'utf8');
+  assert.equal(addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' }).status, 0);
+  for (const n of [1, 2, 3, 4]) {
+    const fix = addAll(f, 'fix', {
+      ticket: '01', 'fix-no': String(n), key: `fix-01-${n}`, 'resume-run-id': 'aaaaaaaa',
+    });
+    assert.equal(fix.status, 0, fix.stdout);
+  }
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(build.status, 0, build.stdout);
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(check.status, 0, check.stdout);
+  const md = readLedger(f);
+  assert.match(md, /^flow: reviewer=on, maxConcurrent=3$/m);
+  assert.match(md, /^historicalMaxFixRounds: 3（历史记录，不再生效）$/m);
+  assert.match(md, /init .*maxFixRounds=3（历史记录，不再生效）/);
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 4);
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(original));
 });
 
 test('init 非法快照值被 schema 拒绝（枚举 / 正整数）——成功基线与坏载荷同屏对照', (t) => {

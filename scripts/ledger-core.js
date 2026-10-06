@@ -77,13 +77,12 @@ function countTickets(events) {
 
 const isTaskFile = (file) => !file || !file.type || file.type === 'task';
 
-// 本 run 的流程形态（init 快照旗标）。旧账本无旗标 = 默认形态（reviewer on /
-// 预算 2 / 并发 3），自然兼容。reviewer=off 时：不记 verdict/fix，merge 无需 verdict。
+// 本 run 的有效流程形态（init 快照旗标）。旧账本无旗标 = reviewer on / 并发 3。
+// 历史 maxFixRounds 不再生效。reviewer=off 时：不记 verdict/fix，merge 无需 verdict。
 function flowShape(events) {
   const p = events.find((e) => e.type === 'init')?.payload ?? {};
   return {
     reviewer: p.reviewer === undefined ? true : p.reviewer === 'on',
-    maxFixRounds: p.maxFixRounds === undefined ? 2 : Number(p.maxFixRounds),
     maxConcurrent: p.maxConcurrent === undefined ? 3 : Number(p.maxConcurrent),
   };
 }
@@ -192,11 +191,6 @@ function gateAdd({ events, type, payload, truth }) {
       if (!truth.shaExists(payload.headSha)) {
         reasons.push(`headSha ${payload.headSha} 在 git 中不存在——确定性矛盾（拒绝）`);
       }
-      if (fixCount + 1 !== Number(payload.round)) {
-        warnings.push(
-          `settled round=${payload.round} ≠ fix 事件数+1（${fixCount + 1}）——非常规轮次（如集成修复），仅警告`
-        );
-      }
       if (payload.worktree && !truth.hasWorktree(payload.worktree)) {
         warnings.push(`worktree ${payload.worktree} 不在 git worktree 列表——警告不拒绝`);
       }
@@ -211,11 +205,6 @@ function gateAdd({ events, type, payload, truth }) {
       }
       if (t && t.verdicts.some((e) => Number(e.payload.round) === Number(payload.round))) {
         reasons.push(`票 ${num} 第 ${payload.round} 轮 verdict 已入账——同票同轮去重，历史不可双写`);
-      }
-      if (fixCount + 1 !== Number(payload.round)) {
-        reasons.push(
-          `轮号恒等式违规：verdict round=${payload.round}，但该票已入账 ${fixCount} 条 fix 事件（期望 ${fixCount + 1}）`
-        );
       }
       if (t && !t.dispatches.length) {
         warnings.push(`票 ${num} 尚无 dispatch 事件就有 verdict——reviewer 之前的 coder 派发未入账（警告）`);
@@ -234,12 +223,6 @@ function gateAdd({ events, type, payload, truth }) {
       }
       if (Number(payload.fixNo) !== fixCount + 1) {
         reasons.push(`fixNo=${payload.fixNo} 与已入账 fix 事件数不符（期望 ${fixCount + 1}）`);
-      }
-      if (fixCount >= flow.maxFixRounds) {
-        reasons.push(
-          `修复预算已耗尽：票 ${num} 已入账 ${fixCount} 条 fix 事件（本 run 上限 ${flow.maxFixRounds}，来自 init 快照 --max-fix-rounds）——` +
-            `应升级上报：add escalate --ticket ${num}，并在票文件留 tracker 评论，不要继续派发修复`
-        );
       }
       if (t && !t.dispatches.length) {
         warnings.push(`票 ${num} 尚无 dispatch 事件就有 fix——原 coder 派发未入账（警告）`);
@@ -601,8 +584,11 @@ function renderHeader({ events, truth }) {
   if (p.tickets !== undefined) lines.push(`tickets: ${p.tickets}`);
   const flow = flowShape(events);
   lines.push(
-    `flow: reviewer=${flow.reviewer ? 'on' : 'off'}, maxFixRounds=${flow.maxFixRounds}, maxConcurrent=${flow.maxConcurrent}`
+    `flow: reviewer=${flow.reviewer ? 'on' : 'off'}, maxConcurrent=${flow.maxConcurrent}`
   );
+  if (p.maxFixRounds !== undefined) {
+    lines.push(`historicalMaxFixRounds: ${p.maxFixRounds}（历史记录，不再生效）`);
+  }
   lines.push(`pr: ${prState({ events, truth })}`);
   // final: 与 pr: 同为终局状态类事实，两行对称；多轮终审取最新一条，无 final 时显示 none
   const fin = latestFinal(events);
@@ -634,7 +620,7 @@ function renderEvent(e) {
       );
       if (p.tickets !== undefined) parts.push(`tickets=${p.tickets}`);
       if (p.reviewer !== undefined) parts.push(`reviewer=${p.reviewer}`);
-      if (p.maxFixRounds !== undefined) parts.push(`maxFixRounds=${p.maxFixRounds}`);
+      if (p.maxFixRounds !== undefined) parts.push(`maxFixRounds=${p.maxFixRounds}（历史记录，不再生效）`);
       if (p.maxConcurrent !== undefined) parts.push(`maxConcurrent=${p.maxConcurrent}`);
       break;
     case 'dispatch':
