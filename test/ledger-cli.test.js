@@ -646,7 +646,7 @@ test('merge 门：无 verdict / 最近 verdict 非 approved 被拒', (t) => {
   assert.match(cr.stdout, /changes_requested/);
 });
 
-test('#11 恢复：旧预算两次修复与升级后无需第三次 fix，可取得新的正式批准并合并', (t) => {
+test('#11 恢复：旧预算两次修复与升级后无需第三次 fix，正式批准后显示完成并保留升级历史', (t) => {
   const f = makeFixture(t);
   seedFixes(f, 2);
   // 旧未封账 run fixture：预算与既有裁决/修复原样导入，不迁移历史。
@@ -679,7 +679,45 @@ test('#11 恢复：旧预算两次修复与升级后无需第三次 fix，可取
   assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(history));
   assert.match(readLedger(f), /escalate ticket=01 note="阻塞问题需要用户澄清"/);
   assert.match(readLedger(f), /verdict ticket=01 round=4 verdict=approved/);
-  // merge 后的当前 status 优先级属 #15，此处只检验正式裁决、合并及历史留存。
+  const row = readLedger(f).split('\n').find((line) => line.startsWith('| 01 |'));
+  assert.match(row, /^\| 01 \| 自检基线 \| done \|/, '实际合并后的当前状态是完成');
+  assert.match(row, /\| 2 \| escalated \|$/, '修复次数与交接历史仍保留在独立列');
+  const bytes = fs.readFileSync(f.eventsPath);
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(build.status, 0, build.stdout);
+  assert.match(build.stdout, /^\| 01 \| 自检基线 \| done \|/m);
+  assert.match(build.stdout, /escalate ticket=01 note="阻塞问题需要用户澄清"/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), bytes, '再生不改写新旧事件的任何字节');
+});
+
+test('#15 未合并的升级仍是交接历史：notes 与正式重评不完成票、不解除依赖或允许正常封账', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  assert.equal(addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' }).status, 0);
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'changes_requested' }).status, 0);
+  assert.equal(addAll(f, 'escalate', { ticket: '01', note: '等待用户澄清需求' }).status, 0);
+  const ticketPath = path.join(f.dir, '.scratch/demo/issues/01-x.md');
+  const ticketBefore = fs.readFileSync(ticketPath);
+  const history = fs.readFileSync(f.eventsPath);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户澄清需求，允许继续；问题撤回，等待核验候选代码。\n');
+  const built = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(built.status, 0, built.stdout);
+  assert.match(built.stdout, /^\| 01 \| 自检基线 \| escalated \|/m);
+  assert.match(built.stdout, /^\| 02 \| README 速览 \| open \| 01 \|/m, '下游依赖仍引用未完成票');
+  assert.deepEqual(fs.readFileSync(f.eventsPath), history, '用户决定仅在 notes 中，不补造恢复事件');
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved' }).status, 0);
+  const reviewed = readLedger(f);
+  assert.match(reviewed, /^\| 01 \| 自检基线 \| escalated \|/m, '批准不等于实际合并');
+  assert.match(reviewed, /^\| 02 \| README 速览 \| open \| 01 \|/m);
+  assert.match(reviewed, /escalate ticket=01 note="等待用户澄清需求"/);
+  const beforeClose = fs.readFileSync(f.eventsPath);
+  const closed = addAll(f, 'close', {});
+  assert.equal(closed.status, 1, closed.stdout);
+  assert.match(closed.stdout, /票 01.*无 merge/);
+  assert.match(closed.stdout, /票 02.*无 merge/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), beforeClose);
+  assert.deepEqual(fs.readFileSync(ticketPath), ticketBefore, '恢复说明和正式重评都不关闭未合并票');
+  assert.match(readLedger(f), /^state: running$/m);
 });
 
 test('最新正式裁决才是批准门：旧 approved、notes 与 anomaly 不覆盖后续阻塞裁决', (t) => {
@@ -1476,6 +1514,48 @@ test('add anomaly --ref-seq N：正常入账（payload 含 refSeq），时间线
     line4.endsWith('anomaly note=无关异常，不指向任何事件 note="无关异常，不指向任何事件"'),
     `无 refSeq 的行渲染零变化：${line4}`
   );
+});
+
+test('#15 anomaly 历史不阻止正常收尾，处置 notes 不改事件或覆盖明确校验', (t) => {
+  const f = makeFixture(t);
+  completeRun(f);
+  const mergeSeq = readEvents(f).find((e) => e.type === 'merge').seq;
+  assert.equal(addAll(f, 'anomaly', {
+    note: '收尾核对曾失败，保留历史与证据', 'ref-seq': String(mergeSeq),
+  }).status, 0);
+  const history = fs.readFileSync(f.eventsPath);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '核对已重跑，处置证据见 completion-check.log；不撤销历史异常。\n');
+  // notes 不让当前票文件漂移变成已解决事实。
+  writeTicketFile(f.dir, '01', '完成票 01', { status: 'claimed' });
+  const drift = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(drift.status, 1, drift.stdout);
+  assert.match(drift.stdout, /票 01 文件 Status 为 claimed，账上已有 merge（应 resolved）/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), history);
+  const invalidRef = addAll(f, 'anomaly', { note: 'notes 不能豁免非法引用', 'ref-seq': '999' });
+  assert.equal(invalidRef.status, 1, invalidRef.stdout);
+  assert.match(invalidRef.stdout, /refSeq=999 不小于当前序号/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), history);
+  writeTicketFile(f.dir, '01', '完成票 01', { status: 'resolved' });
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(check.status, 0, check.stdout);
+  assert.match(check.stdout, /账实一致/);
+  assert.equal(ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir }).status, 0);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), history, '处置与再生不更改 anomaly 或所引用事件');
+  assert.equal(addAll(f, 'final', { 'final-verdict': 'not_ready', 'run-id': FINAL_RUN_ID }).status, 0);
+  const beforeClose = fs.readFileSync(f.eventsPath);
+  const denied = addAll(f, 'close', {});
+  assert.equal(denied.status, 1, denied.stdout);
+  assert.match(denied.stdout, /not_ready/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), beforeClose);
+  assert.equal(addAll(f, 'final', { 'final-verdict': 'ready', 'run-id': FINAL_RUN_ID_2 }).status, 0);
+  const closed = addAll(f, 'close', {});
+  assert.equal(closed.status, 0, closed.stdout);
+  assert.match(readLedger(f), /^state: complete/m);
+  assert.match(readLedger(f), /^outcome: completed$/m);
+  assert.match(readLedger(f), /anomaly ↩ ref-seq 5 .*收尾核对曾失败/);
+  assert.equal(readEvents(f).filter((e) => e.type === 'anomaly').length, 1);
+  assert.equal(readEvents(f).find((e) => e.type === 'anomaly').payload.refSeq, String(mergeSeq));
+  assert.ok(fs.readFileSync(f.eventsPath).subarray(0, history.length).equals(history), '旧历史原字节保留，只有正式裁决与 close 追加');
 });
 
 test('--help：anomaly 用法行含 --ref-seq，并说明 refSeq 指向既有事件的语义', (t) => {

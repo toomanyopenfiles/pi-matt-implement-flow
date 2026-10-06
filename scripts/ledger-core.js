@@ -510,8 +510,8 @@ function deriveRows({ events, truth, degraded }) {
 
     let status;
     if (degraded) status = file?.status ?? 'unknown';
-    else if (t.escalates.length) status = 'escalated';
     else if (t.merges.length) status = 'done';
+    else if (t.escalates.length) status = 'escalated';
     else if (touched) status = 'claimed';
     else status = isTaskFile(file) ? 'open' : (file?.status ?? 'open');
 
