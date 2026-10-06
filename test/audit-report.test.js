@@ -362,15 +362,126 @@ test('collect + render 全链路：模型、风险、页面', () => {
   }
 });
 
-test('buildRunModel：无 round 的 fallback 重派发按已耗修复数归入下一轮', () => {
-  const { tickets } = buildRunModel([
-    { seq: 1, type: 'dispatch', payload: { ticket: '01', key: 't-01', runId: 'r1' } },
-    { seq: 2, type: 'fix', payload: { ticket: '01', fixNo: 1, key: 'fix-01-r1', resumeRunId: 'r1' } },
-    { seq: 3, type: 'dispatch', payload: { ticket: '01', key: 'fix-01-r1', runId: 'r2' } },
-  ]);
-  const t = tickets.get('01');
-  assert.equal(t.dispatches[0].round, 1);
-  assert.equal(t.dispatches[1].round, 2);
+test('collect：超过历史预算不再生成预算耗尽风险，其他事故与缺证据仍保留', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events[0].payload.maxFixRounds = 1;
+    for (let fixNo = 1; fixNo <= 3; fixNo++) {
+      events.push({ v: 1, seq: events.length + 1, ts: `2026-09-18T19:2${fixNo}:00.000Z`, type: 'fix', payload: { ticket: '02', fixNo, key: `fix-02-${fixNo}`, resumeRunId: '33333333-cccc-4ccc-8ccc-cccccccccccc', note: `历史修复 ${fixNo}` } });
+    }
+    events.push({ v: 1, seq: events.length + 1, ts: '2026-09-18T19:30:00.000Z', type: 'escalate', payload: { ticket: '01', note: '历史事故：预算耗尽后曾移交人工。' } });
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      assert.equal(model.run.init.maxFixRounds, 1, '历史预算值不删除');
+      assert.deepEqual(model.tickets[1].fixes.map((f) => f.fixNo), [1, 2, 3], '超出旧预算的实际修复保留');
+      assert.ok(!model.risks.some((r) => /用满预算|used up its fix-round budget/.test(r.title)), '预算不再推断为风险');
+      assert.ok(model.risks.some((r) => /验收被拒收|acceptance was rejected/.test(r.title)), '拒收事故保留');
+      assert.ok(model.risks.some((r) => /异常|anomaly/.test(r.title)), '异常事故保留');
+      assert.ok(model.risks.some((r) => /升级|escalated/.test(r.title)), '升级事故保留');
+      assert.ok(model.risks.some((r) => /证据缺失|evidence missing/.test(r.title)), '旧运行缺证据继续降级可见');
+      assert.ok(model.warnings.some((w) => w.code === 'run-evidence-missing'), '缺证据告警保留');
+      const out = path.join(fx.dir, lang);
+      renderAll(model, out, null);
+      assert.match(fs.readFileSync(path.join(out, 'index.html'), 'utf8'), /历史事故：预算耗尽后曾移交人工。/, '原始事故原因不被删改');
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original, '审计不改写旧事件行');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：双语预算只作历史记录，缺省预算不补造有效上限', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events.push({ v: 1, seq: 10, ts: '2026-09-18T19:20:00.000Z', type: 'escalate', payload: { ticket: '02' } });
+    for (const historicalBudget of [7, null]) {
+      if (historicalBudget == null) {
+        delete events[0].payload.maxFixRounds;
+        delete events[0].payload.reviewer;
+        delete events[0].payload.maxConcurrent;
+      } else events[0].payload.maxFixRounds = historicalBudget;
+      fs.writeFileSync(file, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+      for (const lang of ['zh', 'en']) {
+        const model = collect({ runtimeDir: fx.runtimeDir, lang });
+        const out = path.join(fx.dir, `${lang}-${historicalBudget}`);
+        renderAll(model, out, null);
+        const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+        if (historicalBudget != null) {
+          assert.match(index, lang === 'zh' ? /历史修复预算 7（仅作记录，不是有效上限）/ : /Historical fix budget 7 \(record only; not an active limit\)/);
+        } else {
+          assert.doesNotMatch(index, /历史修复预算 \d|Historical fix budget \d|修复预算 2|fix budget 2/, '未记录的预算不补造');
+        }
+        assert.match(index, lang === 'zh' ? /逐票评审开.*并发 3/ : /review on.*concurrency 3/, '评审与并发仍展示');
+        assert.match(index, lang === 'zh' ? /不设次数配额/ : /no attempt quota/, '修复不再受次数控制');
+        assert.match(index, lang === 'zh' ? /正式评审轮次独立于修复次数/ : /Formal review rounds are independent of fix attempts/, '评审与修复词条解耦');
+        assert.doesNotMatch(index, /预算耗尽|budget exhausted|exhausting it escalates/, '无原因升级不补造预算耗尽原因');
+      }
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：复用 runId 的修复和正式评审仍按实际事件计数', () => {
+  const fx = makeFixture();
+  try {
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      const out = path.join(fx.dir, lang);
+      renderAll(model, out, null);
+      const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+      const countFor = (label) => {
+        const match = index.match(new RegExp(`<div class="stat-num">(\\d+)</div><div class="stat-label">${label}</div>`));
+        assert.ok(match, `统计卡片 ${label} 应存在`);
+        return Number(match[1]);
+      };
+      assert.equal(countFor(lang === 'zh' ? '评审轮次' : 'Review rounds'), 2, '两条正式裁决不因相同 reviewer runId 少计');
+      assert.equal(countFor(lang === 'zh' ? '修复轮次' : 'Fix rounds'), 1, 'resume 复用 coder runId 不代表没有修复');
+      assert.equal(model.runRefs.length, 3, '平台运行清单仍按 runId 去重，成本不双计');
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：多修复少评审与无 fix 重评按事件顺序展示，不推导正式轮号', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse).slice(0, 5);
+    const append = (type, payload) => events.push({ v: 1, seq: events.length + 1, ts: `2026-09-18T19:${String(events.length).padStart(2, '0')}:00.000Z`, type, payload });
+    append('fix', { ticket: '01', fixNo: 2, key: 'fix-01-2', resumeRunId: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa', note: 'TRACE_FIX_TWO' });
+    append('dispatch', { ticket: '01', key: 'TRACE_FRESH_DISPATCH', runId: '33333333-cccc-4ccc-8ccc-cccccccccccc' });
+    append('settled', { ticket: '01', round: 1, headSha: 'bb1111', gate: 'TRACE_SETTLED' });
+    append('verdict', { ticket: '01', round: 2, verdict: 'changes_requested', revRunId: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb', note: 'TRACE_REVIEW_TWO' });
+    append('verdict', { ticket: '01', round: 3, verdict: 'approved', revRunId: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb', note: 'TRACE_REVIEW_THREE' });
+    fs.writeFileSync(file, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      const out = path.join(fx.dir, lang);
+      renderAll(model, out, null);
+      const page = fs.readFileSync(path.join(out, 'ticket-01.html'), 'utf8');
+      const markers = ['修 P1', 'TRACE_FIX_TWO', 'TRACE_FRESH_DISPATCH', 'TRACE_SETTLED', 'TRACE_REVIEW_TWO', 'TRACE_REVIEW_THREE'];
+      const positions = markers.map((marker) => page.indexOf(marker));
+      assert.ok(positions.every((pos) => pos >= 0), '每次修复、派发、结算和正式评审均保留');
+      assert.deepEqual([...positions].sort((a, b) => a - b), positions, '按事件 seq 展示而不是把 fixNo 当正式评审轮号');
+      assert.match(page, /返回值没有测试/, '已有 findings 原文保留');
+      assert.match(page, /5 pass 0 fail/, '已有验证证据保留');
+      assert.match(page, /缺失|missing|unavailable/i, '缺失的新派发/修复证据仍可见');
+      const ticket = model.tickets[0];
+      assert.deepEqual(ticket.verdicts.map((v) => v.round), [1, 2, 3], '正式轮号取自事件');
+      assert.deepEqual(ticket.fixes.map((f) => f.fixNo), [1, 2], '修复号取自事件');
+      assert.ok(ticket.dispatches.every((d) => d.round == null), '没有显式 round 的派发不根据 fix 数补造轮号');
+    }
+  } finally {
+    fx.cleanup();
+  }
 });
 
 // ---------------------------------------------------------------- 终审入流：事件驱动优先 + 旧账降级

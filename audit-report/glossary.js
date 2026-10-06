@@ -30,8 +30,8 @@ const TERMS = [
     en: 'Checking ledger records against the real world (git, worktrees, ticket file state). Run before every dispatch and merge; any drift is listed item by item and blocks the step.',
   } },
   { id: 'flow-shape', zh: '流程形态', en: 'flow shape', def: {
-    zh: '一次运行的流程开关组合：是否逐票评审、每票修复预算、并发实现者数量。在运行初始化时冻结进事件流，中途改配置不影响进行中的运行。',
-    en: 'The combination of flow switches for one run: whether each ticket is reviewed, the per-ticket fix budget, and the number of concurrent coders. Frozen into the event stream at run start; mid-run config changes never affect a run in progress.',
+    zh: '一次运行的流程开关组合：是否逐票评审、并发实现者数量。在运行初始化时冻结进事件流，中途改配置不影响进行中的运行。旧修复预算值仅作历史记录，不是有效上限。',
+    en: 'The combination of flow switches for one run: whether each ticket is reviewed and the number of concurrent coders. Frozen into the event stream at run start; mid-run config changes never affect a run in progress. Old fix-budget values are historical records, not active limits.',
   } },
 
   // —— 流程环节词 ——
@@ -48,20 +48,20 @@ const TERMS = [
     en: 'The anchoring act after a coder finishes a ticket: confirm the commit exists in git truth, then record the commit SHA and worktree location into the event stream as the basis for review and merge.',
   } },
   { id: 'verdict', zh: '评审裁决', en: 'verdict', def: {
-    zh: '评审者对一票实现的结论：通过（approved）或需修改（changes_requested）。裁决与发现的问题清单一并记入事件流。',
-    en: 'A reviewer’s conclusion on one ticket’s implementation: approved or changes_requested. The verdict and its findings list are recorded into the event stream together.',
+    zh: '评审者对一票实现的完整正式结论：通过（approved）或需修改（changes_requested）。裁决与发现的问题清单一并记入事件流。正式评审轮次独立于修复次数；普通澄清或单问题撤回不替代批准。',
+    en: 'A reviewer’s complete formal conclusion on one ticket’s implementation: approved or changes_requested. The verdict and its findings list are recorded into the event stream together. Formal review rounds are independent of fix attempts; ordinary clarification or withdrawal of a single finding does not replace approval.',
   } },
   { id: 'two-axis', zh: '双轴评审', en: 'two-axis review', def: {
     zh: '评审者从两个独立视角审查：规范轴（代码是否符合仓库既有规范）与需求轴（代码是否符合票面与 spec 的要求）。两轴可各派一个只读子代理并行执行。',
     en: 'The reviewer examines from two independent angles: the standards axis (does the code follow the repo’s existing conventions) and the spec axis (does it meet the ticket and the spec). Each axis may be dispatched to its own read-only subagent in parallel.',
   } },
   { id: 'fix-round', zh: '修复轮', en: 'fix round', def: {
-    zh: '评审要求修改后，编排器把问题清单发回同一个实现者（续跑原会话）返工。每票修复轮数有预算上限（默认 2），耗尽即升级给维护者。',
-    en: 'After a review requests changes, the orchestrator sends the findings back to the same coder (resuming the original session) for rework. Each ticket has a fix-round budget (default 2); exhausting it escalates to the maintainer.',
+    zh: '处理问题的一次修复尝试，通常把问题清单发回同一个实现者（续跑原会话）返工。编号表示尝试顺序，不设次数配额；一次评审后可多次修复，也可无新增修复再正式评审。',
+    en: 'An attempt to fix a problem, usually by sending findings back to the same coder (resuming the original session). The number records attempt order, with no attempt quota; one review may be followed by multiple fixes, and a later formal review need not have a new fix.',
   } },
   { id: 'escalate', zh: '升级', en: 'escalate', def: {
-    zh: '修复预算耗尽仍未通过时，票保持未关闭状态、移交维护者裁决，不再阻塞其余票的推进。',
-    en: 'When the fix budget is exhausted without passing, the ticket stays open and is handed to the maintainer for a decision, without blocking the remaining tickets.',
+    zh: '票移交维护者裁决的记录。原因以事件原文为准，不根据修复次数或旧预算推断。',
+    en: 'A record of handing a ticket to the maintainer for a decision. The reason comes from the recorded event, not from fix counts or an old budget.',
   } },
   { id: 'integration-gate', zh: '集成测试门', en: 'integration gate', def: {
     zh: '每票合并到功能分支后立即运行全量测试套件。票级评审看不到的跨票集成问题在此暴露，红了就派无隔离修复者当场修。',
