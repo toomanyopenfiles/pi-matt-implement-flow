@@ -14,6 +14,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const { initOpenRun, runEvidence: readRunEvidence, assertOpenEvidence } = require('./fixtures/open-run-evidence');
+
 const LEDGER = path.resolve(__dirname, '../scripts/ledger.js');
 
 // 票 02：同步幂等机器 marker——run 标识 = --runtime-dir 目录名（fixture 恒 'demo'）。
@@ -445,38 +447,11 @@ function seedAbandonFixture(f) {
   const state = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
   state.issues['7042'].assignees = ['alice', 'bob'];
   fs.writeFileSync(f.stateFile, JSON.stringify(state));
-  const git = (...args) => {
-    const r = spawnSync('git', args, { cwd: f.dir, encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    return r.stdout.trim();
-  };
-  git('init', '-q', '-b', 'main');
-  git('config', 'user.email', 't@example.com');
-  git('config', 'user.name', 'T');
-  fs.writeFileSync(path.join(f.dir, 'README.md'), 'fixture\n');
-  git('add', 'README.md');
-  git('commit', '-qm', 'baseline');
-  const baseline = git('rev-parse', 'HEAD');
-  git('checkout', '-q', '-b', 'feat/demo');
-  const r = runLedger(f, 'init', ['--branch', 'feat/demo', '--branch-base', 'main',
-    '--baseline-sha', baseline, '--spec', path.join(f.tracker, 'spec.md'), '--test-command', 'npm test']);
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户明确放弃；未完成票保留，代码与验证证据已保存。\n');
+  initOpenRun(f, { ...process.env, PATH: `${f.bin}${path.delimiter}${process.env.PATH}` });
 }
 
 function runEvidence(f) {
-  return Object.fromEntries([
-    'events.jsonl', 'ledger.md', 'notes.md', 'tracker/spec.md',
-    ...lsIssues(f).map((name) => `tracker/issues/${name}`),
-  ].map((name) => [name, fs.readFileSync(path.join(f.runtime, name), 'utf8')]));
-}
-
-function assertOpenEvidence(f, before) {
-  assert.deepEqual(runEvidence(f), before, 'sync 不修改事件、台账、笔记或快照（失败与成功都可核查）');
-  assert.match(before['ledger.md'], /state: running/);
-  const events = before['events.jsonl'].trim().split('\n').map((line) => JSON.parse(line));
-  assert.ok(!events.some((e) => e.type === 'close' || (e.type === 'pr' && e.payload.state === 'ready')),
-    '放弃同步不封账、不标 ready');
+  return readRunEvidence(f, lsIssues(f));
 }
 
 const ABANDON_ARGS = ['--mode', 'abandon', '--claimant', 'alice', '--reason', '用户明确放弃，保留未完成项'];
@@ -501,7 +476,7 @@ test('sync abandon（gitlab）：说明失败保持开放与占坑；重试补 n
   assert.doesNotMatch(failed.stdout, /清理指引/);
   assert.deepEqual(stateOf(f, 7042), { state: 'open', assignees: ['alice', 'bob'], comments: [] });
   assert.doesNotMatch(rawLog(f), /--unassign/, '说明失败不提前撤占坑');
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
   assertAbandonTicketsUntouched(f);
 
   const offset = rawLog(f).length;
@@ -516,7 +491,7 @@ test('sync abandon（gitlab）：说明失败保持开放与占坑；重试补 n
   const retryLog = rawLog(f).slice(offset);
   assert.equal((retryLog.match(/issue note 7042 /g) ?? []).length, 1);
   assert.equal((retryLog.match(/issue update 7042 --unassign alice/g) ?? []).length, 1);
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
   assertAbandonTicketsUntouched(f);
 });
 
@@ -533,7 +508,7 @@ test('sync abandon（gitlab）：撤占坑失败保留 note 与开放状态；�
     state: 'open', assignees: ['alice', 'bob'],
     comments: [`This run has been abandoned: 用户明确放弃，保留未完成项\n\n${MARK('abandon')}`],
   });
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
   assertAbandonTicketsUntouched(f);
 
   const state = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
@@ -548,7 +523,7 @@ test('sync abandon（gitlab）：撤占坑失败保留 note 与开放状态；�
   assert.doesNotMatch(retryLog, /issue (note|close) /);
   assert.equal((retryLog.match(/issue update 7042 --unassign alice/g) ?? []).length, 1);
   assert.deepEqual(stateOf(f, 7042), { ...state.issues['7042'], assignees: ['bob'] });
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
   assertAbandonTicketsUntouched(f);
 
   const afterRetry = rawLog(f).length;
@@ -556,7 +531,7 @@ test('sync abandon（gitlab）：撤占坑失败保留 note 与开放状态；�
   assert.equal(again.status, 0, again.stdout + again.stderr);
   assert.match(again.stdout, /已同步：无待推送动作/);
   assert.doesNotMatch(rawLog(f).slice(afterRetry), /issue (close|note|update) /);
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
 });
 
 test('sync abandon（gitlab）：note 先行留评、撤占坑走 update --unassign；重跑零动作', (t) => {
