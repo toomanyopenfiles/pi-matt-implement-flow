@@ -26,6 +26,15 @@ implementation history live in [`docs/adr/`](./docs/adr/).
 
 ### Added
 
+- You can explicitly accept partial delivery after the completed work is checked on the current
+  branch. The hand-off provides branch, commit, and validation evidence, with unfinished items,
+  their effects, risks, and next steps. The same open run retains its local ticket copies and
+  evidence without final tracker updates, spec closure, or marking the PR / MR ready. Once the
+  missing conditions are checked, it continues the remaining work without replaying completed
+  tickets, and finishes normally only after everything is done. This is not abandonment, an
+  automatic release, or a separate PR / MR. (#17)
+  (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+
 - You can explicitly abandon a run without arranging a new final review or handing off every
   unfinished ticket. The run stops related agents, saves code and evidence, explains unfinished
   work, and handles the feature claim before closing. Failures leave it open for retry.

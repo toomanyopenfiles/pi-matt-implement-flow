@@ -2,11 +2,12 @@
 
 English | [简体中文](./README.zh-CN.md)
 
-A purely local audit tool for one finished pi-matt-implement-flow run: it turns the run into a
+A purely local audit tool for one pi-matt-implement-flow run, open or finished: it turns the run into a
 browsable static report site, so you can check how the whole run went and surface latent problems.
 
-**When to use it**: double-check a run's quality before you merge; find where things went wrong
-after the fact; keep an auditable record of what happened.
+**When to use it**: check the saved work during a pause or partial delivery; double-check a run's
+quality before you merge; find where things went wrong after the fact; keep an auditable record
+of what happened.
 
 - **No LLM calls** — everything is collected automatically from the run's local records and git
   history.
@@ -64,6 +65,16 @@ unfinished tickets remain open. A pause leaves the run open, while a closed run 
 For older closing records without a stated result, the report does not guess completion or
 abandonment. A new normal completion cannot proceed with a “not ready” final review; abandoned
 runs and historical records may still contain that verdict, which remains visible.
+
+Accepted partial delivery is not abandonment or complete delivery. Read the notes for your
+acceptance, the completed work, branch and commit references, validation evidence, unfinished
+items and their effects, risks, and continuation conditions. The open run keeps its local ticket
+copies and findings; the spec remains open and the PR / MR is not marked ready. `running` means
+not ended, not that an agent is currently executing. Keep the run directory so the same run can
+continue once the missing conditions are checked. Only after all work completes does normal
+finishing happen. The report does not certify the completed part as usable or make a partial
+release or separate PR / MR for you.
+
 See [ADR-0009](../docs/adr/0009-prompt-driven-repair-and-run-continuation.md) for the design.
 
 A ticket merged after an earlier hand-off shows as complete, with the escalation, its reason,
@@ -129,6 +140,9 @@ believing them.
   evidence means the outcome needs checking, not that recovery has been established.
 - **The report says the run was abandoned?** — the saved work is not being presented as ready.
   Check the unfinished-work summary, review findings, and evidence before using it.
+- **The report shows `running`, but no agent is working?** — the run is still open, possibly
+  paused or partially delivered. Read the notes for the blocker, your decision, and the next
+  steps; keep the run data for continuation. This is not evidence of a live agent process.
 - **Wrong language?** — rerun with `--lang zh|en`.
 - **Where is the report?** — in `report/` under the run directory by default, or wherever `--out`
   points.
