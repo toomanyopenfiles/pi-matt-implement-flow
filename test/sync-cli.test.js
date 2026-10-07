@@ -14,6 +14,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const { initOpenRun, runEvidence, assertOpenEvidence } = require('./fixtures/open-run-evidence');
+
 const LEDGER = path.resolve(__dirname, '../scripts/ledger.js');
 
 // 票 02：同步幂等机器 marker——黑盒断言点在 gh 桩的状态与调用日志里。run 标识 = --runtime-dir 的
@@ -416,44 +418,6 @@ test('sync 部分失败：报告已完成/未完成；重跑续作（已完成�
 
 // #16：sync 是公开 CLI seam；真实 init 保证开放状态不是测试手写的结论。
 // 故障只注入外部 gh 命令，sync 不负责封账、ready 或停止平台 child。
-function initOpenRun(f) {
-  const git = (...args) => {
-    const r = spawnSync('git', args, { cwd: f.dir, encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    return r.stdout.trim();
-  };
-  git('init', '-q', '-b', 'main');
-  git('config', 'user.email', 't@example.com');
-  git('config', 'user.name', 'T');
-  fs.writeFileSync(path.join(f.dir, 'README.md'), 'fixture\n');
-  git('add', 'README.md');
-  git('commit', '-qm', 'baseline');
-  const baseline = git('rev-parse', 'HEAD');
-  git('checkout', '-q', '-b', 'feat/demo');
-  const r = spawnSync(process.execPath, [LEDGER, 'init', '--runtime-dir', f.runtime,
-    '--branch', 'feat/demo', '--branch-base', 'main', '--baseline-sha', baseline,
-    '--spec', path.join(f.tracker, 'spec.md'), '--test-command', 'npm test'], {
-    cwd: f.dir, encoding: 'utf8',
-  });
-  assert.equal(r.status, 0, r.stdout + r.stderr);
-  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户明确放弃；未完成票保留，代码与验证证据已保存。\n');
-}
-
-function runEvidence(f) {
-  return Object.fromEntries([
-    'events.jsonl', 'ledger.md', 'notes.md', 'tracker/spec.md',
-    ...fs.readdirSync(path.join(f.tracker, 'issues')).map((name) => `tracker/issues/${name}`),
-  ].map((name) => [name, fs.readFileSync(path.join(f.runtime, name), 'utf8')]));
-}
-
-function assertOpenEvidence(f, before) {
-  assert.deepEqual(runEvidence(f), before, 'sync 不修改事件、台账、笔记或快照（失败与成功都可核查）');
-  assert.match(before['ledger.md'], /state: running/);
-  const events = before['events.jsonl'].trim().split('\n').map((line) => JSON.parse(line));
-  assert.ok(!events.some((e) => e.type === 'close' || (e.type === 'pr' && e.payload.state === 'ready')),
-    '放弃同步不封账、不标 ready');
-}
-
 function seedAbandonFixture(f) {
   seedSealFixture(f); // 即使存在 merge/escalate/closing 事实，abandon 也不执行 seal。
   const state = JSON.parse(fs.readFileSync(f.stateFile, 'utf8'));
@@ -484,7 +448,7 @@ test('sync abandon：说明失败保持开放与占坑；重试补说明和撤�
   assert.doesNotMatch(failed.stdout, /清理指引/);
   assert.deepEqual(stateOf(f, 3001), { state: 'open', assignees: ['alice', 'bob'], comments: [] });
   assert.doesNotMatch(rawLog(f), /--remove-assignee/, '说明失败不提前撤占坑');
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
   assertAbandonTicketsUntouched(f);
 
   const offset = rawLog(f).length;
@@ -499,7 +463,7 @@ test('sync abandon：说明失败保持开放与占坑；重试补说明和撤�
   const retryLog = rawLog(f).slice(offset);
   assert.equal((retryLog.match(/issue comment 3001 /g) ?? []).length, 1);
   assert.equal((retryLog.match(/issue edit 3001 --remove-assignee alice/g) ?? []).length, 1);
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
   assertAbandonTicketsUntouched(f);
 });
 
@@ -516,7 +480,7 @@ test('sync abandon：撤占坑失败保留已推说明与开放状态；重试�
     state: 'open', assignees: ['alice', 'bob'],
     comments: [`This run has been abandoned: 用户明确放弃，保留未完成项\n\n${MARK('abandon')}`],
   });
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
   assertAbandonTicketsUntouched(f);
 
   // 人可改写说明正文，marker 仍是重试判重依据。
@@ -532,7 +496,7 @@ test('sync abandon：撤占坑失败保留已推说明与开放状态；重试�
   assert.doesNotMatch(retryLog, /issue (comment|close) /);
   assert.equal((retryLog.match(/issue edit 3001 --remove-assignee alice/g) ?? []).length, 1);
   assert.deepEqual(stateOf(f, 3001), { ...state.issues['3001'], assignees: ['bob'] });
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
   assertAbandonTicketsUntouched(f);
 
   const afterRetry = rawLog(f).length;
@@ -540,7 +504,7 @@ test('sync abandon：撤占坑失败保留已推说明与开放状态；重试�
   assert.equal(again.status, 0, again.stdout + again.stderr);
   assert.match(again.stdout, /已同步：无待推送动作/);
   assert.doesNotMatch(rawLog(f).slice(afterRetry), /issue (close|comment|edit) /);
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
 });
 
 test('sync abandon：spec 留评放弃说明 + 撤占坑；重跑零动作', (t) => {
@@ -771,7 +735,7 @@ test('sync abandon（local）：无远程说明或占坑写面，保留开放 ru
   assert.match(r.stdout, /tracker=local 无需同步/);
   assert.match(r.stdout, /本地票文件即真相层/);
   assert.doesNotMatch(r.stdout, /PR 标 ready|清理指引/);
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
 
   const claim = spawnSync(process.execPath, [LEDGER, 'claim', '--runtime-dir', f.runtime,
     '--spec', path.join(f.tracker, 'spec.md')], {
@@ -781,7 +745,7 @@ test('sync abandon（local）：无远程说明或占坑写面，保留开放 ru
   assert.equal(claim.status, 1, claim.stdout + claim.stderr);
   assert.match(claim.stdout, /tracker=local 无 tracker 写面/);
   assert.equal(callLog(f).length, 0, 'local claim/abandon 不触碰外部 tracker');
-  assertOpenEvidence(f, before);
+  assertOpenEvidence(runEvidence(f), before);
 });
 
 test('sync 拒绝：local 契约（快照/同步为无操作）——票文件即真相层', (t) => {
