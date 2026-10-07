@@ -52,12 +52,6 @@ Install into pi from npm:
 pi install npm:pi-matt-implement-flow
 ```
 
-Optionally, run the self-check suite:
-
-```sh
-npm test
-```
-
 ## Quick start
 
 1. **One-time setup** — install pi, pi-subagents, and Matt Pocock's engineering skills, then run `/setup-matt-pocock-skills` once in your repo.
