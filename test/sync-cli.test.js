@@ -16,12 +16,9 @@ const path = require('node:path');
 
 const { initOpenRun, runEvidence, assertOpenEvidence } = require('./fixtures/open-run-evidence');
 
-const LEDGER = path.resolve(__dirname, '../scripts/ledger.js');
 
 // 票 02：同步幂等机器 marker——黑盒断言点在 gh 桩的状态与调用日志里。run 标识 = --runtime-dir 的
 // 目录名（fixture 下恒 'demo'）；kind = 四类同步写入（merge / escalate / closing / abandon）。
-const RUN = 'demo';
-const MARK = (kind) => `<!-- matt-implement:${RUN}:${kind} -->`;
 
 // --- gh 桩（Node 脚本）：状态存 GH_STUB_STATE 指向的 JSON 文件，调用追加进 GH_STUB_LOG ---
 // GH_STUB_FAIL：所有调用模拟失败（网络不可用）；GH_STUB_FAIL_WRITE=<num>：该号的写入
@@ -29,176 +26,13 @@ const MARK = (kind) => `<!-- matt-implement:${RUN}:${kind} -->`;
 // 每次 gh 调用是独立进程，匹配的调用都会失败；重试去掉环境变量后恢复。
 // issue view 的失败不设专门开关：从桩状态里删号即真实缺票（同步对象缺失用例）。
 
-const GH_STUB = `#!/usr/bin/env node
-'use strict';
-const fs = require('node:fs');
-const args = process.argv.slice(2);
-const stateFile = process.env.GH_STUB_STATE;
-const log = process.env.GH_STUB_LOG;
-if (log) fs.appendFileSync(log, args.join(' ') + '\\n');
-const die = (msg) => { console.error('gh: ' + msg); process.exit(1); };
-if (process.env.GH_STUB_FAIL) die('simulated failure (network down)');
-const rest = args[0] === '-R' ? args.slice(2) : args;
-const sub = rest[0];
-// #17：PR 是外部收尾面；只有场景 fixture 使用此有状态命令桩，不模拟模型判断。
-if (sub === 'pr') {
-  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-  if (rest[1] === 'list') {
-    process.stdout.write(JSON.stringify(state.pr ? [state.pr] : []));
-    process.exit(0);
-  }
-  if (rest[1] === 'ready' && state.pr) {
-    state.pr.isDraft = false;
-    fs.writeFileSync(stateFile, JSON.stringify(state));
-    process.exit(0);
-  }
-  die('unhandled PR invocation: ' + args.join(' '));
-}
-if (sub !== 'issue') { console.error('gh stub: unhandled invocation: ' + args.join(' ')); process.exit(64); }
-const kind = rest[1];
-const num = String(rest[2] ?? '');
-const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-const it = state.issues[num];
-const load = () => JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-const save = (s) => fs.writeFileSync(stateFile, JSON.stringify(s));
-const writeFail = () => {
-  const f = process.env.GH_STUB_FAIL_WRITE;
-  if (!f) return false;
-  delete process.env.GH_STUB_FAIL_WRITE; // 只防同进程内重入——每个 gh 调用是独立进程，跨调用各自判定
-  return num === f || num + ':' + kind === f;
-};
-if (kind === 'view') {
-  if (!it) die('issue #' + num + ' not found');
-  process.stdout.write(JSON.stringify({
-    number: Number(num),
-    state: it.state === 'closed' ? 'CLOSED' : 'OPEN',
-    assignees: (it.assignees ?? []).map((login) => ({ login })),
-    comments: (it.comments ?? []).map((body) => ({ body })),
-  }));
-} else if (kind === 'close') {
-  if (!it) die('issue #' + num + ' not found');
-  if (writeFail()) die('simulated write failure (close ' + num + ')');
-  const ci = rest.indexOf('--comment');
-  const body = ci !== -1 ? rest[ci + 1] : null;
-  const s = load();
-  s.issues[num].state = 'closed';
-  if (body) s.issues[num].comments.push(body);
-  save(s);
-} else if (kind === 'comment') {
-  if (!it) die('issue #' + num + ' not found');
-  if (writeFail()) die('simulated write failure (comment ' + num + ')');
-  const bi = rest.indexOf('--body');
-  const body = rest[bi + 1];
-  const s = load();
-  s.issues[num].comments.push(body);
-  save(s);
-} else if (kind === 'edit') {
-  if (!it) die('issue #' + num + ' not found');
-  if (writeFail()) die('simulated write failure (edit ' + num + ')');
-  const s = load();
-  const ai = rest.indexOf('--add-assignee');
-  if (ai !== -1) {
-    // 占坑写面（票 05 claim 子命令）：追加 assignee（幂等：已在位不重复）
-    const login = rest[ai + 1];
-    if (!(s.issues[num].assignees ?? []).includes(login)) s.issues[num].assignees = [...(s.issues[num].assignees ?? []), login];
-    save(s);
-  } else {
-    const ri = rest.indexOf('--remove-assignee');
-    const login = rest[ri + 1];
-    s.issues[num].assignees = (s.issues[num].assignees ?? []).filter((a) => a !== login);
-    save(s);
-  }
-} else {
-  console.error('gh stub: unhandled issue subcommand: ' + kind);
-  process.exit(64);
-}
-`;
-
-// --- fixture：运行时目录 + tracker 快照（编排器写到同步时点的产物形态）---
-// 票 05 契约化：fixture 带 setup 产物（docs/agents/issue-tracker.md = GitHub 范本）作判型
-// 输入——同步/占坑的契约模板与 Source 行形态解析的配置单源（可传 localDoc 换 local 范本）。
-
-const SHA_A = '0f3a9c41b7e2d5f8a6c1e4b9d2f7a3c5e8b1d4f6';
-
-function makeFixture(t, { trackerDoc = 'issue-tracker-github.md' } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-fixture-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const bin = path.join(dir, 'bin');
-  fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'gh'), GH_STUB);
-  fs.chmodSync(path.join(bin, 'gh'), 0o755);
-  if (trackerDoc !== null) {
-    fs.mkdirSync(path.join(dir, 'docs/agents'), { recursive: true });
-    fs.copyFileSync(path.join(__dirname, 'fixtures', trackerDoc), path.join(dir, 'docs/agents/issue-tracker.md'));
-    fs.copyFileSync(path.join(__dirname, 'fixtures', 'triage-labels-canonical.md'), path.join(dir, 'docs/agents/triage-labels.md'));
-  }
-  const runtime = path.join(dir, '.pi/matt-implement/demo');
-  const tracker = path.join(runtime, 'tracker');
-  fs.mkdirSync(path.join(tracker, 'issues'), { recursive: true });
-  return { dir, bin, runtime, tracker, stateFile: path.join(dir, 'gh-state.json'), logFile: path.join(dir, 'gh-log.txt') };
-}
-
-function writeSpec(f, { closing = true } = {}) {
-  fs.writeFileSync(
-    path.join(f.tracker, 'spec.md'),
-    [
-      '# Spec: GitHub tracker 一等公民支持',
-      '',
-      'Source: https://github.com/o/r/issues/3001',
-      '',
-      '**Type:** spec',
-      '',
-      'spec 正文',
-      '',
-      '## Comments',
-      ...(closing ? ['', '- closing: 已交付：票 1043 合并于主分支，PR #12 待审。'] : []),
-    ].join('\n') + '\n',
-  );
-}
-
-function writeTicket(f, num, slug, extra = {}) {
-  const lines = [`# ${num}: ${slug}`, '', `**Status:** ${extra.status ?? 'claimed'}`, '', '**Blocked by:** —'];
-  if (extra.comments?.length) lines.push('', '## Comments', '', ...extra.comments.map((c) => `- ${c}`));
-  fs.writeFileSync(path.join(f.tracker, 'issues', `${num}-${slug}.md`), lines.join('\n') + '\n');
-}
-
-// tracker 桩初始状态：{ num: { state, assignees, comments } }
-function stubState(f, issues) {
-  fs.writeFileSync(f.stateFile, JSON.stringify({ issues }));
-}
-
-function sync(f, args, env = {}) {
-  const r = spawnSync(process.execPath, [LEDGER, 'sync', '--runtime-dir', f.runtime, ...args], {
-    cwd: f.dir,
-    encoding: 'utf8',
-    env: { ...process.env, PATH: `${f.bin}${path.delimiter}${process.env.PATH}`, ...env },
-  });
-  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
-}
-
-const withGh = (f) => ({ GH_STUB_STATE: f.stateFile, GH_STUB_LOG: f.logFile });
-
-function rawLog(f) {
-  return fs.existsSync(f.logFile) ? fs.readFileSync(f.logFile, 'utf8') : '';
-}
-
-function callLog(f) {
-  return rawLog(f).split('\n').filter(Boolean);
-}
-
-// 多行正文会让桩日志把 marker 折到后续物理行——按日志原文窗口断言同一调用内携带
-// （命令与 marker 之间只有该调用的正文，不跨调用）。
-const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const markerNear = (raw, cmdRe, mark) =>
-  new RegExp(cmdRe + '[\\s\\S]{0,80}?' + reEscape(mark)).test(raw);
-
-function stateOf(f, num) {
-  return JSON.parse(fs.readFileSync(f.stateFile, 'utf8')).issues[String(num)];
-}
-
-// gh 桩日志行：'-R o/r issue view 1043 --json …'——视图调用以 'issue view' 子串识别
-const isViewCall = (line) => /(^|\s)issue view /.test(line);
-
+// 同步 fixture 胶水（快照直落 / gh 桩 / sync 入口 / marker 断言助手）在共享模块里——
+// 包级系统回归以 MATT_IMPLEMENT_LEDGER 注入 tarball 解包脚本复用同一套铺底。
+const {
+  LEDGER, RUN, MARK, SHA_A,
+  makeFixture, writeSpec, writeTicket, stubState, sync, withGh,
+  rawLog, callLog, reEscape, markerNear, stateOf, isViewCall,
+} = require('./fixtures/sync-fixture');
 function writeEvents(f, events) {
   fs.writeFileSync(
     path.join(f.runtime, 'events.jsonl'),
