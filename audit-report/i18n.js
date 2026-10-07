@@ -200,6 +200,7 @@ const M = {
     // ---------------------------------------------------------------- 运行证据卡
     'run.evidence': '运行证据',
     'run.missing': '证据缺失（可能已被平台清理）· 运行 <code>{{run}}</code>',
+    'run.notRecorded': '运行引用未记录（事件未携带 runId）——无可核验证据',
     'run.title': '{{role}}运行 <code>{{run}}</code>',
     'run.modelWord': '模型',
     'run.exitWord': '退出码',
@@ -527,6 +528,7 @@ const M = {
     // ---------------------------------------------------------------- run evidence card
     'run.evidence': 'Run evidence',
     'run.missing': 'Evidence missing (possibly cleaned up by the platform) \u00b7 run <code>{{run}}</code>',
+    'run.notRecorded': 'Run reference not recorded (event carries no runId) \u2014 no evidence to verify',
     'run.title': '{{role}} run <code>{{run}}</code>',
     'run.modelWord': 'model',
     'run.exitWord': 'exit code',

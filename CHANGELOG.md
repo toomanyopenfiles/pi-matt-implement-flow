@@ -65,6 +65,11 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   the current code. Audit reports retain historical repair limits without presenting them as
   a current reason to stop. (#13)
   (Design: [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).)
+- The audit report no longer fails on older run records whose reviews, repairs, or dispatches
+  carry no platform run identifier. Those spots now say the run reference was not recorded,
+  instead of crashing the report.
+- A ticket that was only handed off (escalated) — never implemented — now shows up in the
+  audit report's ticket list with its hand-off history, instead of being left out entirely.
 
 ## [0.3.1] - 2026-10-03
 ### Added

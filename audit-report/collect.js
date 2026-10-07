@@ -114,7 +114,12 @@ function buildRunModel(events) {
       case 'init': run.init = { ...p, seq: e.seq, ts: e.ts }; break;
       case 'pr': run.prs.push({ ...p, seq: e.seq, ts: e.ts }); break;
       case 'anomaly': run.anomalies.push({ seq: e.seq, ts: e.ts, note: p.note || '', refSeq: refSeqNumber(p.refSeq) }); break;
-      case 'escalate': run.escalates.push({ seq: e.seq, ts: e.ts, ticket: p.ticket, note: p.note || '' }); break;
+      case 'escalate': {
+        // 升级是票级事实：即使该票从未派发/结算也进票清单，否则升级历史在票页永远渲染不出。
+        ticketOf(p.ticket);
+        run.escalates.push({ seq: e.seq, ts: e.ts, ticket: p.ticket, note: p.note || '' });
+        break;
+      }
       case 'close': run.close = { seq: e.seq, ts: e.ts, outcome: p.outcome, note: p.note || '' }; break;
       case 'final': {
         // run 级终审裁决：无 ticket，runId 必选（事件驱动审计与平台证据核验的唯一锚点）。
