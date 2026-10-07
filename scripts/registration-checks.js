@@ -319,6 +319,7 @@ module.exports = {
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
   checkDispatchScriptFiles,
+  checkPartialDeliveryContinuation,
 };
 
 // —— 票 02 断锚：typed gate 派发形态（8 条）。检查器吃 SKILL.md / agents/coder.md
@@ -695,6 +696,17 @@ function checkPureVerdictGateAndRepair(skillText) {
     }
   }
   return problems;
+}
+
+// 阶段性交付的最小文本自检：只检查续跑约定在场，不裁定模型是否遵守。
+function checkPartialDeliveryContinuation(skillText) {
+  const section = sectionBetween(skillText, '### Partial delivery', '### User abandonment');
+  if (section === null) return ['SKILL.md is missing the "### Partial delivery" section'];
+  return missingAnchors(
+    normalizeWhitespace(section),
+    ['unsealed', 'tracker snapshot', 'findings', 'final sync', 'Cold resume'],
+    (anchor) => `SKILL.md partial delivery is missing the continuation anchor: ${anchor}`
+  );
 }
 
 // —— 断锚 8：第五套无隔离修复简报存在且零报告职责；无隔离简报只剩修复收尾职责。
