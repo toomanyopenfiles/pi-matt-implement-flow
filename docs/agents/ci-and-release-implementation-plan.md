@@ -374,3 +374,6 @@ Workflow 文件不能单独禁止合并，需要 GitHub 规则配合。
   删除可选 `npm test`（安装包不含测试文件，该指引无效）。
 - 待办：发布门负向验收（release.yml 失败不进收尾）在 PR 合并后做；人工发布向导（wizard）与
   正式发版授权另行确认。
+- 追记（同日）：发布门负向验收已完成（失败候选 → pack/package-regression/finalize 全 skipped，
+  run 37680969944 / 37680982235）；人工发布向导已生成 `.scratch/release-0.4.0-wizard.sh`（8 stage）；
+  审计票清单缺口经用户裁定修进 0.4.0（票清单 = 事件触及 ∪ 票文件）。

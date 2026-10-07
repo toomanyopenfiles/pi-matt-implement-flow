@@ -205,10 +205,19 @@ function loadTicketFiles(runtimeDir, repoPath, run, tickets, ctx) {
     ? path.join(resolvePayloadPath(repoPath, path.dirname(specPath)), 'issues')
     : path.join(repoPath, '.scratch', slug, 'issues');
   const files = fs.existsSync(issuesDir) ? fs.readdirSync(issuesDir).filter((f) => f.endsWith('.md')).sort() : [];
+  // 票文件是票集真相的一部分：完全未开工（零事件）的票也进票清单——否则放弃/阶段性交付
+  // 的 run 会漏掉从未派发的未完成票（台账票表显示它们，报告也必须显示）。
+  const byNum = new Map();
+  for (const f of files) {
+    const m = f.match(/^(\d+)-/);
+    if (!m) continue;
+    const id = m[1].padStart(2, '0');
+    if (!byNum.has(id)) byNum.set(id, f);
+    if (!tickets.has(id)) tickets.set(id, emptyTicket(id));
+  }
   for (const t of tickets.values()) {
-    const prefix = `${String(t.id).padStart(2, '0')}-`;
-    const hit = files.find((f) => f.startsWith(prefix));
-    if (!hit) { warn(ctx.warnings, 'ticket-file-missing', T('warn.ticket-file-missing', { id: t.id, dir: issuesDir, prefix })); continue; }
+    const hit = byNum.get(String(t.id).padStart(2, '0'));
+    if (!hit) { warn(ctx.warnings, 'ticket-file-missing', T('warn.ticket-file-missing', { id: t.id, dir: issuesDir, prefix: `${String(t.id).padStart(2, '0')}-` })); continue; }
     const abs = path.join(issuesDir, hit);
     t.file = abs;
     const content = readText(abs, { max: 64 * 1024 });
@@ -820,8 +829,9 @@ function collect({ runtimeDir, lang }) {
       .map((r) => ({ ...r, source: 'scan', verdict: (r.structuredValue && r.structuredValue.verdict) || null }));
   }
 
-  const ticketList = [...tickets.values()].sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+  // 票文件先于票清单快照加载：零事件的未开工票会补进票集，排序与渲染一并覆盖。
   loadTicketFiles(runtimeDir, repoPath, run, tickets, ctx);
+  const ticketList = [...tickets.values()].sort((a, b) => String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
 
   // 评审材料包与问题清单；有路径但读不到时告警（spec：证据缺失必须标注而非静默）
   const bundles = {};

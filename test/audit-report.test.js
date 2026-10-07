@@ -1358,3 +1358,39 @@ test('collect + render：仅升级未派发的票进票清单，升级历史在�
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// 回归（用户裁定修进 0.4.0 的缺口）：完全未开工（零事件）的票文件也必须进票清单——
+// 否则放弃/阶段性交付 run 的审计报告会漏列从未派发的未完成票（台账票表显示它们）。
+test('collect + render：零事件的未开工票文件进票清单，放弃 run 不漏未完成票', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-untouched-'));
+  try {
+    const repo = path.join(dir, 'repo');
+    const runtimeDir = path.join(repo, '.pi', 'matt-implement', 'demo');
+    fs.mkdirSync(path.join(repo, '.scratch', 'demo', 'issues'), { recursive: true });
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.mkdirSync(path.join(repo, '.git'));
+    fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'spec.md'), '# demo spec\n');
+    fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'issues', '01-first.md'), '# 01: 第一张票\n\n做一件事。\n\n**Blocked by:** —\n');
+    fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'issues', '02-second.md'), '# 02: 从未开工的票\n\n**Blocked by:** —\n');
+    const ts = (i) => new Date(Date.UTC(2026, 8, 18, 3, i, 0)).toISOString();
+    const events = [
+      { v: 3, seq: 1, ts: ts(0), head: 'aa0', type: 'init', payload: { branch: 'feat/demo', branchBase: 'main', baselineSha: 'aa0000', spec: '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local' } },
+      { v: 3, seq: 2, ts: ts(1), head: 'aa0', type: 'close', payload: { outcome: 'abandoned', note: 'ABANDON_WITH_UNTOUCHED' } },
+    ];
+    fs.writeFileSync(path.join(runtimeDir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+    const model = collect({ runtimeDir });
+    assert.deepEqual(model.tickets.map((t) => t.id), ['01', '02'], '票清单 = 事件触及 ∪ 票文件');
+    assert.equal(model.tickets[1].title, '从未开工的票', '票文件标题照常加载');
+    const out = path.join(dir, 'report');
+    renderAll(model, out, null);
+    for (const [page, title] of [['ticket-01.html', '第一张票'], ['ticket-02.html', '从未开工的票']]) {
+      const html = fs.readFileSync(path.join(out, page), 'utf8');
+      assert.ok(html.includes(title), `${page} 含票题`);
+    }
+    const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+    assert.ok(index.includes('ticket-02.html'), '票表链接未开工票页');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

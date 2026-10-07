@@ -72,6 +72,9 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   instead of crashing the report.
 - A ticket that was only handed off (escalated) — never implemented — now shows up in the
   audit report's ticket list with its hand-off history, instead of being left out entirely.
+- The audit report now lists every ticket of the run, including tickets that were never
+  started. Previously a run you abandoned or partly delivered could show fewer unfinished
+  tickets than the run's ledger did.
 
 ## [0.3.1] - 2026-10-03
 ### Added
