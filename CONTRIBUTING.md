@@ -9,6 +9,14 @@ implementation stage of [Matt Pocock's engineering flow](https://github.com/matt
 - Requirements: Node.js (for the scripts and tests), [pi](https://github.com/earendil-works/pi) with
   the [pi-subagents](https://github.com/nicobailon/pi-subagents) package.
 - Run the test suite: `npm test` (plain `node --test test/*.test.js`, no build step, no install needed).
+- Test layers (all inside `npm test`, all also run in CI): **unit/integration** (pure logic in
+  `scripts/` and `audit-report/`), **CLI black-box** (real `node` subprocesses on temporary git repos
+  with a stateful `gh`/`glab` PATH stub), **static contracts** (SKILL/agent/dispatch wording guards —
+  not behavioral evidence), and **package system** (a real `npm pack` tarball is unpacked outside the
+  repo and the packaged CLI runs five representative scenarios). `npm run test:package` runs just the
+  package-system layer for focused debugging; CI only ever runs `npm test` so no suite runs twice.
+  The coverage matrix (what is proven where, and what is explicitly *not* proven) lives in
+  [`docs/agents/regression-coverage.md`](./docs/agents/regression-coverage.md).
 - Test layout: every test lives under `test/` (fixtures in `test/fixtures/`), named after what it
   covers — `<module>.test.js` for a module in `scripts/` or `audit-report/`, `<sub-command>-cli.test.js`
   for a CLI black-box suite. `test/repro-*.js` are manual acceptance probes (`npm run repro`, real model

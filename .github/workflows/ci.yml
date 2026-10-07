@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# PR 按 PR ID 串行、新提交取消旧运行；main 合并后验证与手动验证互不取消。
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      # 记录工具链与架构，避免从本地环境继承隐性假设（macos-15 为 arm64）。
+      - name: Record toolchain
+        run: |
+          node --version
+          npm --version
+          git --version
+          uname -sm
+
+      # 无依赖安装：仓库无 lockfile、无构建步骤；测试自带 fixture，包级测试自带 npm pack。
+      # 一套入口覆盖四层：单元/集成、CLI 黑盒、静态合同、包级系统（tarball 解包回归）。
+      # 真实模型探针（test/repro-*.js）不在 npm test 内，也不在 CI 内。
+      - name: Run full test suite
+        run: npm test
+
+  # 稳定的必需检查名（main 规则引用它）。显式要求全部必需 job 为 success：
+  # 失败、取消、缺失或跳过都不能让它通过（always() + 逐项结果校验）。
+  ci-success:
+    name: ci-success
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [test]
+    if: ${{ always() }}
+    steps:
+      - name: Require all mandatory jobs to succeed
+        run: |
+          echo "test result: ${{ needs.test.result }}"
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "所有必需检查必须为 success（失败/取消/跳过都不得放行）"
+            exit 1
+          fi

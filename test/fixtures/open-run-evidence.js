@@ -5,7 +5,9 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const LEDGER = path.resolve(__dirname, '../../scripts/ledger.js');
+// 被测脚本路径可注入：包级系统回归以 MATT_IMPLEMENT_LEDGER 指到 tarball 解包出的
+// 包内 scripts/ledger.js（测试专用开关，非生产钩子）。
+const LEDGER = process.env.MATT_IMPLEMENT_LEDGER || path.resolve(__dirname, '../../scripts/ledger.js');
 
 // #16：真实 git baseline + CLI init；env 只保留调用方既有的 PATH 桩环境。
 function initOpenRun(f, env) {

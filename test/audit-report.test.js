@@ -1280,3 +1280,81 @@ test('collect + render + report CLI：anomaly 是历史而非当前故障，note
     fx.cleanup();
   }
 });
+
+// 回归（包级系统回归场景 5 揭示的产品缺陷）：旧记录/最小事件的 verdict 无 revRunId、
+// fix 无 resumeRunId、dispatch 无 runId——运行证据卡必须如实降级「运行引用未记录」，
+// 不崩溃、不伪造证据。双语同口径。
+test('collect + render：事件缺 runId/revRunId/resumeRunId → 运行证据卡降级「未记录」，不崩溃', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-norunid-'));
+  try {
+    const repo = path.join(dir, 'repo');
+    const runtimeDir = path.join(repo, '.pi', 'matt-implement', 'demo');
+    fs.mkdirSync(path.join(repo, '.scratch', 'demo', 'issues'), { recursive: true });
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.mkdirSync(path.join(repo, '.git'));
+    fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'spec.md'), '# demo spec\n');
+    fs.writeFileSync(
+      path.join(repo, '.scratch', 'demo', 'issues', '01-first.md'),
+      '# 01: 第一张票\n\n做一件事。\n\n**Blocked by:** —\n',
+    );
+    const ts = (i) => new Date(Date.UTC(2026, 8, 18, 3, i, 0)).toISOString();
+    const events = [
+      { v: 1, seq: 1, ts: ts(0), head: 'aa0', type: 'init', payload: { branch: 'feat/demo', branchBase: 'main', baselineSha: 'aa0000', spec: '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local' } },
+      { v: 1, seq: 2, ts: ts(1), head: 'aa0', type: 'dispatch', payload: { ticket: '01', key: 't-01' } },
+      { v: 1, seq: 3, ts: ts(2), head: 'aa0', type: 'settled', payload: { ticket: '01', round: 1, headSha: 'bb1111' } },
+      { v: 1, seq: 4, ts: ts(3), head: 'aa0', type: 'verdict', payload: { ticket: '01', round: 1, verdict: 'changes_requested' } },
+      { v: 1, seq: 5, ts: ts(4), head: 'aa0', type: 'fix', payload: { ticket: '01', fixNo: 1, key: 'fix-01-r1' } },
+      { v: 1, seq: 6, ts: ts(5), head: 'aa0', type: 'verdict', payload: { ticket: '01', round: 2, verdict: 'approved' } },
+      { v: 1, seq: 7, ts: ts(6), head: 'aa0', type: 'merge', payload: { ticket: '01', headSha: 'bb1111', mergeSha: 'cc2222' } },
+    ];
+    fs.writeFileSync(path.join(runtimeDir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+    const expectations = [
+      ['zh', /运行引用未记录（事件未携带 runId）——无可核验证据/],
+      ['en', /Run reference not recorded \(event carries no runId\) — no evidence to verify/],
+    ];
+    for (const [lang, notRecorded] of expectations) {
+      const model = collect({ runtimeDir, lang });
+      const out = path.join(dir, `report-${lang}`);
+      renderAll(model, out, null);
+      const page = fs.readFileSync(path.join(out, 'ticket-01.html'), 'utf8');
+      // dispatch × 1 + verdict × 2 + fix × 1：四处缺 runId 的运行卡都如实降级
+      const hits = page.match(new RegExp(notRecorded.source, 'g')) ?? [];
+      assert.equal(hits.length, 4, `${lang}：四处缺 runId 的运行卡都如实降级`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 回归（包级系统回归场景 5 揭示的产品缺陷）：仅被 escalate 触及的票必须进票清单——
+// 升级是票级事实；否则该票的升级历史在票页永远渲染不出（renderTicket 按 t.id 过滤）。
+test('collect + render：仅升级未派发的票进票清单，升级历史在票页可见', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-escalate-only-'));
+  try {
+    const repo = path.join(dir, 'repo');
+    const runtimeDir = path.join(repo, '.pi', 'matt-implement', 'demo');
+    fs.mkdirSync(path.join(repo, '.scratch', 'demo', 'issues'), { recursive: true });
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.mkdirSync(path.join(repo, '.git'));
+    fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'spec.md'), '# demo spec\n');
+    fs.writeFileSync(path.join(repo, '.scratch', 'demo', 'issues', '02-second.md'), '# 02: 第二张票\n\n**Blocked by:** —\n');
+    const ts = (i) => new Date(Date.UTC(2026, 8, 18, 3, i, 0)).toISOString();
+    const events = [
+      { v: 1, seq: 1, ts: ts(0), head: 'aa0', type: 'init', payload: { branch: 'feat/demo', branchBase: 'main', baselineSha: 'aa0000', spec: '.scratch/demo/spec.md', testCommand: 'npm test', tracker: 'local' } },
+      { v: 1, seq: 2, ts: ts(1), head: 'aa0', type: 'escalate', payload: { ticket: '02', note: 'ESCALATE_ONLY_REASON' } },
+    ];
+    fs.writeFileSync(path.join(runtimeDir, 'events.jsonl'), events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+    const model = collect({ runtimeDir });
+    const t2 = model.tickets.find((t) => t.id === '02');
+    assert.ok(t2, '仅被 escalate 触及的票也在票清单');
+    assert.equal(t2.title, '第二张票', '票文件标题照常加载');
+    const out = path.join(dir, 'report');
+    renderAll(model, out, null);
+    const page = fs.readFileSync(path.join(out, 'ticket-02.html'), 'utf8');
+    assert.match(page, /ESCALATE_ONLY_REASON/, '升级历史在票页可见');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

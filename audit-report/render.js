@@ -360,6 +360,11 @@ ${renderGlossary(model, T)}`;
 // ---------------------------------------------------------------- 票页
 
 function runSummaryCard(model, ref, T) {
+  // 旧记录/最小事件可以不带 runId（verdict 无 revRunId、fix 无 resumeRunId、dispatch 无 runId）：
+  // 如实降级为「未记录」，不崩溃也不伪造证据。
+  if (!ref.runId) {
+    return `<div class="card"><div class="card-label">${T('run.evidence')}</div><div class="card-value muted">${T('run.notRecorded')}</div></div>`;
+  }
   const c = model.childRuns[ref.runId];
   if (!c || !c.found) {
     return `<div class="card"><div class="card-label">${T('run.evidence')}</div><div class="card-value muted">${T('run.missing', { run: esc(ref.runId.slice(0, 8)) })}</div></div>`;
