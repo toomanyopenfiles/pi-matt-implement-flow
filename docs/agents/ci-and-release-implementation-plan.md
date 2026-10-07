@@ -352,3 +352,25 @@ Workflow 文件不能单独禁止合并，需要 GitHub 规则配合。
 - 免费额度：https://docs.github.com/en/billing/reference/product-usage-included
 
 相关本仓文档：`CONTEXT.md`、`docs/adr/0009-prompt-driven-repair-and-run-continuation.md`、`docs/agents/prompt-driven-scenario-acceptance.md`。已有场景证据只作历史背景，不执行归档workflow脚本作为新的run。
+
+---
+
+## 附录：实施状态（2026-10-08，阶段 A–F 推进记录）
+
+- 阶段 A：`docs/agents/regression-coverage.md` 已建（矩阵 + 基线 483/483 + 边界分类）。
+- 阶段 B：包清单检查 + 包级系统回归 5 场景已落（`test/package-*.test.js`），套件 495/495。
+  揭示并修复两个 audit-report 缺陷（缺 runId 崩溃、仅升级票丢失）；另发现"完全未开工票
+  不进审计票清单"边界，待用户决策。
+- 阶段 C：`.github/workflows/ci.yml` 落地，PR #20 首跑双平台绿（macos-15 arm64 / ubuntu-24.04 x86_64，
+  Node 24）。npm test 一套入口（含包级），CI 不重复跑。
+- 阶段 D：main 规则集已建（PR 必需 + `ci-success` 必需 + 严格最新 + 禁 force push/删分支；
+  bypass 空，`current_user_can_bypass: never`）。负向验收已做：受控失败 PR #21 → `ci-success` fail +
+  `mergeStateStatus: BLOCKED` + `gh pr merge` 拒绝（"base branch policy prohibits the merge"），随后关闭删除。
+- 阶段 E：`.github/workflows/release.yml` 两段式（verify-and-pack / finalize）。
+  **用户裁定偏离计划的 OIDC 方案**：npm publish 由维护者人工执行，自动化只做验证、tarball、
+  tag 与 GitHub Release；finalize 用确定性重打包摘要与 `npm dist.shasum` 比对（不只看版本存在）。
+  因此不使用 npm Trusted Publishing / 发布环境 / OIDC。
+- 阶段 F：版本 0.4.0、CHANGELOG 小节（2026-10-08，发布日期若推迟需改）、双语 README 安装章节
+  删除可选 `npm test`（安装包不含测试文件，该指引无效）。
+- 待办：发布门负向验收（release.yml 失败不进收尾）在 PR 合并后做；人工发布向导（wizard）与
+  正式发版授权另行确认。

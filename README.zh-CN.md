@@ -52,12 +52,6 @@ tracker 不是开关——它来自 `/setup-matt-pocock-skills` 写进仓库的�
 pi install npm:pi-matt-implement-flow
 ```
 
-可选：跑一遍自检，确认安装完好：
-
-```sh
-npm test
-```
-
 ## 快速上手
 
 1. **一次性配置**——装好 pi、pi-subagents 和 Matt Pocock 的 engineering skills，然后在你的仓库里跑一次 `/setup-matt-pocock-skills`。
