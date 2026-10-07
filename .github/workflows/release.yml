@@ -1,0 +1,241 @@
+name: Release
+
+# 候选发布（两段式，workflow_dispatch 启动，候选 = 启动时的 ${{ github.sha }}，须在 main 历史）：
+#   verify-and-pack（默认）：候选检查 → 两平台全量测试 → 生成唯一 tarball → 对该 tarball 跑
+#     包级回归 → 输出摘要与人工发布指引。**npm publish 由维护者人工执行**（本工作流不发布）。
+#   finalize：人工 npm publish 之后补缺失步骤——重验候选与测试、核对 npm 上的产物摘要与
+#     重打包一致、创建 tag 与 GitHub Release（已存在则跳过，安全重入）。
+# 两段都跑全部必需验证（不信任过去的绿色记录）；无任何跳过测试的输入或旗标；
+# 验证失败/取消/缺失时后续任务一律不执行（needs 全 success）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 'verify-and-pack = 验证并产出待发布的 tarball；finalize = 人工 npm publish 后补 tag 与 GitHub Release'
+        type: choice
+        options: [verify-and-pack, finalize]
+        default: verify-and-pack
+
+permissions:
+  contents: read
+
+# 发布串行且不被新触发取消。
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  PKG_NAME: pi-matt-implement-flow
+
+jobs:
+  candidate-check:
+    name: candidate-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Candidate must be on main
+        run: |
+          git fetch -q origin main
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "候选 ${{ github.sha }} 不在 main 历史——拒绝"
+            exit 1
+          fi
+
+      - name: Version format and changelog section
+        id: meta
+        run: node .github/scripts/release-candidate.js
+
+      # tag 只是版本标记：已存在且指向候选 = 重入路径（放行，finalize 只补缺失步骤）；
+      # 指向别处 = 矛盾，拒绝。
+      - name: Tag conflict check
+        run: |
+          TAG="v${{ steps.meta.outputs.version }}"
+          EXISTING=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
+          if [ -z "$EXISTING" ]; then
+            echo "tag $TAG 不存在——由 finalize 在人工 npm publish 成功后创建"
+          elif [ "$EXISTING" = "${{ github.sha }}" ]; then
+            echo "tag $TAG 已指向候选——重入路径"
+          else
+            echo "tag $TAG 已存在且指向 $EXISTING（非候选）——拒绝"
+            exit 1
+          fi
+
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Record toolchain
+        run: |
+          node --version
+          npm --version
+          git --version
+          uname -sm
+
+      - name: Run full test suite
+        run: npm test
+
+  # 唯一 tarball：只打一次，跨 job 传递并核验摘要。包级回归消费同一产物；
+  # 人工发布也必须使用这个产物（摘要在运行摘要里给出）。
+  pack:
+    name: pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [candidate-check, verify]
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+      sha1: ${{ steps.pack.outputs.sha1 }}
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Pack the candidate once
+        id: pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/dist"
+          TARBALL=$(npm pack --pack-destination "$RUNNER_TEMP/dist" --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s)[0].filename))')
+          SHA256=$(shasum -a 256 "$RUNNER_TEMP/dist/$TARBALL" | cut -d" " -f1)
+          SHA1=$(shasum -a 1 "$RUNNER_TEMP/dist/$TARBALL" | cut -d" " -f1)
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "sha1=$SHA1" >> "$GITHUB_OUTPUT"
+          {
+            echo "### tarball（人工发布用这个产物）"
+            echo ""
+            echo "- 文件：\`$TARBALL\`（本运行 Artifacts 区下载）"
+            echo "- sha256：\`$SHA256\`"
+            echo "- sha1（= npm dist.shasum 核对值）：\`$SHA1\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/dist/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  package-regression:
+    name: package-regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: [pack]
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Download the tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/dist
+
+      - name: Verify tarball digest against the pack job
+        run: |
+          ACTUAL=$(shasum -a 256 "$RUNNER_TEMP/dist/${{ needs.pack.outputs.tarball }}" | cut -d" " -f1)
+          if [ "$ACTUAL" != "${{ needs.pack.outputs.sha256 }}" ]; then
+            echo "tarball 摘要不符（$ACTUAL ≠ ${{ needs.pack.outputs.sha256 }}）——拒绝"
+            exit 1
+          fi
+
+      - name: Package-level regression against the exact tarball
+        run: MATT_IMPLEMENT_TARBALL="$RUNNER_TEMP/dist/${{ needs.pack.outputs.tarball }}" npm run test:package
+
+  # 人工 npm publish 之后的收尾：核对 npm 产物摘要与重打包一致（不是只看版本存在），
+  # 然后补 tag 与 GitHub Release；已存在则跳过（安全重入）。
+  finalize:
+    name: finalize
+    if: ${{ inputs.phase == 'finalize' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [candidate-check, verify]
+    permissions:
+      contents: write
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Re-pack deterministically and match npm's published digest
+        run: |
+          VERSION="${{ needs.candidate-check.outputs.version }}"
+          mkdir -p "$RUNNER_TEMP/dist"
+          TARBALL=$(npm pack --pack-destination "$RUNNER_TEMP/dist" --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s)[0].filename))')
+          LOCAL_SHA1=$(shasum -a 1 "$RUNNER_TEMP/dist/$TARBALL" | cut -d" " -f1)
+          REMOTE_SHA1=$(npm view "$PKG_NAME@$VERSION" dist.shasum 2>/dev/null || true)
+          if [ -z "$REMOTE_SHA1" ]; then
+            echo "npm 上没有 $PKG_NAME@$VERSION——请先人工执行 npm publish（verify-and-pack 运行产物），再跑 finalize"
+            exit 1
+          fi
+          if [ "$REMOTE_SHA1" != "$LOCAL_SHA1" ]; then
+            echo "npm 上的产物摘要与候选重打包不一致（$REMOTE_SHA1 ≠ $LOCAL_SHA1）——拒绝收尾"
+            exit 1
+          fi
+          echo "npm 产物摘要与候选一致：$LOCAL_SHA1"
+
+      - name: Tag the candidate and create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.candidate-check.outputs.version }}"
+          TAG="v$VERSION"
+          node .github/scripts/release-candidate.js --notes-out "$RUNNER_TEMP/notes.md"
+          EXISTING=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
+          if [ -z "$EXISTING" ]; then
+            git tag "$TAG" "${{ github.sha }}"
+            git push origin "refs/tags/$TAG"
+          elif [ "$EXISTING" = "${{ github.sha }}" ]; then
+            echo "tag $TAG 已指向候选（重入）"
+          else
+            echo "tag $TAG 指向 $EXISTING（非候选）——拒绝"
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "GitHub Release $TAG 已存在（重入）：不重复创建"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+          fi
+          echo "收尾完成：npm $PKG_NAME@$VERSION（人工发布）· tag $TAG · ${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG"
