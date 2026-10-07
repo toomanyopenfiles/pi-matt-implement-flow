@@ -24,6 +24,9 @@ implementation stage of [Matt Pocock's engineering flow](https://github.com/matt
 - Orientation for agents and humans alike: [`AGENTS.md`](./AGENTS.md) points at the issue-tracker
   setup, the triage label vocabulary, and the domain docs; [`CONTEXT.md`](./CONTEXT.md) holds the
   glossary and the flow's vocabulary.
+- Dogfooding a pre-release locally: [`dev/dogfood-update.sh`](./dev/dogfood-update.sh) rolls a packed
+  tarball into a fixed local mirror directory (one-time `pi install`, per-release update, instant
+  rollback — see the script header).
 
 ## Reporting bugs
 
