@@ -277,6 +277,7 @@ test('包级场景 5 · 旧记录：build/check 只读兼容（close 无 outcome
   const { head, merge } = mergeTicket(f, '01');
   writeTicketFile(f.dir, '01', '自检基线', { status: 'resolved' });
   writeTicketFile(f.dir, '02', 'README 速览', { status: 'escalated', blockedBy: '01' });
+  writeTicketFile(f.dir, '03', '未开工票', { status: 'ready-for-agent', blockedBy: '01' });
   // 手写工具升级前的旧账：v=1 信封、init 带历史预算、无 final、close 无 outcome。
   const ts = (i) => new Date(Date.UTC(2026, 8, 18, 3, i, 0)).toISOString();
   const legacy = [
@@ -325,8 +326,10 @@ test('包级场景 5 · 旧记录：build/check 只读兼容（close 无 outcome
       assert.match(html, legacyText, `${lang}/${page} 不猜旧 close 的历史意图`);
       assert.match(html, /旧封账/, `${lang}/${page} 旧 close note 原文可见`);
     }
-    // 票文件引用可达：票页存在且带票题（快照/票文件被真实读取，不是空壳报告）。
+    // 票文件引用可达：票页存在且带票题（快照/票文件被真实读取，不是空壳报告）；
+    // 零事件的未开工票也进票清单（放弃 run 不漏未完成票）。
     assert.match(fs.readFileSync(path.join(out, 'ticket-01.html'), 'utf8'), /自检基线/, `${lang} 票 01 页面引用票文件标题`);
     assert.match(fs.readFileSync(path.join(out, 'ticket-02.html'), 'utf8'), /README 速览/, `${lang} 票 02 页面引用票文件标题`);
+    assert.match(fs.readFileSync(path.join(out, 'ticket-03.html'), 'utf8'), /未开工票/, `${lang} 未开工票也进票清单`);
   }
 });
