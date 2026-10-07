@@ -17,6 +17,7 @@
 #       回滚到指定备份；缺省回滚到最近一次备份。
 #
 # 镜像路径默认 ~/.pi/agent/dogfood/pi-matt-implement-flow，可用 DOGFOOD_MIRROR 覆盖。
+# 相对路径在启动时按调用时目录钉死为绝对路径（镜像路径即 pi 包身份，不随 cwd 漂移）。
 # 备份保存在镜像同级 backups/ 下，最多保留 5 份。
 # 换镜像后开新的 pi 会话生效（进行中的会话继续跑旧代码）。
 # 本脚本是仓库开发工具，不随 npm 包发布。
@@ -24,8 +25,23 @@
 set -euo pipefail
 
 PKG_NAME="pi-matt-implement-flow"
-MIRROR="${DOGFOOD_MIRROR:-$HOME/.pi/agent/dogfood/pi-matt-implement-flow}"
-BACKUP_DIR="${DOGFOOD_BACKUP_DIR:-$(dirname "$MIRROR")/backups}"
+# 路径归一化：相对值按调用时 cwd 钉死为绝对路径；父目录已存在时进一步消除 . / .. 段。
+abspath() {
+  local p="$1" dir
+  case "$p" in
+    /*) : ;;
+    *) p="$PWD/$p" ;;
+  esac
+  dir=$(dirname "$p")
+  if [ -d "$dir" ]; then
+    printf '%s/%s\n' "$(cd "$dir" && pwd)" "$(basename "$p")"
+  else
+    printf '%s\n' "$p"
+  fi
+}
+
+MIRROR="$(abspath "${DOGFOOD_MIRROR:-$HOME/.pi/agent/dogfood/pi-matt-implement-flow}")"
+BACKUP_DIR="$(abspath "${DOGFOOD_BACKUP_DIR:-$(dirname "$MIRROR")/backups}")"
 KEEP_BACKUPS=5
 
 usage() {
