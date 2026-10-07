@@ -314,11 +314,12 @@ module.exports = {
   checkNoReportBans,
   checkGateCommandFlags,
   checkHardRulesRetained,
-  checkPureVerdictGateAndEscalation,
+  checkPureVerdictGateAndRepair,
   checkNoIsolationBriefs,
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
   checkDispatchScriptFiles,
+  checkPartialDeliveryContinuation,
 };
 
 // —— 票 02 断锚：typed gate 派发形态（8 条）。检查器吃 SKILL.md / agents/coder.md
@@ -656,7 +657,6 @@ function checkHardRulesRetained(skillText) {
     normalized,
     [
       'ticket-NN',
-      'Fix budget then escalate',
       'blocked',
       'approved',
       'Never hand-write or edit the ledger or the event stream',
@@ -666,8 +666,8 @@ function checkHardRulesRetained(skillText) {
 }
 
 // —— 断锚 7：无隔离修复者（集成修复者 / 终审修复者）挂纯判定 gate
-//（command + timeoutMs，无 output/schema）+ 连红 2 次停下升级给用户。
-function checkPureVerdictGateAndEscalation(skillText) {
+//（command + timeoutMs，无 output/schema）；继续/暂停归共享修复原则，不守护旧次数停线。
+function checkPureVerdictGateAndRepair(skillText) {
   const problems = [];
   const pureGateAnchor = `gate: { command: "<testCommand>", timeoutMs: ${GATE_VERIFY_TIMEOUT_MS} }`;
   for (const [name, start, end] of [
@@ -688,13 +688,25 @@ function checkPureVerdictGateAndEscalation(skillText) {
         problems.push(`SKILL.md ${name} pure-verdict gate must not carry output/schema: gate: {${body}}`);
       }
     }
-    for (const anchor of ['two consecutive reds', 'escalate to the user']) {
-      if (!normalized.includes(anchor)) {
-        problems.push(`SKILL.md ${name} section is missing the escalation anchor: ${anchor}`);
-      }
+    if (!normalized.includes('Repair decisions')) {
+      problems.push(`SKILL.md ${name} section is missing the Repair decisions pointer`);
+    }
+    if (/two consecutive reds/i.test(normalized)) {
+      problems.push(`SKILL.md ${name} section still carries the retired two-red stop rule`);
     }
   }
   return problems;
+}
+
+// 阶段性交付的最小文本自检：只检查续跑约定在场，不裁定模型是否遵守。
+function checkPartialDeliveryContinuation(skillText) {
+  const section = sectionBetween(skillText, '### Partial delivery', '### User abandonment');
+  if (section === null) return ['SKILL.md is missing the "### Partial delivery" section'];
+  return missingAnchors(
+    normalizeWhitespace(section),
+    ['unsealed', 'tracker snapshot', 'findings', 'final sync', 'Cold resume'],
+    (anchor) => `SKILL.md partial delivery is missing the continuation anchor: ${anchor}`
+  );
 }
 
 // —— 断锚 8：第五套无隔离修复简报存在且零报告职责；无隔离简报只剩修复收尾职责。

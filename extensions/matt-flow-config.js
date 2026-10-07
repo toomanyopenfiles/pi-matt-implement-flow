@@ -2,8 +2,8 @@
 // 两个配置面：
 //   1. 三 agent（coder / reviewer / final-reviewer）的 model / thinking 覆盖
 //      （subagents.agentOverrides）；
-//   2. 流程开关（settings 顶层自定义节 mattImplementFlow：reviewer / maxFixRounds /
-//      maxConcurrent）——本包私有，不碰任何平台键；生效语义是 init 快照。
+//   2. 流程开关（settings 顶层自定义节 mattImplementFlow：reviewer / maxConcurrent）
+//      ——本包私有，不碰任何平台键；生效语义是 init 快照。
 // 纯 ctx.ui 菜单流，不经过大模型；文案全英文（用户要求）。
 //
 // 生效语义（源码核实）：pi-subagents 每次
@@ -136,13 +136,6 @@ async function runConfigureFlow(ctx, paths) {
       ),
     },
     {
-      value: 'maxFixRounds',
-      label: label(
-        `maxFixRounds (currently ${current.maxFixRounds} [${sources.maxFixRounds}])`,
-        'fix attempts per ticket; only meaningful when reviewer=on',
-      ),
-    },
-    {
       value: 'maxConcurrent',
       label: label(
         `maxConcurrent (currently ${current.maxConcurrent} [${sources.maxConcurrent}])`,
@@ -164,15 +157,10 @@ async function runConfigureFlow(ctx, paths) {
     if (!picked) return;
     patchValue = picked.startsWith('on');
   } else {
-    const max = key === 'maxFixRounds' ? 5 : 6;
     const def = FLOW_DEFAULTS[key];
     const choices = [];
-    for (let n = 1; n <= max; n++) choices.push(n === def ? `${n} (default)` : String(n));
-    const title =
-      key === 'maxFixRounds'
-        ? 'Fix attempts per ticket (only meaningful when reviewer=on)'
-        : 'Parallel coders (/pi-matt-implement-flow <N> wins)';
-    const picked = await ctx.ui.select(title, choices);
+    for (let n = 1; n <= 6; n++) choices.push(n === def ? `${n} (default)` : String(n));
+    const picked = await ctx.ui.select('Parallel coders (/pi-matt-implement-flow <N> wins)', choices);
     if (!picked) return;
     patchValue = parseInt(picked, 10);
   }
@@ -355,12 +343,12 @@ export default function (pi) {
         else {
           const action = await ctx.ui.select('matt-flow-config', [
             'Configure a role (model / thinking)',
-            'Configure flow options (reviewer / fix budget / concurrency)',
+            'Configure flow options (reviewer / concurrency)',
             'Show current effective configuration',
             "Clear a role's overrides",
           ]);
           if (action === 'Configure a role (model / thinking)') await runConfigure(ctx, paths);
-          else if (action === 'Configure flow options (reviewer / fix budget / concurrency)') await runConfigureFlow(ctx, paths);
+          else if (action === 'Configure flow options (reviewer / concurrency)') await runConfigureFlow(ctx, paths);
           else if (action === 'Show current effective configuration') await runShow(pi, ctx, paths);
           else if (action === "Clear a role's overrides") await runClear(ctx, paths);
         }

@@ -99,7 +99,7 @@ test('init（local 范本）：自动识别 local tracker，事件 payload 与�
   const events = fs.readFileSync(eventsPath, 'utf8').split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
   assert.equal(events.length, 1);
   const e = events[0];
-  assert.equal(e.v, 3, '信封版本随事件分类学（事件格式零迁移）');
+  assert.equal(e.v, 4, '信封版本随事件分类学（close outcome，旧事件不迁移）');
   assert.equal(e.seq, 1);
   assert.equal(e.type, 'init');
   assert.deepEqual(e.payload, {
@@ -114,6 +114,29 @@ test('init（local 范本）：自动识别 local tracker，事件 payload 与�
   const ledger = fs.readFileSync(path.join(f.runtime, 'ledger.md'), 'utf8');
   assert.match(ledger, /tracker: local/);
   assert.match(ledger, /state: running/);
+});
+
+test('init 拒绝退役的 --max-fix-rounds，移除后可重试且不写预算字段', (t) => {
+  const f = makeFixture(t);
+  f.git('checkout -q -b feat/demo');
+  const args = [
+    '--branch', 'feat/demo', '--branch-base', 'main', '--baseline-sha', f.baseline(),
+    '--spec', '.scratch/demo/spec.md', '--test-command', 'npm test',
+    '--reviewer', 'on', '--max-concurrent', '4',
+  ];
+  const retired = initRun(f, [...args, '--max-fix-rounds', '3']);
+  assert.equal(retired.status, 1, retired.stdout);
+  assert.match(retired.stdout, /退役.*修复次数不再限制未封账 run/);
+  assert.match(retired.stdout, /移除.*重试/);
+  assert.ok(!fs.existsSync(path.join(f.runtime, 'events.jsonl')));
+  const retry = initRun(f, args);
+  assert.equal(retry.status, 0, retry.stdout);
+  const init = JSON.parse(fs.readFileSync(path.join(f.runtime, 'events.jsonl'), 'utf8'));
+  assert.equal(Object.hasOwn(init.payload, 'maxFixRounds'), false);
+  assert.equal(init.payload.reviewer, 'on');
+  assert.equal(init.payload.maxConcurrent, '4');
+  const help = f.run(['--help']);
+  assert.doesNotMatch(help.stdout, /\[--max-fix-rounds N\]/);
 });
 
 test('init（local 范本，用户编辑过正文）：判型只依赖 H1 + 锚点，正文编辑不影响识别', (t) => {

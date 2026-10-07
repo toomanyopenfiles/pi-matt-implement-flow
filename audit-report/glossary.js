@@ -14,24 +14,24 @@ const TERMS = [
     en: 'An append-only JSONL machine-fact file: one structured event per line, stamped by script with authoritative timestamps, monotonic sequence numbers and git anchors. It is the orchestrator’s only state-writing surface, and the main data source for this report’s timeline and state machine.',
   } },
   { id: 'notes', zh: '编排笔记', en: 'orchestration notes', def: {
-    zh: '散文记忆：过程叙事、教训、维护者口头拍板等非结构化内容。「何时何事」归事件流，「为何学到什么」归编排笔记。',
-    en: 'Prose memory: process narrative, lessons learned, verbal maintainer decisions — the unstructured stuff. “When and what” belongs to the event stream; “why and what we learned” belongs to the orchestration notes.',
+    zh: '散文记忆：过程叙事、教训、待决策问题、用户决定、暂停阶段与恢复说明，并引用处置证据。笔记不替代事件、git 或正式裁决；报告不解析散文生成已授权、已恢复、已解决或已批准的结论。',
+    en: 'Prose memory for narrative, lessons, pending decisions, user decisions, pause stages and continuation context, with evidence references. Notes do not replace events, git or formal verdicts; the report does not interpret prose as authorization, resumption, resolution or approval.',
   } },
   { id: 'record', zh: '记账', en: 'record', def: {
-    zh: '编排器通过脚本向事件流写入一条事件的动作。每个状态转换（派发、结算、裁决、修复、合并、升级、封账）都要记账。',
-    en: 'The act of writing one event into the event stream via script. Every state transition (dispatch, settle, verdict, fix, merge, escalate, seal) is recorded.',
+    zh: '编排器通过脚本向事件流写入协议内结构化事实（派发、结算、裁决、修复、合并、升级、封账）的动作。人工暂停、用户决定和恢复上下文归编排笔记，不新增事件。',
+    en: 'Writing protocol facts (dispatch, settle, verdict, fix, merge, escalate, seal) into the event stream via script. Human pauses, user decisions and continuation context belong in orchestration notes, not new events.',
   } },
   { id: 'close', zh: '封账', en: 'seal', def: {
-    zh: '记账 close 事件：台账头部标记运行终结。封账后记账命令拒绝一切新事件——终结的运行不可能再被误认为进行中。',
-    en: 'Recording a close event: the ledger header marks the run as ended. After sealing, the record command rejects all new events — an ended run can never be mistaken for one in progress.',
+    zh: '记账 close 事件：台账头部标记运行终结。completed 表示正常完成。显式 abandoned 表示用户放弃，不代表代码就绪或完整交付，不完成未完成票，也不解决历史问题。旧 close 缺少 outcome 时只表示封账结果未记录，不推断正常完成或放弃。封账后记账命令拒绝一切新事件。',
+    en: 'Recording a close event: the ledger header marks the run as ended. completed records normal completion. Explicit abandoned means user abandonment, not code readiness or full delivery; it neither completes unfinished tickets nor resolves historical findings. An old close without outcome is shown as outcome not recorded, never inferred as completed or abandoned. After sealing, the record command rejects all new events.',
   } },
   { id: 'reconcile', zh: '对账', en: 'reconcile', def: {
     zh: '核验台账记录与实际世界（git、工作树、票文件状态）的差异。每次派发与合并前执行；发现漂移会逐条列出并阻断。',
     en: 'Checking ledger records against the real world (git, worktrees, ticket file state). Run before every dispatch and merge; any drift is listed item by item and blocks the step.',
   } },
   { id: 'flow-shape', zh: '流程形态', en: 'flow shape', def: {
-    zh: '一次运行的流程开关组合：是否逐票评审、每票修复预算、并发实现者数量。在运行初始化时冻结进事件流，中途改配置不影响进行中的运行。',
-    en: 'The combination of flow switches for one run: whether each ticket is reviewed, the per-ticket fix budget, and the number of concurrent coders. Frozen into the event stream at run start; mid-run config changes never affect a run in progress.',
+    zh: '一次运行的流程开关组合：是否逐票评审、并发实现者数量。在运行初始化时冻结进事件流，中途改配置不影响进行中的运行。旧修复预算值仅作历史记录，不是有效上限。',
+    en: 'The combination of flow switches for one run: whether each ticket is reviewed and the number of concurrent coders. Frozen into the event stream at run start; mid-run config changes never affect a run in progress. Old fix-budget values are historical records, not active limits.',
   } },
 
   // —— 流程环节词 ——
@@ -48,20 +48,20 @@ const TERMS = [
     en: 'The anchoring act after a coder finishes a ticket: confirm the commit exists in git truth, then record the commit SHA and worktree location into the event stream as the basis for review and merge.',
   } },
   { id: 'verdict', zh: '评审裁决', en: 'verdict', def: {
-    zh: '评审者对一票实现的结论：通过（approved）或需修改（changes_requested）。裁决与发现的问题清单一并记入事件流。',
-    en: 'A reviewer’s conclusion on one ticket’s implementation: approved or changes_requested. The verdict and its findings list are recorded into the event stream together.',
+    zh: '评审者对一票实现的完整正式结论：通过（approved）或需修改（changes_requested）。裁决与发现的问题清单一并记入事件流。正式评审轮次独立于修复次数；普通澄清或单问题撤回不替代批准。',
+    en: 'A reviewer’s complete formal conclusion on one ticket’s implementation: approved or changes_requested. The verdict and its findings list are recorded into the event stream together. Formal review rounds are independent of fix attempts; ordinary clarification or withdrawal of a single finding does not replace approval.',
   } },
   { id: 'two-axis', zh: '双轴评审', en: 'two-axis review', def: {
     zh: '评审者从两个独立视角审查：规范轴（代码是否符合仓库既有规范）与需求轴（代码是否符合票面与 spec 的要求）。两轴可各派一个只读子代理并行执行。',
     en: 'The reviewer examines from two independent angles: the standards axis (does the code follow the repo’s existing conventions) and the spec axis (does it meet the ticket and the spec). Each axis may be dispatched to its own read-only subagent in parallel.',
   } },
   { id: 'fix-round', zh: '修复轮', en: 'fix round', def: {
-    zh: '评审要求修改后，编排器把问题清单发回同一个实现者（续跑原会话）返工。每票修复轮数有预算上限（默认 2），耗尽即升级给维护者。',
-    en: 'After a review requests changes, the orchestrator sends the findings back to the same coder (resuming the original session) for rework. Each ticket has a fix-round budget (default 2); exhausting it escalates to the maintainer.',
+    zh: '处理问题的一次修复尝试，通常把问题清单发回同一个实现者（续跑原会话）返工。编号表示尝试顺序，不设次数配额；一次评审后可多次修复，也可无新增修复再正式评审。',
+    en: 'An attempt to fix a problem, usually by sending findings back to the same coder (resuming the original session). The number records attempt order, with no attempt quota; one review may be followed by multiple fixes, and a later formal review need not have a new fix.',
   } },
   { id: 'escalate', zh: '升级', en: 'escalate', def: {
-    zh: '修复预算耗尽仍未通过时，票保持未关闭状态、移交维护者裁决，不再阻塞其余票的推进。',
-    en: 'When the fix budget is exhausted without passing, the ticket stays open and is handed to the maintainer for a decision, without blocking the remaining tickets.',
+    zh: '票移交用户决策的交接历史，既不是票完成，也不满足依赖或正常封账条件，不表示永久暂停。后续合并显示完成并保留升级历史；未合并时须结合事实、编排笔记与证据核对当前行动。原因以事件原文为准，不根据修复次数或旧预算推断。',
+    en: 'The history of handing a ticket to the user for a decision: not ticket completion, dependency satisfaction, eligibility for normal sealing or a permanent pause. A later merge shows completion while keeping escalation history; without a merge, check current actions against facts, orchestration notes and evidence. Reasons come from the event, not fix counts or old budgets.',
   } },
   { id: 'integration-gate', zh: '集成测试门', en: 'integration gate', def: {
     zh: '每票合并到功能分支后立即运行全量测试套件。票级评审看不到的跨票集成问题在此暴露，红了就派无隔离修复者当场修。',
@@ -72,8 +72,8 @@ const TERMS = [
     en: 'After all tickets merge, one whole-branch two-axis review of the entire feature branch, concluding: ready / ready_with_fixes / not_ready.',
   } },
   { id: 'anomaly', zh: '异常记录', en: 'anomaly', def: {
-    zh: '编排器与校验器意见不合时的正式出路：不伪造事实、不绕过校验，把分歧原样记入事件流并停下上报。异常记录是审计的重点关注对象。',
-    en: 'The formal escape hatch when the orchestrator and the validator disagree: no faked facts, no bypassing checks — the disagreement is recorded verbatim into the event stream and escalated. Anomalies are a primary focus of the audit.',
+    zh: '协议中的不可变异常历史，可引用旧事件。处置办法与证据指针归编排笔记；历史本身不证明当前仍未解决，也不自动禁止收尾。报告保留有依据的补正或恢复标注与风险证据，无法机械核验时提示阅读笔记和证据，不从散文断言已解决；不伪造事实或绕过校验。',
+    en: 'Immutable anomaly history in the protocol, optionally referencing an earlier event. Disposition and evidence pointers belong in orchestration notes; history alone neither establishes a current unresolved issue nor automatically blocks closeout. The report keeps supported correction or recovery annotations and risk evidence, and asks readers to inspect notes and evidence when disposition cannot be checked mechanically, without treating prose as resolution or bypassing validation.',
   } },
 
   // —— 平台词 ——

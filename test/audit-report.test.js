@@ -362,15 +362,126 @@ test('collect + render 全链路：模型、风险、页面', () => {
   }
 });
 
-test('buildRunModel：无 round 的 fallback 重派发按已耗修复数归入下一轮', () => {
-  const { tickets } = buildRunModel([
-    { seq: 1, type: 'dispatch', payload: { ticket: '01', key: 't-01', runId: 'r1' } },
-    { seq: 2, type: 'fix', payload: { ticket: '01', fixNo: 1, key: 'fix-01-r1', resumeRunId: 'r1' } },
-    { seq: 3, type: 'dispatch', payload: { ticket: '01', key: 'fix-01-r1', runId: 'r2' } },
-  ]);
-  const t = tickets.get('01');
-  assert.equal(t.dispatches[0].round, 1);
-  assert.equal(t.dispatches[1].round, 2);
+test('collect：超过历史预算不再生成预算耗尽风险，其他事故与缺证据仍保留', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events[0].payload.maxFixRounds = 1;
+    for (let fixNo = 1; fixNo <= 3; fixNo++) {
+      events.push({ v: 1, seq: events.length + 1, ts: `2026-09-18T19:2${fixNo}:00.000Z`, type: 'fix', payload: { ticket: '02', fixNo, key: `fix-02-${fixNo}`, resumeRunId: '33333333-cccc-4ccc-8ccc-cccccccccccc', note: `历史修复 ${fixNo}` } });
+    }
+    events.push({ v: 1, seq: events.length + 1, ts: '2026-09-18T19:30:00.000Z', type: 'escalate', payload: { ticket: '01', note: '历史事故：预算耗尽后曾移交人工。' } });
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      assert.equal(model.run.init.maxFixRounds, 1, '历史预算值不删除');
+      assert.deepEqual(model.tickets[1].fixes.map((f) => f.fixNo), [1, 2, 3], '超出旧预算的实际修复保留');
+      assert.ok(!model.risks.some((r) => /用满预算|used up its fix-round budget/.test(r.title)), '预算不再推断为风险');
+      assert.ok(model.risks.some((r) => /验收被拒收|acceptance was rejected/.test(r.title)), '拒收事故保留');
+      assert.ok(model.risks.some((r) => /异常|anomaly/.test(r.title)), '异常事故保留');
+      assert.ok(model.risks.some((r) => /升级|escalated/.test(r.title)), '升级事故保留');
+      assert.ok(model.risks.some((r) => /证据缺失|evidence missing/.test(r.title)), '旧运行缺证据继续降级可见');
+      assert.ok(model.warnings.some((w) => w.code === 'run-evidence-missing'), '缺证据告警保留');
+      const out = path.join(fx.dir, lang);
+      renderAll(model, out, null);
+      assert.match(fs.readFileSync(path.join(out, 'index.html'), 'utf8'), /历史事故：预算耗尽后曾移交人工。/, '原始事故原因不被删改');
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original, '审计不改写旧事件行');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：双语预算只作历史记录，缺省预算不补造有效上限', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events.push({ v: 1, seq: 10, ts: '2026-09-18T19:20:00.000Z', type: 'escalate', payload: { ticket: '02' } });
+    for (const historicalBudget of [7, null]) {
+      if (historicalBudget == null) {
+        delete events[0].payload.maxFixRounds;
+        delete events[0].payload.reviewer;
+        delete events[0].payload.maxConcurrent;
+      } else events[0].payload.maxFixRounds = historicalBudget;
+      fs.writeFileSync(file, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+      for (const lang of ['zh', 'en']) {
+        const model = collect({ runtimeDir: fx.runtimeDir, lang });
+        const out = path.join(fx.dir, `${lang}-${historicalBudget}`);
+        renderAll(model, out, null);
+        const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+        if (historicalBudget != null) {
+          assert.match(index, lang === 'zh' ? /历史修复预算 7（仅作记录，不是有效上限）/ : /Historical fix budget 7 \(record only; not an active limit\)/);
+        } else {
+          assert.doesNotMatch(index, /历史修复预算 \d|Historical fix budget \d|修复预算 2|fix budget 2/, '未记录的预算不补造');
+        }
+        assert.match(index, lang === 'zh' ? /逐票评审开.*并发 3/ : /review on.*concurrency 3/, '评审与并发仍展示');
+        assert.match(index, lang === 'zh' ? /不设次数配额/ : /no attempt quota/, '修复不再受次数控制');
+        assert.match(index, lang === 'zh' ? /正式评审轮次独立于修复次数/ : /Formal review rounds are independent of fix attempts/, '评审与修复词条解耦');
+        assert.doesNotMatch(index, /预算耗尽|budget exhausted|exhausting it escalates/, '无原因升级不补造预算耗尽原因');
+      }
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：复用 runId 的修复和正式评审仍按实际事件计数', () => {
+  const fx = makeFixture();
+  try {
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      const out = path.join(fx.dir, lang);
+      renderAll(model, out, null);
+      const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+      const countFor = (label) => {
+        const match = index.match(new RegExp(`<div class="stat-num">(\\d+)</div><div class="stat-label">${label}</div>`));
+        assert.ok(match, `统计卡片 ${label} 应存在`);
+        return Number(match[1]);
+      };
+      assert.equal(countFor(lang === 'zh' ? '评审轮次' : 'Review rounds'), 2, '两条正式裁决不因相同 reviewer runId 少计');
+      assert.equal(countFor(lang === 'zh' ? '修复轮次' : 'Fix rounds'), 1, 'resume 复用 coder runId 不代表没有修复');
+      assert.equal(model.runRefs.length, 3, '平台运行清单仍按 runId 去重，成本不双计');
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：多修复少评审与无 fix 重评按事件顺序展示，不推导正式轮号', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse).slice(0, 5);
+    const append = (type, payload) => events.push({ v: 1, seq: events.length + 1, ts: `2026-09-18T19:${String(events.length).padStart(2, '0')}:00.000Z`, type, payload });
+    append('fix', { ticket: '01', fixNo: 2, key: 'fix-01-2', resumeRunId: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa', note: 'TRACE_FIX_TWO' });
+    append('dispatch', { ticket: '01', key: 'TRACE_FRESH_DISPATCH', runId: '33333333-cccc-4ccc-8ccc-cccccccccccc' });
+    append('settled', { ticket: '01', round: 1, headSha: 'bb1111', gate: 'TRACE_SETTLED' });
+    append('verdict', { ticket: '01', round: 2, verdict: 'changes_requested', revRunId: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb', note: 'TRACE_REVIEW_TWO' });
+    append('verdict', { ticket: '01', round: 3, verdict: 'approved', revRunId: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb', note: 'TRACE_REVIEW_THREE' });
+    fs.writeFileSync(file, events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      const out = path.join(fx.dir, lang);
+      renderAll(model, out, null);
+      const page = fs.readFileSync(path.join(out, 'ticket-01.html'), 'utf8');
+      const markers = ['修 P1', 'TRACE_FIX_TWO', 'TRACE_FRESH_DISPATCH', 'TRACE_SETTLED', 'TRACE_REVIEW_TWO', 'TRACE_REVIEW_THREE'];
+      const positions = markers.map((marker) => page.indexOf(marker));
+      assert.ok(positions.every((pos) => pos >= 0), '每次修复、派发、结算和正式评审均保留');
+      assert.deepEqual([...positions].sort((a, b) => a - b), positions, '按事件 seq 展示而不是把 fixNo 当正式评审轮号');
+      assert.match(page, /返回值没有测试/, '已有 findings 原文保留');
+      assert.match(page, /5 pass 0 fail/, '已有验证证据保留');
+      assert.match(page, /缺失|missing|unavailable/i, '缺失的新派发/修复证据仍可见');
+      const ticket = model.tickets[0];
+      assert.deepEqual(ticket.verdicts.map((v) => v.round), [1, 2, 3], '正式轮号取自事件');
+      assert.deepEqual(ticket.fixes.map((f) => f.fixNo), [1, 2], '修复号取自事件');
+      assert.ok(ticket.dispatches.every((d) => d.round == null), '没有显式 round 的派发不根据 fix 数补造轮号');
+    }
+  } finally {
+    fx.cleanup();
+  }
 });
 
 // ---------------------------------------------------------------- 终审入流：事件驱动优先 + 旧账降级
@@ -910,6 +1021,261 @@ test('collect + render：lang=en 产出英文站点，lang 缺省保持中文基
     const zh = collect({ runtimeDir: fx.runtimeDir });
     assert.equal(zh.lang, 'zh');
     assert.ok(zh.risks.map((r) => r.title).join('\n').includes('未封账'));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #16 approved seams: synthetic events -> collect({runtimeDir, lang}) -> renderAll.
+// These fixtures exercise audit consumption, not the close CLI's write defaults/gates.
+test('collect + render：显式 abandoned 与完整交付区分，无 final 和未完成票不补造批准', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events.push({ v: 3, seq: 10, ts: '2026-09-18T19:20:00.000Z', type: 'close', payload: { outcome: 'abandoned', note: 'STOP_WITH_UNFINISHED_02' } });
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      assert.equal(model.run.sealed, true);
+      assert.equal(model.run.close.outcome, 'abandoned');
+      assert.equal(model.run.finals.length, 0, '不补造终审');
+      assert.equal(model.run.escalates.length, 0, '不补造逐票升级');
+      assert.equal(model.tickets.find((t) => t.id === '02').merges.length, 0, '未完成票保持未合并');
+      assert.ok(model.risks.some((r) => /验收被拒收|acceptance was rejected/.test(r.title)), '原有失败风险不因放弃而消失');
+      const out = path.join(fx.dir, `abandoned-${lang}`);
+      renderAll(model, out, null);
+      for (const name of ['index.html', 'final.html']) {
+        const page = fs.readFileSync(path.join(out, name), 'utf8');
+        assert.match(page, lang === 'zh' ? /用户放弃（abandoned）/ : /User abandoned \(abandoned\)/);
+        assert.match(page, lang === 'zh' ? /不代表代码就绪或完整交付/ : /does not mean the code is ready or fully delivered/);
+        assert.match(page, /STOP_WITH_UNFINISHED_02/);
+        assert.doesNotMatch(page, /pill ok[^>]*>[^<]*(?:已封账|sealed)/, '弃跑封账不使用成功样式');
+      }
+      const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+      const unfinishedRow = index.match(/<tr>\s*<td><a href="ticket-02.html">[\s\S]*?<\/tr>/)[0];
+      assert.match(unfinishedRow, lang === 'zh' ? /未合并/ : /not merged/i);
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original, '审计不修改事件流字节');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render + report CLI：completed 与 abandoned 在双语页面和分析简报中使用明确结果', () => {
+  const findings = '.pi/matt-implement/demo/findings/final-r1.md';
+  const fx = makeFinalFixture({ finals: [{ runId: FINAL_RUN_ID, verdict: 'ready_with_fixes', findings }], findingsFiles: { [findings]: 'RETAIN_REVIEW_FINDING: follow-up needed.\n' } });
+  try {
+    const { execFileSync } = require('child_process');
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    for (const outcome of ['completed', 'abandoned']) {
+      events[events.length - 1].payload = { outcome, note: 'EXPLICIT_CLOSE_NOTE' };
+      const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      fs.writeFileSync(file, original);
+      for (const lang of ['zh', 'en']) {
+        const expected = outcome === 'completed'
+          ? (lang === 'zh' ? /正常完成（completed）/ : /Completed \(completed\)/)
+          : (lang === 'zh' ? /用户放弃（abandoned）/ : /User abandoned \(abandoned\)/);
+        const model = collect({ runtimeDir: fx.runtimeDir, lang });
+        assert.equal(model.run.close.outcome, outcome);
+        const out = path.join(fx.dir, `${outcome}-${lang}`);
+        renderAll(model, out, null);
+        for (const name of ['index.html', 'final.html']) {
+          assert.match(fs.readFileSync(path.join(out, name), 'utf8'), expected, '页面封账结果明确');
+        }
+        execFileSync(process.execPath, [path.resolve(__dirname, '../audit-report/report.js'), '--runtime-dir', fx.runtimeDir, '--lang', lang, '--out', out, '--ai-brief'], { encoding: 'utf8' });
+        assert.match(fs.readFileSync(path.join(out, 'analysis-brief.md'), 'utf8'), expected, 'AI 简报不能把放弃或正常完成都概括成 sealed');
+        assert.match(fs.readFileSync(path.join(out, 'analysis-brief.md'), 'utf8'), /EXPLICIT_CLOSE_NOTE/);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(out, 'model.json'), 'utf8')).run.close.outcome, outcome);
+        assert.match(fs.readFileSync(path.join(out, 'final.html'), 'utf8'), /RETAIN_REVIEW_FINDING/, '两种封账结果均保留实际 findings 原文');
+      }
+      assert.equal(fs.readFileSync(file, 'utf8'), original, 'CLI 与公开收集渲染入口都只读事件流');
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render + report CLI：旧 close 缺 outcome 不猜历史意图，abandoned 保留 not_ready 与风险证据', () => {
+  const findings = '.pi/matt-implement/demo/findings/not-ready.md';
+  const fx = makeFinalFixture({ finals: [{ runId: FINAL_RUN_ID, verdict: 'not_ready', findings }], findingsFiles: { [findings]: 'KNOWN_NOT_READY_FINDING: unsafe behavior remains.\n' } });
+  try {
+    const { execFileSync } = require('child_process');
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    for (const outcome of [undefined, 'abandoned']) {
+      // The old prose remains evidence, not a substitute for an explicit close outcome.
+      events[events.length - 1].payload = { note: 'OLD_NOTE: 用户拍板放弃 / user chose to abandon', ...(outcome ? { outcome } : {}) };
+      const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      fs.writeFileSync(file, original);
+      for (const lang of ['zh', 'en']) {
+        const model = collect({ runtimeDir: fx.runtimeDir, lang });
+        assert.equal(model.run.close.outcome, outcome, '缺省读法不能借用新写入的 completed 默认');
+        assert.equal(Object.hasOwn(model.events.at(-1).payload, 'outcome'), outcome != null, '原始事件字段不补造');
+        const risk = model.risks.find((r) => r.title.includes('not_ready'));
+        assert.ok(risk, '旧账与显式放弃均保留封账时 not_ready 风险');
+        assert.equal(risk.severity, 'medium');
+        assert.ok(risk.evidence.some((e) => e.ref === FINAL_RUN_ID));
+        assert.ok(risk.evidence.some((e) => e.ref === 'seq 6'));
+        assert.doesNotMatch(risk.detail, /多半|most likely|legitimate abandoned exit/, '不得从 not_ready 封账推断旧 close 的放弃意图');
+        assert.match(risk.detail, lang === 'zh' ? /不代表问题已解决或代码就绪/ : /does not mean findings are resolved or the code is ready/);
+        const out = path.join(fx.dir, `historical-${outcome || 'missing'}-${lang}`);
+        renderAll(model, out, null);
+        for (const name of ['index.html', 'final.html']) {
+          const page = fs.readFileSync(path.join(out, name), 'utf8');
+          if (outcome == null) {
+            assert.match(page, lang === 'zh' ? /旧记录：封账结果未记录/ : /Legacy record: close outcome not recorded/);
+            assert.doesNotMatch(page, /pill (?:ok|warn)[^>]*>(?:用户放弃（abandoned）|User abandoned \(abandoned\)|正常完成（completed）|Completed \(completed\))/, '旧 prose 和 not_ready 不能补造结构化结果');
+          }
+          assert.match(page, /OLD_NOTE/);
+        }
+        const finalPage = fs.readFileSync(path.join(out, 'final.html'), 'utf8');
+        assert.match(finalPage, /KNOWN_NOT_READY_FINDING/);
+        assert.match(finalPage, lang === 'zh' ? /不可交付/ : /Not ready/);
+        execFileSync(process.execPath, [path.resolve(__dirname, '../audit-report/report.js'), '--runtime-dir', fx.runtimeDir, '--lang', lang, '--out', out, '--ai-brief'], { encoding: 'utf8' });
+        const brief = fs.readFileSync(path.join(out, 'analysis-brief.md'), 'utf8');
+        assert.match(brief, outcome == null
+          ? (lang === 'zh' ? /旧记录：封账结果未记录/ : /Legacy record: close outcome not recorded/)
+          : (lang === 'zh' ? /用户放弃（abandoned）/ : /User abandoned \(abandoned\)/));
+        assert.doesNotMatch(brief, /多半|most likely|legitimate abandoned exit/);
+      }
+      assert.equal(fs.readFileSync(file, 'utf8'), original, '旧 close 及其它历史事件字节保持原样');
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #15 approved seams: runtime fixtures -> public collect/renderAll and report CLI.
+test('collect + render：升级后合并显示完成，原升级原因与合并依据保留', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events.splice(6, 0, { v: 3, type: 'escalate', payload: { ticket: '01', note: 'HUMAN_DECISION_NEEDED: clarify requirement' } });
+    events.forEach((e, i) => { e.seq = i + 1; });
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      assert.equal(model.run.escalates[0].note, 'HUMAN_DECISION_NEEDED: clarify requirement');
+      assert.equal(model.tickets[0].merges[0].seq, 8);
+      const risk = model.risks.find((r) => /升级|escalated/.test(r.title));
+      assert.equal(risk.severity, 'medium', '历史风险不删除或变更等级');
+      assert.match(risk.detail, /HUMAN_DECISION_NEEDED/);
+      assert.match(risk.detail, lang === 'zh' ? /后续已合并/ : /later merged/);
+      assert.ok(risk.evidence.some((e) => e.ref === 'seq 7'), '升级事件证据保留');
+      assert.ok(risk.evidence.some((e) => e.ref === 'seq 8'), '完成依据指向后续 merge 事件');
+      const out = path.join(fx.dir, `escalated-merged-${lang}`);
+      renderAll(model, out, null);
+      const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+      const row = index.match(/<tr>\s*<td><a href="ticket-01.html">[\s\S]*?<\/tr>/)[0];
+      assert.match(row, lang === 'zh' ? /pill ok">已合并/ : /pill ok">merged/);
+      for (const name of ['index.html', 'ticket-01.html', 'final.html']) {
+        assert.match(fs.readFileSync(path.join(out, name), 'utf8'), /HUMAN_DECISION_NEEDED/, '每个相关页面均保留原升级原因');
+      }
+      assert.match(fs.readFileSync(path.join(out, 'ticket-01.html'), 'utf8'), /5 pass 0 fail/, '实际验证证据不删除');
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original, '只读审计不覆写升级或合并历史');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render：已升级未合并不由 notes 推断恢复或批准，缺证据继续可见', () => {
+  const fx = makeFixture();
+  try {
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse).slice(0, 5);
+    events.push({ v: 3, seq: 6, ts: '2026-09-18T18:45:00.000Z', type: 'escalate', payload: { ticket: '01', note: 'AWAIT_REQUIREMENT_DECISION' } });
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    const notes = '# notes\nUSER_AUTHORIZED_RESUME: issue withdrawn; everything resolved and approved.\nEvidence: findings/01-r1.md\n';
+    fs.writeFileSync(path.join(fx.runtimeDir, 'notes.md'), notes);
+    fs.rmSync(path.join(fx.ad, '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa_pi-matt-implement-flow.coder_meta.json'));
+    fs.rmSync(path.join(fx.ad, '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa_pi-matt-implement-flow.coder_output.md'));
+    for (const lang of ['zh', 'en']) {
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      assert.equal(model.tickets[0].merges.length, 0);
+      assert.equal(model.tickets[0].verdicts.at(-1).verdict, 'changes_requested', '单问题撤回 prose 不成为完整批准');
+      assert.equal(model.run.sealed, false);
+      assert.equal(model.notes, notes, 'notes 原文保留供读者核对，不解释为状态');
+      const escalation = model.risks.find((r) => /升级|escalated/.test(r.title));
+      assert.equal(escalation.severity, 'medium');
+      assert.match(escalation.detail, /AWAIT_REQUIREMENT_DECISION/);
+      assert.match(escalation.detail, lang === 'zh' ? /尚无后续合并记录.*阅读编排笔记与证据/ : /No later merge recorded.*read orchestration notes and evidence/);
+      assert.doesNotMatch(escalation.title, /已恢复|已批准|has resumed|is approved|永久|permanently/);
+      assert.deepEqual(escalation.evidence.map((e) => e.ref), ['seq 6'], '无后续 merge 时不伪造恢复证据');
+      assert.ok(model.risks.some((r) => r.severity === 'low' && /证据缺失|evidence missing/.test(r.title)), '证据缺失仍显式降级');
+      assert.ok(model.warnings.some((w) => w.code === 'run-evidence-missing'));
+      const out = path.join(fx.dir, `escalated-unmerged-${lang}`);
+      renderAll(model, out, null);
+      const index = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
+      const row = index.match(/<tr>\s*<td><a href="ticket-01.html">[\s\S]*?<\/tr>/)[0];
+      assert.match(row, lang === 'zh' ? /未合并（有升级历史）/ : /not merged \(escalation history\)/);
+      assert.doesNotMatch(row, /pill ok">(?:已合并|merged)/);
+      assert.match(fs.readFileSync(path.join(out, 'ticket-01.html'), 'utf8'), /证据缺失|Evidence missing/i);
+      assert.match(fs.readFileSync(path.join(out, 'final.html'), 'utf8'), /USER_AUTHORIZED_RESUME/, '原 notes 可读但不当机械结论');
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('collect + render + report CLI：anomaly 是历史而非当前故障，notes 处置须读证据不机械宣称解决', () => {
+  const fx = makeFixture();
+  try {
+    const { execFileSync } = require('child_process');
+    const file = path.join(fx.runtimeDir, 'events.jsonl');
+    const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    events[8].payload = { note: 'SYNC_FAILED_HISTORY', refSeq: '8' };
+    events.push(
+      { v: 3, seq: 10, ts: '2026-09-18T19:20:00.000Z', type: 'fix', payload: { ticket: '02', fixNo: 1, key: 'fix-02-1', resumeRunId: '33333333-cccc-4ccc-8ccc-cccccccccccc', note: 'ANOMALY_REPAIR_ATTEMPT' } },
+      { v: 3, seq: 11, ts: '2026-09-18T19:30:00.000Z', type: 'settled', payload: { ticket: '02', round: 1, headSha: 'dd3333', gate: 'REPAIR_VALIDATION_PASSED' } },
+    );
+    const original = events.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    fs.writeFileSync(file, original);
+    const notesFile = path.join(fx.runtimeDir, 'notes.md');
+    const notes = '# notes\nDISPOSITION_NOTE: Sync retry succeeded; anomaly resolved.\nEvidence: sync-retry.log (not mechanically checked).\n';
+    for (const lang of ['zh', 'en']) {
+      fs.writeFileSync(notesFile, '');
+      const withoutNotes = collect({ runtimeDir: fx.runtimeDir, lang });
+      const beforeRisk = withoutNotes.risks.find((r) => /异常|anomaly/.test(r.title));
+      fs.writeFileSync(notesFile, notes);
+      const model = collect({ runtimeDir: fx.runtimeDir, lang });
+      const risk = model.risks.find((r) => /异常|anomaly/.test(r.title));
+      assert.deepEqual(risk, beforeRisk, 'notes 不改变机械风险、等级和补正状态');
+      assert.equal(model.run.anomalies[0].refSeq, 8, '旧 string refSeq 仍可读');
+      assert.equal(risk.severity, 'high', '无机械补正依据，不凭 notes 降级或删除历史风险');
+      assert.match(risk.detail, /SYNC_FAILED_HISTORY/);
+      assert.match(risk.detail, lang === 'zh' ? /历史记录不等于当前未解决.*阅读编排笔记与证据/ : /History does not establish a current unresolved issue.*read orchestration notes and evidence/);
+      assert.doesNotMatch(risk.title, /已解决|resolved|已补正|corrected/i);
+      assert.ok(risk.evidence.some((e) => e.ref === 'seq 9'));
+      assert.ok(risk.evidence.some((e) => e.ref === 'seq 8'), '原 refSeq 证据指针可见');
+      assert.ok(model.risks.some((r) => r.severity === 'low' && /证据缺失|evidence missing/.test(r.title)));
+      const out = path.join(fx.dir, `anomaly-history-${lang}`);
+      renderAll(model, out, null);
+      for (const name of ['index.html', 'final.html']) {
+        const page = fs.readFileSync(path.join(out, name), 'utf8');
+        assert.match(page, /SYNC_FAILED_HISTORY/);
+        assert.match(page, /refSeq[^<]*8/, '页面仍显示原异常引用');
+        assert.match(page, lang === 'zh' ? /历史记录不等于当前未解决/ : /History does not establish a current unresolved issue/);
+      }
+      const ticket = fs.readFileSync(path.join(out, 'ticket-02.html'), 'utf8');
+      assert.match(ticket, /ANOMALY_REPAIR_ATTEMPT/);
+      assert.match(ticket, /REPAIR_VALIDATION_PASSED/);
+      assert.match(fs.readFileSync(path.join(out, 'final.html'), 'utf8'), /DISPOSITION_NOTE/);
+      execFileSync(process.execPath, [path.resolve(__dirname, '../audit-report/report.js'), '--runtime-dir', fx.runtimeDir, '--lang', lang, '--out', out, '--ai-brief'], { encoding: 'utf8' });
+      const brief = fs.readFileSync(path.join(out, 'analysis-brief.md'), 'utf8');
+      assert.match(brief, /anomaly #9.*refSeq.*8.*SYNC_FAILED_HISTORY/);
+      assert.match(brief, /DISPOSITION_NOTE/);
+      assert.match(brief, /sync-retry.log/);
+      assert.match(brief, lang === 'zh' ? /历史记录不等于当前未解决/ : /History does not establish a current unresolved issue/);
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), original, '异常、修复与其他历史均不被改写');
   } finally {
     fx.cleanup();
   }

@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { TERMS, lookup } = require('./glossary');
 const { findBriefFor } = require('./collect');
-const { makeT, roleLabel, hasKey } = require('./i18n');
+const { makeT, roleLabel, hasKey, closeOutcomeLabel } = require('./i18n');
 
 // ---------------------------------------------------------------- 基础
 
@@ -87,6 +87,13 @@ function verdictLabel(T, code) {
   return [hasKey(T.lang, key) ? T(key) : code, VERDICT_CLS[code] || ''];
 }
 
+function closeSummary(T, close) {
+  const abandoned = close.outcome === 'abandoned';
+  const label = closeOutcomeLabel(T.lang, close.outcome);
+  return `<span class="pill ${close.outcome === 'completed' ? 'ok' : 'warn'}">${esc(label)}</span>`
+    + (abandoned ? `<div class="muted">${T('close.abandonedDetail')}</div>` : '');
+}
+
 // ---------------------------------------------------------------- 页面骨架
 
 function layout(T, title, body, extraHead = '') {
@@ -123,13 +130,15 @@ ${body}
 function renderOverview(model, T) {
   const r = model.run;
   const init = r.init || {};
-  const flags = init.reviewer != null || init.maxFixRounds != null || init.maxConcurrent != null
+  const flags = init.reviewer != null || init.maxConcurrent != null
     ? T('ov.flowFlags', {
       state: init.reviewer === 'off' ? T('ov.off') : T('ov.on'),
-      fix: init.maxFixRounds ?? 2,
       conc: init.maxConcurrent ?? 3,
     })
     : T('ov.flowFlagsDefault');
+  const historicalBudget = init.maxFixRounds != null
+    ? `<div class="muted">${T('ov.historicalFixBudget', { budget: esc(init.maxFixRounds) })}</div>`
+    : '';
   const pr = r.prs.length ? r.prs[r.prs.length - 1] : null;
 
   const cards = [
@@ -138,18 +147,18 @@ function renderOverview(model, T) {
     { label: T('ov.branch'), value: init.branch ? `<code>${esc(init.branch)}</code>${T('ov.baseline', { sha: sha(init.baselineSha) })}` : '—' },
     { label: 'spec', value: init.spec ? `<code>${esc(init.spec)}</code>` : '—' },
     { label: T('ov.gate'), value: init.testCommand ? `<code>${esc(init.testCommand)}</code>` : '—' },
-    { label: term(T, '流程形态', 'flow shape'), value: flags },
+    { label: term(T, '流程形态', 'flow shape'), value: flags + historicalBudget },
     { label: T('ov.tracker'), value: esc(init.tracker || '—') },
     { label: T('ov.pr'), value: pr ? (pr.url ? `<a href="${esc(pr.url)}">${esc(pr.state)}${T('ev.prUrl', { url: esc(pr.url) })}</a>` : esc(pr.state)) : T('ov.prNone') },
-    { label: term(T, '封账', 'seal'), value: r.sealed ? `<span class="pill ok">${T('ov.sealed')}</span> <span class="muted">${esc(fmtTs(r.close.ts))}</span>` : `<span class="pill bad">${T('ov.unsealed')}</span>` },
+    { label: term(T, '封账', 'seal'), value: r.sealed ? `${closeSummary(T, r.close)} <span class="muted">${esc(fmtTs(r.close.ts))}</span>` : `<span class="pill bad">${T('ov.unsealed')}</span>` },
   ];
 
   const s = model.stats;
   const statCards = [
     { label: T('ov.stat.tickets'), value: model.tickets.length },
     { label: T('ov.stat.dispatches'), value: model.runRefs.filter((x) => x.role === 'coder').length },
-    { label: T('ov.stat.reviews'), value: model.runRefs.filter((x) => x.role === 'reviewer').length },
-    { label: T('ov.stat.fixes'), value: model.runRefs.filter((x) => x.role === 'coder-resume').length },
+    { label: T('ov.stat.reviews'), value: model.tickets.reduce((count, t) => count + t.verdicts.length, 0) },
+    { label: T('ov.stat.fixes'), value: model.tickets.reduce((count, t) => count + t.fixes.length, 0) },
     { label: T('ov.stat.finals'), value: s.finalReviews || 0 },
     { label: T('ov.stat.cost'), value: fmtCost(s.totalCost) },
     { label: T('ov.stat.tokens'), value: fmtTokens(s.totalTokens) },
@@ -284,8 +293,9 @@ function narrateEvent(e, T) {
       ticket: esc(p.ticket), escalate: t('升级', 'escalate'),
       note: esc(p.note || T('ev.escalateDefault')),
     });
-    case 'anomaly': return T('ev.anomaly', { anomaly: t('异常记录', 'anomaly'), note: esc(p.note) });
-    case 'close': return T('ev.close', { close: t('封账', 'close'), note: esc(p.note || '') });
+    case 'anomaly': return T('ev.anomaly', { anomaly: t('异常记录', 'anomaly'), note: esc(p.note) })
+      + (p.refSeq != null ? T('history.refSeq', { seq: esc(p.refSeq) }) : '');
+    case 'close': return T('ev.close', { close: t('封账', 'close'), outcome: closeSummary(T, p), note: esc(p.note || '') });
     default: return T('ev.unknown', { type: esc(e.type), payload: esc(JSON.stringify(p)).slice(0, 300) });
   }
 }
@@ -378,12 +388,13 @@ function runSummaryCard(model, ref, T) {
 }
 
 function renderTicket(model, t, idx, total, T) {
-  const rounds = new Map(); // round -> html parts
-  const push = (k, html) => { if (!rounds.has(k)) rounds.set(k, []); rounds.get(k).push(html); };
+  // Event order is authoritative: fix attempts and formal review rounds are independent.
+  const steps = [];
+  const push = (seq, html) => steps.push({ seq, html });
 
   for (const d of t.dispatches) {
     const brief = findBriefForSafe(model, d.key, d.ts);
-    push(Number(d.round || 1), `
+    push(d.seq, `
       <div class="step"><div class="step-title">${term(T, '派发', 'dispatch')} <code>${esc(d.key)}</code> <span class="muted">${T('tp.seqMeta', { ts: esc(fmtTs(d.ts)), seq: esc(d.seq) })}</span></div>
       ${runSummaryCard(model, { runId: d.runId, role: 'coder', ticket: t.id, key: d.key }, T)}
       ${brief
@@ -392,7 +403,7 @@ function renderTicket(model, t, idx, total, T) {
       </div>`);
   }
   for (const s of t.settles) {
-    push(Number(s.round || 1), `
+    push(s.seq, `
       <div class="step"><div class="step-title">${term(T, '实现结算', 'settled')} <span class="muted">· ${esc(fmtTs(s.ts))}</span></div>
       <div class="card">${T('tp.commitAnchor', { sha: sha(s.headSha) })}${s.gate ? T('tp.gateSummary', { gate: esc(s.gate) }) : ''}${s.worktree ? T('tp.worktreePart', { path: esc(s.worktree) }) : ''}</div>
       </div>`);
@@ -402,7 +413,7 @@ function renderTicket(model, t, idx, total, T) {
     const findings = v.findings && model.findingsFiles[v.findings];
     const bundleKey = Object.keys(model.bundles).find((k) => k.includes(`/${String(t.id).padStart(2, '0')}-r${v.round || 1}.diff`));
     const bundle = bundleKey ? model.bundles[bundleKey] : null;
-    push(Number(v.round || 1), `
+    push(v.seq, `
       <div class="step"><div class="step-title">${T('tp.verdictStep', { verdict: term(T, '评审裁决', 'verdict'), round: esc(v.round) })} <span class="muted">· ${esc(fmtTs(v.ts))}</span></div>
       ${runSummaryCard(model, { runId: v.revRunId, role: 'reviewer', ticket: t.id, key: `rev-${t.id}` }, T)}
       <div class="card">${T('tp.verdictResult', { pill: `<span class="pill ${cls}">${esc(label)}</span>`, note: v.note ? ` · ${esc(v.note)}` : '' })}</div>
@@ -420,23 +431,24 @@ function renderTicket(model, t, idx, total, T) {
   }
   for (const f of t.fixes) {
     const brief = findBriefForSafe(model, f.key, f.ts);
-    push(Number((f.fixNo || 1)) + 0.5, `
+    push(f.seq, `
       <div class="step"><div class="step-title">${T('tp.fixRoundLabel', { n: esc(f.fixNo) })} <span class="muted">· ${esc(fmtTs(f.ts))}</span></div>
       ${f.note ? `<div class="card">${T('tp.fixNote', { note: esc(f.note) })}</div>` : ''}
       ${runSummaryCard(model, { runId: f.resumeRunId, role: 'coder-resume', ticket: t.id, key: f.key }, T)}
       ${brief ? details(T('tp.fixBrief'), codeBlock(brief.text)) : `<div class="muted">${T('tp.fixBriefMissing')}</div>`}
       </div>`);
   }
+  for (const e of model.run.escalates.filter((e) => e.ticket === t.id)) {
+    push(e.seq, `<div class="step"><div class="step-title">${term(T, '升级', 'escalate')} <span class="muted">· #${esc(e.seq)} · ${esc(fmtTs(e.ts))}</span></div>
+      <div class="card">${esc(e.note || T('ev.escalateDefault'))}</div></div>`);
+  }
   const mergeHtml = t.merges.map((m) => `
     <div class="step"><div class="step-title">${T('tp.mergeStep')} <span class="muted">· ${esc(fmtTs(m.ts))}</span></div>
     <div class="card">${T('tp.mergeCard', { mergeSha: sha(m.mergeSha), headSha: sha(m.headSha), note: m.note ? ` · ${esc(m.note)}` : '' })}${model.git[m.mergeSha] ? `<div class="muted small">${T('tp.mergeSubject', { subject: esc(model.git[m.mergeSha].subject) })}</div>` : model.git[m.mergeSha] === undefined ? '' : `<div class="muted small">${T('tp.mergeUnreachable')}</div>`}</div>
     </div>`).join('');
 
-  const roundKeys = [...rounds.keys()].sort((a, b) => a - b);
-  const roundsHtml = roundKeys.map((k) => {
-    const label = Number.isInteger(k) ? T('tp.roundLabel', { n: k }) : T('tp.fixRoundLabel', { n: Math.floor(k) });
-    return `<div class="round"><h3>${esc(label)}</h3>${rounds.get(k).join('')}</div>`;
-  }).join('');
+  const stepsHtml = steps.sort((a, b) => a.seq - b.seq)
+    .map((s) => `<div class="round">${s.html}</div>`).join('');
 
   const nav = `
   <div class="pager">
@@ -451,7 +463,7 @@ function renderTicket(model, t, idx, total, T) {
   <p class="muted">${t.file ? T('tp.ticketFile', { path: esc(t.file) }) : T('tp.ticketFileMissing')}</p>
 </div>
 ${t.body ? details(T('tp.ticketBody'), codeBlock(t.body)) : ''}
-<div class="rounds">${roundsHtml || `<p class="muted">${T('tp.noDispatch')}</p>`}</div>
+<div class="rounds">${stepsHtml || `<p class="muted">${T('tp.noDispatch')}</p>`}</div>
 ${mergeHtml ? `<div class="round"><h3>${T('tp.mergeStep')}</h3>${mergeHtml}</div>` : ''}
 ${nav}`;
   return layout(T, `${T('ev.ticket')} ${t.id} · ${model.slug}`, body);
@@ -506,17 +518,18 @@ function renderFinal(model, T) {
   if (model.run.anomalies.length || model.run.escalates.length) {
     parts.push(`
 <section class="section"><h2>${T('fp.anomaliesTitle', { anomaly: term(T, '异常记录', 'anomaly'), escalate: term(T, '升级', 'escalate') })}</h2>
+<p class="muted">${T('history.checkDisposition')}</p>
 <ol class="timeline">
 ${[...model.run.anomalies.map((a) => ({ ...a, kind: 'anomaly' })), ...model.run.escalates.map((e) => ({ ...e, kind: 'escalate' }))]
       .sort((a, b) => a.seq - b.seq)
-      .map((x) => `<li class="tl-item"><div class="tl-meta">#${esc(x.seq)} · ${esc(fmtTs(x.ts))}</div><div class="tl-text">${x.kind === 'anomaly' ? T('fp.anomalyEntry', { note: esc(x.note) }) : T('fp.escalateEntry', { ticket: esc(x.ticket), note: esc(x.note || '') })}</div></li>`).join('')}
+      .map((x) => `<li class="tl-item"><div class="tl-meta">#${esc(x.seq)} · ${esc(fmtTs(x.ts))}</div><div class="tl-text">${x.kind === 'anomaly' ? T('fp.anomalyEntry', { note: esc(x.note) }) + (x.refSeq != null ? T('history.refSeq', { seq: esc(x.refSeq) }) : '') : T('fp.escalateEntry', { ticket: esc(x.ticket), note: esc(x.note || '') })}</div></li>`).join('')}
 </ol></section>`);
   }
 
   if (model.run.sealed) {
     parts.push(`
 <section class="section"><h2>${term(T, '封账', 'close')}</h2>
-<div class="card">${esc(model.run.close.note || T('fp.sealNote'))} <span class="muted">· ${esc(fmtTs(model.run.close.ts))}</span></div>
+<div class="card">${closeSummary(T, model.run.close)}<p>${esc(model.run.close.note || T('fp.sealNote'))}</p> <span class="muted">· ${esc(fmtTs(model.run.close.ts))}</span></div>
 </section>`);
   } else {
     parts.push(`<section class="section"><div class="risk risk-medium"><div class="risk-head"><span class="pill medium">${T('sev.medium')}</span> ${T('fp.unsealedTitle')}</div><div class="risk-detail">${T('fp.unsealedDetail')}</div></div></section>`);

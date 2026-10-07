@@ -2,7 +2,7 @@
 
 // 台账核心判定（纯逻辑，真相层 IO 由 CLI 注入为 truth 对象）：
 //   - gateAdd     add 写点的三档校验：拒绝（schema/枚举/状态机/确定矛盾）→ 警告（此刻尚不可核实）→ 矛盾拒绝
-//   - closeBlockers 封账资格：每票须有 merge/escalate 事件，或属非任务票（spec 母票 / resolved 研究票）
+//   - closeBlockers 正常封账资格：每票须有 merge 事件，或属非任务票（spec 母票 / resolved 研究票）
 //   - finalEvidenceWarnings 终审平台证据的 best-effort 核验（仅 check 使用，警告级、不影响退出码）
 //   - reconcile   账实差异核验（check 子命令与 build 的对账结论段共用同一判定）
 //   - renderLedger 四段台账再生：头部 / 表格 / 时间线 / 对账结论（临时文件+原子替换由 CLI 负责）
@@ -77,13 +77,12 @@ function countTickets(events) {
 
 const isTaskFile = (file) => !file || !file.type || file.type === 'task';
 
-// 本 run 的流程形态（init 快照旗标）。旧账本无旗标 = 默认形态（reviewer on /
-// 预算 2 / 并发 3），自然兼容。reviewer=off 时：不记 verdict/fix，merge 无需 verdict。
+// 本 run 的有效流程形态（init 快照旗标）。旧账本无旗标 = reviewer on / 并发 3。
+// 历史 maxFixRounds 不再生效。reviewer=off 时：不记 verdict/fix，merge 无需 verdict。
 function flowShape(events) {
   const p = events.find((e) => e.type === 'init')?.payload ?? {};
   return {
     reviewer: p.reviewer === undefined ? true : p.reviewer === 'on',
-    maxFixRounds: p.maxFixRounds === undefined ? 2 : Number(p.maxFixRounds),
     maxConcurrent: p.maxConcurrent === undefined ? 3 : Number(p.maxConcurrent),
   };
 }
@@ -117,7 +116,7 @@ function closeBlockers({ events, truth }) {
       }
     }
     const t = idx.get(num);
-    if (t && (t.merges.length || t.escalates.length)) return;
+    if (t && t.merges.length) return;
     blockers.push({ num, reason: file ? `Status=${file.status ?? '?'}` : '票文件缺失' });
   };
   for (const t of truth.tickets) consider(t.num, t);
@@ -192,11 +191,6 @@ function gateAdd({ events, type, payload, truth }) {
       if (!truth.shaExists(payload.headSha)) {
         reasons.push(`headSha ${payload.headSha} 在 git 中不存在——确定性矛盾（拒绝）`);
       }
-      if (fixCount + 1 !== Number(payload.round)) {
-        warnings.push(
-          `settled round=${payload.round} ≠ fix 事件数+1（${fixCount + 1}）——非常规轮次（如集成修复），仅警告`
-        );
-      }
       if (payload.worktree && !truth.hasWorktree(payload.worktree)) {
         warnings.push(`worktree ${payload.worktree} 不在 git worktree 列表——警告不拒绝`);
       }
@@ -211,11 +205,6 @@ function gateAdd({ events, type, payload, truth }) {
       }
       if (t && t.verdicts.some((e) => Number(e.payload.round) === Number(payload.round))) {
         reasons.push(`票 ${num} 第 ${payload.round} 轮 verdict 已入账——同票同轮去重，历史不可双写`);
-      }
-      if (fixCount + 1 !== Number(payload.round)) {
-        reasons.push(
-          `轮号恒等式违规：verdict round=${payload.round}，但该票已入账 ${fixCount} 条 fix 事件（期望 ${fixCount + 1}）`
-        );
       }
       if (t && !t.dispatches.length) {
         warnings.push(`票 ${num} 尚无 dispatch 事件就有 verdict——reviewer 之前的 coder 派发未入账（警告）`);
@@ -234,12 +223,6 @@ function gateAdd({ events, type, payload, truth }) {
       }
       if (Number(payload.fixNo) !== fixCount + 1) {
         reasons.push(`fixNo=${payload.fixNo} 与已入账 fix 事件数不符（期望 ${fixCount + 1}）`);
-      }
-      if (fixCount >= flow.maxFixRounds) {
-        reasons.push(
-          `修复预算已耗尽：票 ${num} 已入账 ${fixCount} 条 fix 事件（本 run 上限 ${flow.maxFixRounds}，来自 init 快照 --max-fix-rounds）——` +
-            `应升级上报：add escalate --ticket ${num}，并在票文件留 tracker 评论，不要继续派发修复`
-        );
       }
       if (t && !t.dispatches.length) {
         warnings.push(`票 ${num} 尚无 dispatch 事件就有 fix——原 coder 派发未入账（警告）`);
@@ -299,29 +282,31 @@ function gateAdd({ events, type, payload, truth }) {
       break;
     }
     case 'close': {
+      // 显式放弃只豁免完成/终审门；schema、初始化与已封账拒写仍在此前执法。
+      if (payload.outcome === 'abandoned') break;
       const blockers = closeBlockers({ events, truth });
       if (blockers.length) {
         reasons.push(
           `封账被拒：${blockers.length} 张票未闭环——` +
-            blockers.map((b) => `票 ${b.num}（${b.reason}，无 merge/escalate）`).join('；') +
-            '。先合并或升级；spec 母票 / resolved 研究票等非任务票不阻塞'
+            blockers.map((b) => `票 ${b.num}（${b.reason}，无 merge）`).join('；') +
+            '。先完成合并，升级不代表完成；spec 母票 / resolved 研究票等非任务票不阻塞'
         );
       }
-      // 封账门（分层，ADR-0002 Decision 5）：有合并工作的运行须已有终审裁决入账；
-      // 最新裁决 not_ready 警告放行（用户拍板放弃的合法出口——强拒绝会让放弃的 run 永远卡在 running）；
-      // 零合并票的运行（全 escalate / 空跑）没有终审环节，不检查。
+      // 正常完成（ADR-0009）：有合并须有终审；凡最新 not_ready 均拒绝。
+      // 零合并不要求补 final，但已有裁决仍须遵守；用户放弃须显式 abandoned。
       const mergeCount = events.filter((e) => e.type === 'merge').length;
       const latest = latestFinal(events);
       if (mergeCount && !latest) {
         reasons.push(
           `封账被拒：本 run 有合并工作（${mergeCount} 条 merge 事件）但尚无终审裁决——先记账 ` +
-            'final --final-verdict(ready|ready_with_fixes|not_ready) --run-id <runId>；' +
-            '封账门：有合并工作的运行须已有终审裁决入账（零合并票的运行不检查终审）'
+            'final --final-verdict(ready|ready_with_fixes) --run-id <runId>；' +
+            '正常完成须最新终审就绪（零合并票的运行不要求补终审）'
         );
-      } else if (mergeCount && latest.payload.finalVerdict === 'not_ready') {
-        warnings.push(
-          `封账警告：最新终审裁决为 not_ready（runId ${shortRunId(latest.payload.runId)}，seq ${latest.seq}）——` +
-            '按弃跑放行（用户拍板放弃的合法出口），本账在此标注警告'
+      }
+      if (latest?.payload.finalVerdict === 'not_ready') {
+        reasons.push(
+          `封账被拒：最新终审裁决为 not_ready（runId ${shortRunId(latest.payload.runId)}，seq ${latest.seq}）——` +
+            '正常完成须 ready / ready_with_fixes；用户明确放弃时用 close --outcome abandoned'
         );
       }
       break;
@@ -525,8 +510,8 @@ function deriveRows({ events, truth, degraded }) {
 
     let status;
     if (degraded) status = file?.status ?? 'unknown';
-    else if (t.escalates.length) status = 'escalated';
     else if (t.merges.length) status = 'done';
+    else if (t.escalates.length) status = 'escalated';
     else if (touched) status = 'claimed';
     else status = isTaskFile(file) ? 'open' : (file?.status ?? 'open');
 
@@ -590,6 +575,7 @@ function renderHeader({ events, truth }) {
   }
   const p = init.payload;
   lines.push(close ? `state: complete（封账 ${compactTime(close.ts)}）` : 'state: running');
+  if (close) lines.push(`outcome: ${close.payload?.outcome ?? 'unknown（旧记录未记录结果）'}`);
   lines.push(`branch: ${p.branch}`);
   lines.push(`branchBase: ${p.branchBase}`);
   lines.push(`baselineSha: ${p.baselineSha}`);
@@ -601,8 +587,11 @@ function renderHeader({ events, truth }) {
   if (p.tickets !== undefined) lines.push(`tickets: ${p.tickets}`);
   const flow = flowShape(events);
   lines.push(
-    `flow: reviewer=${flow.reviewer ? 'on' : 'off'}, maxFixRounds=${flow.maxFixRounds}, maxConcurrent=${flow.maxConcurrent}`
+    `flow: reviewer=${flow.reviewer ? 'on' : 'off'}, maxConcurrent=${flow.maxConcurrent}`
   );
+  if (p.maxFixRounds !== undefined) {
+    lines.push(`historicalMaxFixRounds: ${p.maxFixRounds}（历史记录，不再生效）`);
+  }
   lines.push(`pr: ${prState({ events, truth })}`);
   // final: 与 pr: 同为终局状态类事实，两行对称；多轮终审取最新一条，无 final 时显示 none
   const fin = latestFinal(events);
@@ -634,7 +623,7 @@ function renderEvent(e) {
       );
       if (p.tickets !== undefined) parts.push(`tickets=${p.tickets}`);
       if (p.reviewer !== undefined) parts.push(`reviewer=${p.reviewer}`);
-      if (p.maxFixRounds !== undefined) parts.push(`maxFixRounds=${p.maxFixRounds}`);
+      if (p.maxFixRounds !== undefined) parts.push(`maxFixRounds=${p.maxFixRounds}（历史记录，不再生效）`);
       if (p.maxConcurrent !== undefined) parts.push(`maxConcurrent=${p.maxConcurrent}`);
       break;
     case 'dispatch':
@@ -680,6 +669,7 @@ function renderEvent(e) {
       }
       break;
     case 'close':
+      parts.push(`outcome=${p.outcome ?? 'unknown（旧记录未记录结果）'}`);
       break;
     default:
       for (const [k, v] of Object.entries(p)) parts.push(`${k}=${v}`);

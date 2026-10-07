@@ -39,11 +39,12 @@ const {
   checkNoReportBans,
   checkGateCommandFlags,
   checkHardRulesRetained,
-  checkPureVerdictGateAndEscalation,
+  checkPureVerdictGateAndRepair,
   checkNoIsolationBriefs,
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
   checkDispatchScriptFiles,
+  checkPartialDeliveryContinuation,
 } = require('../scripts/registration-checks.js');
 
 function readAgentFrontmatter() {
@@ -324,12 +325,215 @@ test('anchor-5: every mechanical-report gate command carries --base and --test-c
   assert.deepEqual(checkGateCommandFlags(skillText), []);
 });
 
-test('anchor-6: existing hard rules are retained (merge token, fix budget, verdict values, ledger write authority)', () => {
+test('anchor-6: existing hard rules are retained (merge token, verdict values, ledger write authority)', () => {
   assert.deepEqual(checkHardRulesRetained(skillText), []);
 });
 
-test('anchor-7: no-isolation fixers carry a pure-verdict gate with two-consecutive-reds escalation', () => {
-  assert.deepEqual(checkPureVerdictGateAndEscalation(skillText), []);
+test('SKILL.md flow configuration and new init expose reviewer/concurrency without a fix quota', () => {
+  const config = skillText.match(/## Flow configuration\n([\s\S]*?)(?=\n## Ledger)/)?.[1] ?? '';
+  const round0 = skillText.match(/### Round 0[^\n]*\n([\s\S]*?)(?=\n### Each round)/)?.[1] ?? '';
+  assert.doesNotMatch(config + round0, /maxFixRounds|--max-fix-rounds|per-ticket fix budget/);
+  assert.match(config, /--reviewer on\|off --max-concurrent N/);
+});
+
+test('SKILL.md ticket repairs use repair decisions and sequential attempts without budget escalation', () => {
+  const ticket = skillText.match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
+  assert.match(ticket, /Repair decisions/);
+  assert.match(ticket, /fix-no.*attempt.*sequence/i);
+  assert.doesNotMatch(ticket, /budget is consumed|rejects a third fix|two rounds are already dispatched|rejection is the escalation trigger/i);
+  assert.doesNotMatch(skillText, /Fix budget then escalate|maxFixRounds|--max-fix-rounds/);
+  const quotaFreeRules = '## Hard rules\nticket-NN approved changes_requested blocked\nNever hand-write or edit the ledger or the event stream.\n';
+  assert.deepEqual(checkHardRulesRetained(quotaFreeRules), []);
+});
+
+test('SKILL.md formal review rounds are independent, deduplicated, and require approval for the current candidate', () => {
+  const ticket = skillText.match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
+  assert.match(ticket, /formal-review.*independent.*fix/i);
+  assert.match(ticket, /same ticket.*same round.*duplicate/i);
+  assert.match(ticket, /multiple repairs.*one review/i);
+  assert.match(ticket, /without.*new.*fix.*fresh.*gate.*bundle.*settled/i);
+  assert.match(ticket, /clarification.*withdrawal.*notes.*anomaly.*approved/i);
+  assert.match(ticket, /approval.*validation.*current candidate/i);
+  assert.match(ticket, /latest.*changes_requested.*merge/i);
+});
+
+test('SKILL.md human handoff preserves escalation history without completing tickets or satisfying dependencies', () => {
+  const handoff = skillText.match(/### Human handoff[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  assert.match(handoff, /ticket-level.*escalate.*handoff.*history/i);
+  assert.match(handoff, /not.*completion.*dependenc.*normal seal.*permanent/i);
+  assert.match(handoff, /pending decisions.*user decisions.*pause stage.*recovery.*notes/i);
+  assert.match(handoff, /ordinary.*decisions.*not.*anomaly/i);
+  assert.match(handoff, /no.*pause.*resume.*authorization.*events/i);
+  assert.match(handoff, /merged.*completed.*escalation history/i);
+  assert.match(handoff, /unmerged.*facts.*notes.*current action/i);
+  assert.match(handoff, /unmerged.*open.*downstream.*blocked/i);
+  const ledger = skillText.match(/## Ledger\n([\s\S]*?)(?=\n## The loop)/)?.[1] ?? '';
+  assert.doesNotMatch(ledger, /Every state transition is recorded/);
+  assert.match(ledger, /structured facts.*recorded/i);
+});
+
+test('SKILL.md anomaly history retains facts while notes hold disposition evidence, not mechanical resolution', () => {
+  const history = skillText.match(/### Human handoff[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  assert.match(history, /anomaly.*refSeq.*immutable history/i);
+  assert.match(history, /disposition.*evidence pointers.*notes/i);
+  assert.match(history, /historical anomaly.*not.*closing.*unresolved/i);
+  assert.match(history, /cannot.*revoke facts.*reset.*approval.*validation/i);
+  assert.match(history, /evidence.*missing.*verify.*user/i);
+  assert.match(history, /scripts.*not.*parse notes.*authoriz.*resolv/i);
+  assert.match(history, /no.*anomaly-resolved.*event/i);
+});
+
+test('SKILL.md cold resume verifies user-provided conditions against notes and facts without replaying completed work', () => {
+  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  assert.match(resume, /skip init.*pull/i);
+  assert.match(resume, /rebuild.*reconcile/i);
+  assert.match(resume, /notes.*referenced evidence.*git/i);
+  assert.match(resume, /verify.*user.*new conditions.*evidence/i);
+  assert.match(resume, /continue.*not.*all.*resolved/i);
+  assert.match(resume, /necessary.*validation.*formal approval/i);
+  assert.match(resume, /remaining.*not.*reimplement.*redispatch.*remerge.*completed/i);
+  assert.match(resume, /running.*unsealed.*not.*child/i);
+  assert.ok(resume.indexOf('Verify the user') < resume.indexOf('Recover the interrupted stage'));
+});
+
+test('SKILL.md cold resume explains retired quotas without rewriting old settings/events or reopening sealed runs', () => {
+  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  assert.match(resume, /historical.*budget.*no longer.*limit/i);
+  assert.match(resume, /explain.*new repair rules/i);
+  assert.match(resume, /settings.*init.*event.*unchanged/i);
+  assert.match(resume, /sealed.*historical.*never reopen/i);
+});
+
+test('SKILL.md repair decisions use evidence and approved scope to continue or request the user', () => {
+  const decisions = skillText.match(/### Repair decisions[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  assert.match(decisions, /approved scope/i);
+  assert.match(decisions, /diagnostic evidence/i);
+  assert.match(decisions, /continuous failures/i);
+  assert.match(decisions, /request the user/i);
+  assert.match(decisions, /requirements.*permissions.*external conditions/i);
+  assert.match(decisions, /commit counts.*agent.*wording/i);
+  assert.match(decisions, /tests.*acceptance.*safety/i);
+});
+
+test('anchor-7: no-isolation fixers keep pure-verdict gates and use repair decisions rather than two-red stops', () => {
+  assert.deepEqual(checkPureVerdictGateAndRepair(skillText), []);
+  const stages = skillText.match(/### Merge[\s\S]*?(?=\n## Briefs)/)?.[0] ?? '';
+  assert.doesNotMatch(stages, /two consecutive reds/i);
+  for (const stage of stages.split('### Final gate')) {
+    assert.match(stage, /Repair decisions/);
+  }
+});
+
+test('SKILL.md reconciliation stops ordinary progress but permits explained integration recovery before merge accounting', () => {
+  const ledger = skillText.match(/## Ledger\n([\s\S]*?)(?=\n## The loop)/)?.[1] ?? '';
+  assert.match(ledger, /pause ordinary dispatches, new ticket merges, and closing/i);
+  assert.match(ledger, /verify and explain.*differences/i);
+  assert.match(ledger, /directly resolve.*differences/i);
+  assert.match(ledger, /unknown differences/i);
+  assert.match(ledger, /schema.*commit.*approval.*seal/i);
+  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  assert.match(resume, /unrecorded merge.*integration fixer/i);
+  assert.match(resume, /unrelated tickets/i);
+  const merge = skillText.match(/### Merge[^\n]*\n([\s\S]*?)(?=\n### Final gate)/)?.[1] ?? '';
+  assert.match(merge, /Only after.*validation.*passes.*record `merge`/i);
+  assert.match(merge, /premature.*merge.*ticket.*green/i);
+});
+
+test('SKILL.md pre-seal sync records failure but allows verified idempotent recovery with notes evidence', () => {
+  const sync = skillText.match(/\*\*Pre-seal sync\*\*([\s\S]*?)(?=\n5\. )/)?.[1] ?? '';
+  assert.match(sync, /failed sync must not seal/i);
+  assert.match(sync, /record.*anomaly.*sync failed/i);
+  assert.match(sync, /verify.*handle.*failure.*retry.*idempotent/i);
+  assert.match(sync, /success.*evidence.*notes.*continue/i);
+  assert.match(sync, /historical anomaly.*not.*permanent/i);
+  assert.doesNotMatch(sync, /anomaly.*and stop to report/i);
+  assert.match(sync, /sync always precedes.*ready/i);
+});
+
+test('SKILL.md an empty frontier with unfinished tickets pauses instead of entering the normal Final gate', () => {
+  const loopEnd = skillText.match(/Recompute the frontier\.([^]*?)(?=\n### Final gate)/)?.[1] ?? '';
+  assert.match(loopEnd, /empty frontier.*unfinished.*not.*Final gate/i);
+  assert.match(loopEnd, /user.*Partial delivery/i);
+});
+
+test('SKILL.md final repairs check each finding and record evidence-based re-review choices', () => {
+  const final = skillText.match(/### Final gate\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(final, /each finding.*evidence/i);
+  assert.match(final, /local.*explicit/i);
+  assert.match(final, /requirements.*behavior.*broader impact.*insufficient evidence/i);
+  assert.match(final, /orchestration notes/i);
+  assert.match(final, /green tests.*old.*verdict.*coder.*alone/i);
+  assert.match(final, /latest.*not_ready.*new.*final verdict/i);
+});
+
+test('SKILL.md partial delivery checks the current candidate and requires explicit user acceptance with notes evidence', () => {
+  const partial = skillText.match(/### Partial delivery[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  assert.match(partial, /verify.*current.*deliverab.*not.*past merge/i);
+  assert.match(partial, /completed.*unfinished.*impact.*risk/i);
+  assert.match(partial, /only after.*user explicitly accepts.*branch.*SHA.*validation/i);
+  assert.match(partial, /notes.*decision.*conditions.*next step/i);
+  assert.match(partial, /not.*abandon.*remaining scope/i);
+});
+
+test('SKILL.md partial delivery retains an unsealed run and recovery artifacts outside the final sync chain', () => {
+  assert.deepEqual(checkPartialDeliveryContinuation(skillText), []);
+});
+
+test('breakage simulation: partial-delivery continuation anchors must stay in their section', () => {
+  const fixture = '### Partial delivery\nKeep unsealed tracker snapshot findings; skip final sync; follow Cold resume.\n### User abandonment\n';
+  assert.deepEqual(checkPartialDeliveryContinuation(fixture), []);
+  for (const anchor of ['unsealed', 'tracker snapshot', 'findings', 'final sync', 'Cold resume']) {
+    const broken = fixture.replace(anchor, '') + anchor;
+    assert.ok(checkPartialDeliveryContinuation(broken).some((p) => p.includes(anchor)), anchor);
+  }
+  assert.match(checkPartialDeliveryContinuation('### User abandonment\n')[0], /missing.*Partial delivery/);
+});
+
+test('SKILL.md user abandonment stops children and preserves unfinished code/evidence before tracker actions', () => {
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /user explicitly.*abandon/i);
+  assert.match(abandon, /stop.*child.*confirm/i);
+  assert.match(abandon, /preserve.*code.*evidence/i);
+  assert.match(abandon, /completed.*unfinished.*branch.*SHA/i);
+  assert.match(abandon, /decision.*notes/i);
+  assert.match(abandon, /existing commits.*merges.*remain/i);
+  assert.ok(abandon.indexOf('Stop') < abandon.indexOf('Preserve'));
+});
+
+test('SKILL.md abandonment sync must succeed before explicit abandoned close and never declares ready', () => {
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /sync .*--mode abandon .*--claimant .*--reason/);
+  assert.match(abandon, /fail.*open.*anomaly/i);
+  assert.match(abandon, /retry.*missing.*actions/i);
+  assert.match(abandon, /contract.*no.*write surface.*no.*sync/i);
+  assert.match(abandon, /success.*add close.*--outcome abandoned/i);
+  assert.ok(abandon.indexOf('--mode abandon') < abandon.indexOf('--outcome abandoned'));
+  assert.match(abandon, /no.*final.*escalate/i);
+  assert.match(abandon, /never close unfinished tickets.*mark.*ready/i);
+  assert.match(abandon, /delayed tracker.*evidence/i);
+});
+
+test('SKILL.md completed close rejects latest not_ready/escalation completion and preserves old close intent', () => {
+  const final = skillText.match(/### Final gate\n([\s\S]*?)(?=\n### User abandonment)/)?.[1] ?? '';
+  assert.match(final, /--outcome completed.*omitt/i);
+  assert.match(final, /latest.*not_ready.*reject.*normal/i);
+  assert.match(final, /escalat.*not.*complet/i);
+  assert.match(final, /User abandonment/);
+  assert.doesNotMatch(final, /give-up through at warning level|record `close`.*as usual/i);
+  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  assert.match(abandon, /valid input.*initialized.*unsealed/i);
+  assert.match(abandon, /sealed.*reject.*all.*events.*anomaly/i);
+  assert.match(abandon, /old.*close.*outcome.*readable.*infer.*intent.*rewrite/i);
+});
+
+test('agents/coder.md follows the brief workspace for isolated tickets and serial main-feature repairs', () => {
+  assert.match(coderAgentText, /ticket.*pi-managed worktree/i);
+  assert.match(coderAgentText, /integration.*final.*main feature.*without isolation/i);
+  assert.match(coderAgentText, /sole writer/i);
+  assert.match(coderAgentText, /actual actions.*validation.*evidence pointers/i);
+  assert.doesNotMatch(coderAgentText, /Your cwd is a pi-managed worktree/);
+  const briefs = skillText.match(/### Integration fixer[\s\S]*?(?=\n## Hard rules)/)?.[0] ?? '';
+  assert.equal((briefs.match(/sole writer/g) ?? []).length, 2);
 });
 
 test('anchor-8: the fifth no-isolation brief exists with zero report duties', () => {
@@ -437,24 +641,24 @@ test('breakage simulation: a gate command losing --base is flagged (anchor-5)', 
 });
 
 test('breakage simulation: hard rules losing the merge-token clause are flagged (anchor-6)', () => {
-  const problems = checkHardRulesRetained('## Hard rules\nFix budget then escalate.\n');
+  const problems = checkHardRulesRetained('## Hard rules\napproved changes_requested.\n');
   assert.ok(problems.some((p) => p.includes('ticket-NN')));
 });
 
-test('breakage simulation: a no-isolation fixer without a gate or without escalation is flagged (anchor-7)', () => {
+test('breakage simulation: a no-isolation fixer without a gate or repair-decisions pointer is flagged (anchor-7)', () => {
   const noGate =
     '### Merge\ndispatch one coder without isolation on the feature branch.\n' +
     '### Final gate\ndispatch one coder without isolation to fix every finding.\n## Briefs\n';
-  const problems = checkPureVerdictGateAndEscalation(noGate);
+  const problems = checkPureVerdictGateAndRepair(noGate);
   assert.ok(problems.some((p) => p.includes('pure-verdict gate')));
-  assert.ok(problems.some((p) => p.includes('escalation anchor')));
+  assert.ok(problems.some((p) => p.includes('Repair decisions pointer')));
 });
 
 test('breakage simulation: a pure gate smuggling output/schema is flagged (anchor-7)', () => {
   const smuggled =
     '### Merge\ngate: { command: "<testCommand>", timeoutMs: 600000, output: "json", schema: {} }\n' +
-    'two consecutive reds escalate to the user.\n### Final gate\n## Briefs\n';
-  const problems = checkPureVerdictGateAndEscalation(smuggled);
+    'Repair decisions.\n### Final gate\n## Briefs\n';
+  const problems = checkPureVerdictGateAndRepair(smuggled);
   assert.ok(problems.some((p) => p.includes('must not carry output/schema')));
 });
 

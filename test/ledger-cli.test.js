@@ -186,7 +186,7 @@ test('init: 事件行含脚本盖的版本/序号/时间戳/HEAD 锚点，台账
   const events = readEvents(f);
   assert.equal(events.length, 1);
   const e = events[0];
-  assert.equal(e.v, 3, '信封版本随事件分类学演进（anomaly refSeq 联动 → v=3）');
+  assert.equal(e.v, 4, '信封版本随事件分类学演进（close outcome → v=4）');
   assert.equal(e.seq, 1);
   assert.match(e.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   assert.match(e.ts, /(Z|[+-]\d{2}:\d{2})$/, '时间戳必须含时区');
@@ -550,22 +550,22 @@ test('init 前置核验：spec 文件不存在被拒（未经验证的结论不�
   assert.ok(!fs.existsSync(f.eventsPath));
 });
 
-test('fix 预算：第 2 次 fix 仍准入（边界），第 3 次被拒并提示应升级上报', (t) => {
+test('fix 尝试无默认配额：第 3、4 次修复仍可在同一 run 入账', (t) => {
   const f = makeFixture(t);
   seedFixes(f, 2);
-  const third = addAll(f, 'fix', {
-    ticket: '01',
-    'fix-no': '3',
-    key: 'fix-01-r4',
-    'resume-run-id': 'aaaaaaaa',
-  });
-  assert.equal(third.status, 1, '第 3 次 fix 必须在写点被机械拒绝');
-  assert.match(third.stdout, /预算已耗尽/);
-  assert.match(third.stdout, /escalate/);
-  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 2, '被拒的 fix 不得入账');
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const n of [3, 4]) {
+    const r = addAll(f, 'fix', {
+      ticket: '01', 'fix-no': String(n), key: `fix-01-${n}`, 'resume-run-id': 'aaaaaaaa',
+    });
+    assert.equal(r.status, 0, r.stdout);
+    assert.doesNotMatch(r.stdout, /预算已耗尽|应升级/);
+  }
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 4);
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(before), '既有事件行保持原字节');
 });
 
-test('结算被拒（坏 SHA）不返还预算：计数于派发时刻', (t) => {
+test('结算被拒（坏 SHA）不归零 fixNo，下一次尝试仍按顺序入账', (t) => {
   const f = makeFixture(t);
   seedFixes(f, 2);
   const badSettle = addAll(f, 'settled', {
@@ -575,16 +575,23 @@ test('结算被拒（坏 SHA）不返还预算：计数于派发时刻', (t) => 
   });
   assert.equal(badSettle.status, 1, 'headSha 不存在是确定矛盾');
   assert.match(badSettle.stdout, /不存在/);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const fixNo of ['1', '2', '4']) {
+    const invalid = addAll(f, 'fix', {
+      ticket: '01', 'fix-no': fixNo, key: 'fix-01', 'resume-run-id': 'aaaaaaaa',
+    });
+    assert.equal(invalid.status, 1, invalid.stdout);
+    assert.match(invalid.stdout, /期望 3/);
+  }
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before, '坏结算和非法修复序号不改历史');
   const third = addAll(f, 'fix', {
-    ticket: '01',
-    'fix-no': '3',
-    key: 'fix-01-r4',
-    'resume-run-id': 'aaaaaaaa',
+    ticket: '01', 'fix-no': '3', key: 'fix-01-r4', 'resume-run-id': 'aaaaaaaa',
   });
-  assert.equal(third.status, 1, '结算被拒也不改变已消耗的修复预算');
+  assert.equal(third.status, 0, third.stdout);
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 3);
 });
 
-test('同票同轮 verdict 去重；轮号恒等式（round = fix 数 + 1）交叉核对', (t) => {
+test('无新增 fix 可正式重评，同票同轮 verdict 仍去重', (t) => {
   const f = makeFixture(t);
   initRun(f);
   addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
@@ -594,12 +601,34 @@ test('同票同轮 verdict 去重；轮号恒等式（round = fix 数 + 1）交�
   const dup = addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' });
   assert.equal(dup.status, 1);
   assert.match(dup.stdout, /去重/);
-  const skip = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved' });
-  assert.equal(skip.status, 1, '没有任何 fix 事件时 verdict 轮号只能是 1');
-  assert.match(skip.stdout, /恒等式/);
-  const again = addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' });
+  const second = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved' });
+  assert.equal(second.status, 0, second.stdout);
+  const again = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'changes_requested' });
   assert.equal(again.status, 1);
-  assert.equal(readEvents(f).filter((e) => e.type === 'verdict').length, 1);
+  assert.match(again.stdout, /去重/);
+  assert.equal(readEvents(f).filter((e) => e.type === 'verdict').length, 2);
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 0);
+});
+
+test('一次评审后多次修复再重评，settled 不以 fix 数推导轮次', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  assert.equal(addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' }).status, 0);
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'changes_requested' }).status, 0);
+  for (const n of [1, 2]) {
+    const fix = addAll(f, 'fix', {
+      ticket: '01', 'fix-no': String(n), key: `fix-01-${n}`, 'resume-run-id': 'aaaaaaaa',
+    });
+    assert.equal(fix.status, 0, fix.stdout);
+  }
+  const sha = step(f, 'candidate after two fixes');
+  const settled = addAll(f, 'settled', { ticket: '01', round: '2', 'head-sha': sha });
+  assert.equal(settled.status, 0, settled.stdout);
+  assert.doesNotMatch(settled.stdout, /fix 事件数|非常规轮次/);
+  assert.equal(readEvents(f).at(-1).warn, undefined);
+  const review = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved' });
+  assert.equal(review.status, 0, review.stdout);
+  assert.match(readLedger(f), /verdict ticket=01 round=2 verdict=approved/);
 });
 
 test('merge 门：无 verdict / 最近 verdict 非 approved 被拒', (t) => {
@@ -615,6 +644,146 @@ test('merge 门：无 verdict / 最近 verdict 非 approved 被拒', (t) => {
   const cr = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
   assert.equal(cr.status, 1);
   assert.match(cr.stdout, /changes_requested/);
+});
+
+test('#11 恢复：旧预算两次修复与升级后无需第三次 fix，正式批准后显示完成并保留升级历史', (t) => {
+  const f = makeFixture(t);
+  seedFixes(f, 2);
+  // 旧未封账 run fixture：预算与既有裁决/修复原样导入，不迁移历史。
+  const legacy = fs.readFileSync(f.eventsPath, 'utf8').split('\n');
+  const init = JSON.parse(legacy[0]);
+  init.payload.maxFixRounds = '2';
+  legacy[0] = JSON.stringify(init);
+  fs.writeFileSync(f.eventsPath, legacy.join('\n'));
+  const blocked = addAll(f, 'verdict', { ticket: '01', round: '3', verdict: 'changes_requested' });
+  assert.equal(blocked.status, 0, blocked.stdout);
+  assert.equal(addAll(f, 'escalate', { ticket: '01', note: '阻塞问题需要用户澄清' }).status, 0);
+  const history = fs.readFileSync(f.eventsPath, 'utf8');
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户澄清；单个问题撤回，等待新的完整正式评审。\n');
+  const { head, merge } = mergeTicket(f, '01');
+  const premature = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(premature.status, 1, premature.stdout);
+  assert.match(premature.stdout, /最近 verdict=approved.*changes_requested/);
+  assert.equal(addAll(f, 'settled', { ticket: '01', round: '4', 'head-sha': head, gate: 'validated candidate' }).status, 0);
+  const approved = addAll(f, 'verdict', {
+    ticket: '01', round: '4', verdict: 'approved', findings: 'findings/01-r4.md', 'rev-run-id': 'bbbbbbbb',
+  });
+  assert.equal(approved.status, 0, approved.stdout);
+  const merged = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(merged.status, 0, merged.stdout);
+  writeTicketFile(f.dir, '01', '自检基线', { status: 'resolved' });
+  f.git('branch -D ticket-01');
+  assert.equal(ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir }).status, 0);
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 2, '不伪造第三次代码修复');
+  assert.equal(readEvents(f).filter((e) => e.type === 'merge').length, 1);
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(history));
+  assert.match(readLedger(f), /escalate ticket=01 note="阻塞问题需要用户澄清"/);
+  assert.match(readLedger(f), /verdict ticket=01 round=4 verdict=approved/);
+  const row = readLedger(f).split('\n').find((line) => line.startsWith('| 01 |'));
+  assert.match(row, /^\| 01 \| 自检基线 \| done \|/, '实际合并后的当前状态是完成');
+  assert.match(row, /\| 2 \| escalated \|$/, '修复次数与交接历史仍保留在独立列');
+  const bytes = fs.readFileSync(f.eventsPath);
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(build.status, 0, build.stdout);
+  assert.match(build.stdout, /^\| 01 \| 自检基线 \| done \|/m);
+  assert.match(build.stdout, /escalate ticket=01 note="阻塞问题需要用户澄清"/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), bytes, '再生不改写新旧事件的任何字节');
+});
+
+test('#15 未合并的升级仍是交接历史：notes 与正式重评不完成票、不解除依赖或允许正常封账', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  assert.equal(addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' }).status, 0);
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'changes_requested' }).status, 0);
+  assert.equal(addAll(f, 'escalate', { ticket: '01', note: '等待用户澄清需求' }).status, 0);
+  const ticketPath = path.join(f.dir, '.scratch/demo/issues/01-x.md');
+  const ticketBefore = fs.readFileSync(ticketPath);
+  const history = fs.readFileSync(f.eventsPath);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户澄清需求，允许继续；问题撤回，等待核验候选代码。\n');
+  const built = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(built.status, 0, built.stdout);
+  assert.match(built.stdout, /^\| 01 \| 自检基线 \| escalated \|/m);
+  assert.match(built.stdout, /^\| 02 \| README 速览 \| open \| 01 \|/m, '下游依赖仍引用未完成票');
+  assert.deepEqual(fs.readFileSync(f.eventsPath), history, '用户决定仅在 notes 中，不补造恢复事件');
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved' }).status, 0);
+  const reviewed = readLedger(f);
+  assert.match(reviewed, /^\| 01 \| 自检基线 \| escalated \|/m, '批准不等于实际合并');
+  assert.match(reviewed, /^\| 02 \| README 速览 \| open \| 01 \|/m);
+  assert.match(reviewed, /escalate ticket=01 note="等待用户澄清需求"/);
+  const beforeClose = fs.readFileSync(f.eventsPath);
+  const closed = addAll(f, 'close', {});
+  assert.equal(closed.status, 1, closed.stdout);
+  assert.match(closed.stdout, /票 01.*无 merge/);
+  assert.match(closed.stdout, /票 02.*无 merge/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), beforeClose);
+  assert.deepEqual(fs.readFileSync(ticketPath), ticketBefore, '恢复说明和正式重评都不关闭未合并票');
+  assert.match(readLedger(f), /^state: running$/m);
+});
+
+test('最新正式裁决才是批准门：旧 approved、notes 与 anomaly 不覆盖后续阻塞裁决', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const { head, merge } = mergeTicket(f, '01');
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' }).status, 0);
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'changes_requested' }).status, 0);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '用户说继续，不代表正式批准。\n');
+  assert.equal(addAll(f, 'anomaly', { note: '此前对账差异的处置证据见 notes；这不是完整 approved' }).status, 0);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  const denied = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(denied.status, 1);
+  assert.match(denied.stdout, /最近 verdict=approved.*changes_requested/);
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+});
+
+test('独立轮次与修复序号仍拒绝非法正数、非法字段，拒绝时历史不变', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const n of ['0', '-1', '1.5', 'abc']) {
+    for (const type of ['settled', 'verdict', 'fix']) {
+      const flags = type === 'fix'
+        ? { ticket: '01', 'fix-no': n, key: 'fix-01', 'resume-run-id': 'aaaaaaaa' }
+        : type === 'verdict'
+          ? { ticket: '01', round: n, verdict: 'approved' }
+          : { ticket: '01', round: n, 'head-sha': f.baseline() };
+      const denied = addAll(f, type, flags);
+      assert.equal(denied.status, 1, `${type} ${n}: ${denied.stdout}`);
+      assert.match(denied.stdout, /正整数/);
+    }
+  }
+  const extra = addAll(f, 'verdict', { ticket: '01', round: '2', verdict: 'approved', 'fix-no': '1' });
+  assert.equal(extra.status, 1);
+  assert.match(extra.stdout, /不属于事件 verdict/);
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+});
+
+test('旧封账 run 的预算与 close 原样可读，所有后续写入仍拒绝', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  // 导入没有 outcome 的旧 close（不追溯执行新写入门），保持已有历史字节。
+  const init = readEvents(f)[0];
+  init.payload.maxFixRounds = '2';
+  const close = { v: 3, seq: 2, ts: init.ts, head: init.head, type: 'close', payload: { note: '旧封账' } };
+  fs.writeFileSync(f.eventsPath, JSON.stringify(init) + '\n' + JSON.stringify(close) + '\n');
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(build.status, 0, build.stdout);
+  assert.match(build.stdout, /state: complete/);
+  assert.match(build.stdout, /historicalMaxFixRounds: 2（历史记录，不再生效）/);
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(check.status, 0, check.stdout);
+  const attempts = [
+    ['fix', { ticket: '01', 'fix-no': '1', key: 'fix-01', 'resume-run-id': 'aaaaaaaa' }],
+    ['verdict', { ticket: '01', round: '2', verdict: 'approved' }],
+    ['anomaly', { note: '不能重开' }],
+    ['close', {}],
+  ];
+  for (const [type, flags] of attempts) {
+    const denied = addAll(f, type, flags);
+    assert.equal(denied.status, 1, denied.stdout);
+    assert.match(denied.stdout, /已封账/);
+  }
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
 });
 
 test('merge git 交叉核对：不存在 / 非祖先 / 无令牌 / headSha 非被合并工作，全部矛盾拒绝', (t) => {
@@ -659,56 +828,73 @@ test('merge git 交叉核对：不存在 / 非祖先 / 无令牌 / headSha 非�
   assert.equal(readEvents(f).filter((e) => e.type === 'merge').length, 0);
 });
 
-test('close 门：未闭环任务票阻塞封账并逐票列出', (t) => {
+test('close 门：升级不替代完成，有 ready 仍逐票拒绝普通封账', (t) => {
   const f = makeFixture(t);
   initRun(f);
   const blocked = addAll(f, 'close', {});
   assert.equal(blocked.status, 1);
   assert.match(blocked.stdout, /票 01/);
   assert.match(blocked.stdout, /票 02/);
-  // 闭环两票：01 走 merge，02 走 escalate
   const { head, merge } = mergeTicket(f, '01');
-  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
-  addAll(f, 'settled', { ticket: '01', round: '1', 'head-sha': head });
-  addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' });
-  addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' }).status, 0);
+  assert.equal(addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge }).status, 0);
   writeTicketFile(f.dir, '01', '自检基线', { status: 'resolved' });
-  addAll(f, 'dispatch', { ticket: '02', key: 't-02', 'run-id': 'bbbbbbbb' });
-  const esc = addAll(f, 'escalate', { ticket: '02', note: '两轮修复后仍 changes_requested' });
-  assert.equal(esc.status, 0, esc.stdout);
-  // 票全闭环后仍缺终审裁决：封账门（票 02）会拒绝，记 final 后方可封账
-  assert.equal(addAll(f, 'final', { 'final-verdict': 'ready', 'run-id': '89656ee2-8603-4407-957b-9d7f24e0f364' }).status, 0);
-  const ok = addAll(f, 'close', {});
-  assert.equal(ok.status, 0, ok.stdout);
-  assert.match(readLedger(f), /state: complete/);
+  assert.equal(addAll(f, 'escalate', { ticket: '02', note: '等待用户决定' }).status, 0);
+  assert.equal(addAll(f, 'final', { 'final-verdict': 'ready', 'run-id': FINAL_RUN_ID }).status, 0);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const flags of [{}, { outcome: 'completed' }]) {
+    const r = addAll(f, 'close', flags);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /票 02/);
+    assert.doesNotMatch(r.stdout, /票 01（/);
+    assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+  }
+  assert.match(readLedger(f), /^state: running/m);
 });
 
-test('close 非任务票排除：spec 母票与 resolved 研究票不阻塞', (t) => {
+test('close 非任务票排除：spec 母票、resolved 研究票和 wontfix 不阻塞', (t) => {
   const f = makeFixture(t);
+  writeTicketFile(f.dir, '01', '不实施', { status: 'wontfix' });
+  writeTicketFile(f.dir, '02', '研究结论', { status: 'resolved', type: 'research' });
   writeTicketFile(f.dir, '03', '母票——spec 本体', { status: 'ready-for-agent', type: 'spec' });
-  writeTicketFile(f.dir, '04', '对齐调研', { status: 'resolved', type: 'research' });
   initRun(f);
-  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
-  addAll(f, 'escalate', { ticket: '01' });
-  addAll(f, 'dispatch', { ticket: '02', key: 't-02', 'run-id': 'bbbbbbbb' });
-  addAll(f, 'escalate', { ticket: '02' });
   const ok = addAll(f, 'close', {});
   assert.equal(ok.status, 0, `非任务票不应阻塞封账：${ok.stdout}`);
 });
 
-test('封账后拒绝一切记账；close 不可重复', (t) => {
-  const f = makeFixture(t);
-  initRun(f);
-  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
-  addAll(f, 'escalate', { ticket: '01' });
-  addAll(f, 'dispatch', { ticket: '02', key: 't-02', 'run-id': 'bbbbbbbb' });
-  addAll(f, 'escalate', { ticket: '02' });
-  assert.equal(addAll(f, 'close', {}).status, 0);
-  const after = addAll(f, 'anomaly', { note: '封账后发现遗漏' });
-  assert.equal(after.status, 1, '封账后不再接受任何事件');
-  assert.match(after.stdout, /封账/);
-  const again = addAll(f, 'close', {});
-  assert.equal(again.status, 1);
+test('封账后拒绝一切记账；completed / abandoned 都不可重开', (t) => {
+  for (const outcome of ['completed', 'abandoned']) {
+    const f = makeFixture(t);
+    completeRun(f);
+    assert.equal(addAll(f, 'final', { 'final-verdict': 'ready', 'run-id': FINAL_RUN_ID }).status, 0);
+    assert.equal(addAll(f, 'close', { outcome }).status, 0);
+    const before = fs.readFileSync(f.eventsPath, 'utf8');
+    const head = f.baseline();
+    const attempts = [
+      ['dispatch', { ticket: '01', key: 't-01', 'run-id': 'a' }],
+      ['settled', { ticket: '01', round: '2', 'head-sha': head }],
+      ['verdict', { ticket: '01', round: '2', verdict: 'approved' }],
+      ['fix', { ticket: '01', 'fix-no': '1', key: 't-01', 'resume-run-id': 'a' }],
+      ['merge', { ticket: '01', 'head-sha': head, 'merge-sha': head }],
+      ['escalate', { ticket: '01' }],
+      ['anomaly', { note: '封账后发现遗漏' }],
+      ['final', { 'final-verdict': 'ready', 'run-id': FINAL_RUN_ID }],
+      ['pr', { state: 'ready' }],
+      ['close', {}],
+      ['close', { outcome: 'abandoned' }],
+      ['close', { outcome: 'completed' }],
+    ];
+    for (const [type, flags] of attempts) {
+      const r = addAll(f, type, flags);
+      assert.equal(r.status, 1, `${outcome}: ${type}: ${r.stdout}`);
+      assert.match(r.stdout, /封账/);
+      assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+    }
+    const again = initRun2nd(f);
+    assert.equal(again.status, 1, again.stdout);
+    assert.match(again.stdout, /封账/);
+    assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+  }
 });
 
 test('事件流丢失时的执法降级：拒绝无记忆的续写', (t) => {
@@ -811,7 +997,7 @@ test('事件流里的票没有票文件：表格有行、对账报缺失、封�
 });
 
 // ====================================================================
-// 流程形态快照（init 旗标）：reviewer 开关 / 修复预算参数化
+// 流程形态快照（init 旗标）：reviewer 开关 / 历史预算兼容
 // ====================================================================
 
 test('reviewer=off：verdict/fix 被拒、merge 无 verdict 放行、台账 header 标注形态', (t) => {
@@ -840,32 +1026,36 @@ test('reviewer=off：verdict/fix 被拒、merge 无 verdict 放行、台账 head
   const m = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
   assert.equal(m.status, 0, 'off 形态 merge 无需 verdict——平台测试门 + 集成门是仅存防线');
   const md = readLedger(f);
-  assert.match(md, /flow: reviewer=off, maxFixRounds=2, maxConcurrent=5/);
+  assert.match(md, /flow: reviewer=off, maxConcurrent=5/);
+  assert.doesNotMatch(md, /maxFixRounds/);
   assert.match(md, /reviewer=off maxConcurrent=5/, 'init 时间线行带快照旗标（缺省旗标不进 payload，header 显示补全后的形态）');
 });
 
-test('maxFixRounds=3：init 快照放宽预算，第 3 次 fix 可入账，第 4 次拒绝', (t) => {
+test('旧 init 预算仅显示为历史无效值，超出旧配额仍可修复且 build/check 不改旧行', (t) => {
   const f = makeFixture(t);
-  f.git('checkout -q -b feat/demo');
-  const r = initAll(f, {
-    branch: 'feat/demo',
-    'branch-base': 'main',
-    'baseline-sha': f.baseline(),
-    spec: '.scratch/demo/spec.md',
-    'test-command': 'npm test',
-    'max-fix-rounds': '3',
-  });
-  assert.equal(r.status, 0, r.stdout);
-  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' });
-  const sha = step(f, 'work r1');
-  addAll(f, 'settled', { ticket: '01', round: '1', 'head-sha': sha });
-  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'changes_requested' }).status, 0);
-  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '1', key: 'fix-01-r2', 'resume-run-id': 'bbbbbbbb' }).status, 0);
-  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '2', key: 'fix-01-r3', 'resume-run-id': 'cccccccc' }).status, 0);
-  assert.equal(addAll(f, 'fix', { ticket: '01', 'fix-no': '3', key: 'fix-01-r4', 'resume-run-id': 'dddddddd' }).status, 0);
-  const fourth = addAll(f, 'fix', { ticket: '01', 'fix-no': '4', key: 'fix-01-r5', 'resume-run-id': 'eeeeeeee' });
-  assert.equal(fourth.status, 1, '快照预算耗尽必须拒绝');
-  assert.match(fourth.stdout, /上限 3/);
+  initRun(f);
+  // 导入旧事件 fixture；运行中的事件写入仍全部经真实 CLI。
+  const legacy = readEvents(f)[0];
+  legacy.payload.maxFixRounds = '3';
+  fs.writeFileSync(f.eventsPath, JSON.stringify(legacy) + '\n');
+  const original = fs.readFileSync(f.eventsPath, 'utf8');
+  assert.equal(addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': 'aaaaaaaa' }).status, 0);
+  for (const n of [1, 2, 3, 4]) {
+    const fix = addAll(f, 'fix', {
+      ticket: '01', 'fix-no': String(n), key: `fix-01-${n}`, 'resume-run-id': 'aaaaaaaa',
+    });
+    assert.equal(fix.status, 0, fix.stdout);
+  }
+  const build = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(build.status, 0, build.stdout);
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(check.status, 0, check.stdout);
+  const md = readLedger(f);
+  assert.match(md, /^flow: reviewer=on, maxConcurrent=3$/m);
+  assert.match(md, /^historicalMaxFixRounds: 3（历史记录，不再生效）$/m);
+  assert.match(md, /init .*maxFixRounds=3（历史记录，不再生效）/);
+  assert.equal(readEvents(f).filter((e) => e.type === 'fix').length, 4);
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(original));
 });
 
 test('init 非法快照值被 schema 拒绝（枚举 / 正整数）——成功基线与坏载荷同屏对照', (t) => {
@@ -895,7 +1085,7 @@ test('init 非法快照值被 schema 拒绝（枚举 / 正整数）——成功�
 
 const FINAL_RUN_ID = '89656ee2-8603-4407-957b-9d7f24e0f364';
 
-test('add final: 三值裁决全部入账，事件行含信封四件套（v=3 / 单调序号 / 权威时间戳 / HEAD 锚点）', (t) => {
+test('add final: 三值裁决全部入账，事件行含信封四件套（v=4 / 单调序号 / 权威时间戳 / HEAD 锚点）', (t) => {
   const f = makeFixture(t);
   initRun(f);
   for (const verdict of ['ready', 'ready_with_fixes', 'not_ready']) {
@@ -915,7 +1105,7 @@ test('add final: 三值裁决全部入账，事件行含信封四件套（v=3 / 
   );
   const head = f.git('rev-parse HEAD');
   for (const e of finals) {
-    assert.equal(e.v, 3, '事件分类学演进 → 信封版本升为 3（旧账按 v 识别）');
+    assert.equal(e.v, 4, '事件分类学演进 → 信封版本升为 4（旧账按 v 识别）');
     assert.equal(e.payload.runId, FINAL_RUN_ID);
     assert.match(e.ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/, '权威时间戳由脚本盖');
     assert.equal(e.head, head, '写入时刻 HEAD 锚点由脚本盖');
@@ -1013,7 +1203,7 @@ test('add final: 封账后拒记（封账拒一切事件的既有语义对新事
     addAll(f, 'dispatch', { ticket: num, key: `t-${num}`, 'run-id': 'aaaaaaaa' });
     addAll(f, 'escalate', { ticket: num });
   }
-  assert.equal(addAll(f, 'close', {}).status, 0);
+  assert.equal(addAll(f, 'close', { outcome: 'abandoned' }).status, 0);
   const r = addAll(f, 'final', { 'final-verdict': 'not_ready', 'run-id': FINAL_RUN_ID });
   assert.equal(r.status, 1, '封账后不再接受任何事件');
   assert.match(r.stdout, /封账/);
@@ -1076,21 +1266,21 @@ test('add final: reviewer=off 的运行终审照跑照记（final 不进流程�
 
 const FINAL_RUN_ID_2 = 'f1cea05a-0d3b-4f8e-9a11-2c6b7d8e9f01';
 
-// 「一票合并 + 一票升级」的完整运行（票全闭环，尚不封账）：封账门三态与终审可见性的共同前置。
-// 终审在该状态之后才发生，故此后记 final 不会有「尚无 merge」的流程异常警告。
+// 两张任务票均实际合并、记账并完成清理，尚未终审/封账。
 function completeRun(f) {
   initRun(f);
-  const { head, merge } = mergeTicket(f, '01');
-  addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': '9ea3e64b' });
-  addAll(f, 'settled', { ticket: '01', round: '1', 'head-sha': head });
-  addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' });
-  addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
-  writeTicketFile(f.dir, '01', '自检基线', { status: 'resolved' });
-  addAll(f, 'dispatch', { ticket: '02', key: 't-02', 'run-id': 'bbbbbbbb' });
-  addAll(f, 'escalate', { ticket: '02' });
-  writeTicketFile(f.dir, '02', 'README 速览', { status: 'escalated', blockedBy: '01' });
-  f.git('branch -D ticket-01');
-  return { head, merge };
+  let first;
+  for (const num of ['01', '02']) {
+    const { head, merge } = mergeTicket(f, num);
+    first ??= { head, merge };
+    assert.equal(addAll(f, 'dispatch', { ticket: num, key: `t-${num}`, 'run-id': '9ea3e64b' }).status, 0);
+    assert.equal(addAll(f, 'settled', { ticket: num, round: '1', 'head-sha': head }).status, 0);
+    assert.equal(addAll(f, 'verdict', { ticket: num, round: '1', verdict: 'approved' }).status, 0);
+    assert.equal(addAll(f, 'merge', { ticket: num, 'head-sha': head, 'merge-sha': merge }).status, 0);
+    writeTicketFile(f.dir, num, `完成票 ${num}`, { status: 'resolved' });
+    f.git(`branch -D ticket-${num}`);
+  }
+  return first;
 }
 
 // 伪造平台证据：HOME 指向 fixture 目录。会话产物目录约定与审计工具同源——
@@ -1142,64 +1332,61 @@ test('close 门：有 merge 无 final 且票已全闭环 → 仍拒绝（终审�
   assert.ok(!readEvents(f).some((e) => e.type === 'close'));
 });
 
-test('close 门：latest=not_ready → 警告放行，台账标注警告', (t) => {
+test('close 门：最新 not_ready 拒绝正常完成，不采用旧 ready 或 notes 的放弃意图', (t) => {
   const f = makeFixture(t);
   completeRun(f);
-  const fin = addAll(f, 'final', {
-    'final-verdict': 'not_ready',
-    'run-id': FINAL_RUN_ID,
-    note: '跨票漂移未修完，用户拍板放弃',
-  });
-  assert.equal(fin.status, 0, fin.stdout);
-  const r = addAll(f, 'close', {});
-  assert.equal(r.status, 0, `放弃是合法出口——封账放行：${r.stdout}`);
-  assert.match(r.stdout, /⚠/, '警告必须打在 stdout 上，编排器当场可见');
-  assert.match(r.stdout, /not_ready/);
-  const closeEvent = readEvents(f).at(-1);
-  assert.equal(closeEvent.type, 'close');
-  assert.match(String(closeEvent.warn), /not_ready/, '警告记入封账事件信封（warn 字段）');
-  const md = readLedger(f);
-  assert.match(md, /^state: complete/m);
-  assert.match(md, /⚠[^\n]*not_ready/, '台账（时间线）可见封账警告标注');
+  assert.equal(addAll(f, 'final', { 'final-verdict': 'ready', 'run-id': FINAL_RUN_ID }).status, 0);
+  assert.equal(addAll(f, 'final', {
+    'final-verdict': 'not_ready', 'run-id': FINAL_RUN_ID_2, note: '用户拍板放弃',
+  }).status, 0);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const flags of [{}, { outcome: 'completed' }]) {
+    const r = addAll(f, 'close', flags);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /not_ready/);
+    assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+  }
+  assert.match(readLedger(f), /^state: running/m);
 });
 
 test('close 门：latest∈{ready, ready_with_fixes} → 正常放行、无终审警告', (t) => {
   for (const verdict of ['ready', 'ready_with_fixes']) {
     const f = makeFixture(t);
     completeRun(f);
+    assert.equal(addAll(f, 'final', { 'final-verdict': 'not_ready', 'run-id': FINAL_RUN_ID_2 }).status, 0);
     const fin = addAll(f, 'final', { 'final-verdict': verdict, 'run-id': FINAL_RUN_ID });
     assert.equal(fin.status, 0, fin.stdout);
     const r = addAll(f, 'close', {});
     assert.equal(r.status, 0, r.stdout);
     assert.doesNotMatch(r.stdout, /⚠/, `latest=${verdict} 视为已过终审，不得有终审警告`);
-    assert.equal(readEvents(f).filter((e) => e.type === 'final').length, 1);
+    assert.equal(readEvents(f).filter((e) => e.type === 'final').length, 2);
   }
 });
 
-test('close 门：零 merge（全 escalate）无 final → 正常放行，无终审相关警告', (t) => {
+test('close 门：零 merge（全 escalate）无 final → 拒绝未完成票，不要求终审', (t) => {
   const f = makeFixture(t);
   initRun(f);
   for (const num of ['01', '02']) {
-    addAll(f, 'dispatch', { ticket: num, key: `t-${num}`, 'run-id': 'aaaaaaaa' });
-    addAll(f, 'escalate', { ticket: num });
+    assert.equal(addAll(f, 'escalate', { ticket: num }).status, 0);
   }
   const r = addAll(f, 'close', {});
-  assert.equal(r.status, 0, `无 merge 就没有终审环节——封账不检查：${r.stdout}`);
-  assert.doesNotMatch(r.stdout, /终审|final/, '零合并票的运行封账不产生终审相关消息');
-  assert.match(readLedger(f), /^state: complete/m);
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /票 01/);
+  assert.match(r.stdout, /票 02/);
+  assert.doesNotMatch(r.stdout, /终审|final/);
+  assert.match(readLedger(f), /^state: running/m);
 });
 
-test('close 门：零 merge 的运行即使记过 not_ready 终审 → 封账不检查终审、无终审警告', (t) => {
+test('close 门：零 merge 但 latest=not_ready 也拒绝正常完成', (t) => {
   const f = makeFixture(t);
+  writeTicketFile(f.dir, '01', '母票', { type: 'spec' });
+  writeTicketFile(f.dir, '02', '不实施', { status: 'wontfix' });
   initRun(f);
-  for (const num of ['01', '02']) {
-    addAll(f, 'dispatch', { ticket: num, key: `t-${num}`, 'run-id': 'aaaaaaaa' });
-    addAll(f, 'escalate', { ticket: num });
-  }
-  addAll(f, 'final', { 'final-verdict': 'not_ready', 'run-id': FINAL_RUN_ID });
+  assert.equal(addAll(f, 'final', { 'final-verdict': 'not_ready', 'run-id': FINAL_RUN_ID }).status, 0);
   const r = addAll(f, 'close', {});
-  assert.equal(r.status, 0, `零合并票的运行封账不检查终审：${r.stdout}`);
-  assert.doesNotMatch(r.stdout, /⚠/, '零合并票的运行封账不得产生终审警告');
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /not_ready/);
+  assert.match(readLedger(f), /^state: running/m);
 });
 
 test('台账头部 final: 行：多轮取最新裁决与 runId 短码；无 final 显示 none（与 pr: 行对称）', (t) => {
@@ -1270,6 +1457,7 @@ test('旧账兼容：无 final 事件的完整旧账（v=1 信封）build/check 
   ];
   fs.writeFileSync(f.eventsPath, legacy.map((e) => JSON.stringify(e)).join('\n') + '\n');
 
+  const originalBytes = fs.readFileSync(f.eventsPath);
   const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir, env: { HOME: fakeHome(t) } });
   assert.equal(check.status, 0, `旧账 check 必须照旧零差异：${check.stdout}`);
   assert.doesNotMatch(check.stdout, /⚠/, '旧账不得新增警告');
@@ -1282,6 +1470,10 @@ test('旧账兼容：无 final 事件的完整旧账（v=1 信封）build/check 
   assert.match(build.stdout, /^state: complete/m);
   assert.match(build.stdout, /^final: none$/m, '旧账无 final 事件 → 头部按最小形态显示 none');
   assert.match(build.stdout, /账实一致/);
+  assert.match(build.stdout, /^outcome: unknown（旧记录未记录结果）$/m);
+  assert.match(build.stdout, /close outcome=unknown（旧记录未记录结果）/);
+  assert.doesNotMatch(build.stdout, /^outcome: (completed|abandoned)/m);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), originalBytes, 'build/check 不追溯改写旧 close 的任何字节');
 });
 
 // ====================================================================
@@ -1300,7 +1492,7 @@ test('add anomaly --ref-seq N：正常入账（payload 含 refSeq），时间线
   const anomaly = readEvents(f).at(-1);
   assert.equal(anomaly.type, 'anomaly');
   assert.equal(anomaly.seq, 3);
-  assert.equal(anomaly.v, 3, '信封版本随分类学演进（refSeq 联动 → v=3）');
+  assert.equal(anomaly.v, 4, '信封版本随分类学演进（close outcome → v=4）');
   assert.equal(anomaly.payload.refSeq, '2', 'refSeq 指向既有事件序号（旗标值原样入账，与 round 同）');
   assert.match(anomaly.payload.note, /污染/);
 
@@ -1322,6 +1514,48 @@ test('add anomaly --ref-seq N：正常入账（payload 含 refSeq），时间线
     line4.endsWith('anomaly note=无关异常，不指向任何事件 note="无关异常，不指向任何事件"'),
     `无 refSeq 的行渲染零变化：${line4}`
   );
+});
+
+test('#15 anomaly 历史不阻止正常收尾，处置 notes 不改事件或覆盖明确校验', (t) => {
+  const f = makeFixture(t);
+  completeRun(f);
+  const mergeSeq = readEvents(f).find((e) => e.type === 'merge').seq;
+  assert.equal(addAll(f, 'anomaly', {
+    note: '收尾核对曾失败，保留历史与证据', 'ref-seq': String(mergeSeq),
+  }).status, 0);
+  const history = fs.readFileSync(f.eventsPath);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'), '核对已重跑，处置证据见 completion-check.log；不撤销历史异常。\n');
+  // notes 不让当前票文件漂移变成已解决事实。
+  writeTicketFile(f.dir, '01', '完成票 01', { status: 'claimed' });
+  const drift = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(drift.status, 1, drift.stdout);
+  assert.match(drift.stdout, /票 01 文件 Status 为 claimed，账上已有 merge（应 resolved）/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), history);
+  const invalidRef = addAll(f, 'anomaly', { note: 'notes 不能豁免非法引用', 'ref-seq': '999' });
+  assert.equal(invalidRef.status, 1, invalidRef.stdout);
+  assert.match(invalidRef.stdout, /refSeq=999 不小于当前序号/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), history);
+  writeTicketFile(f.dir, '01', '完成票 01', { status: 'resolved' });
+  const check = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(check.status, 0, check.stdout);
+  assert.match(check.stdout, /账实一致/);
+  assert.equal(ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir }).status, 0);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), history, '处置与再生不更改 anomaly 或所引用事件');
+  assert.equal(addAll(f, 'final', { 'final-verdict': 'not_ready', 'run-id': FINAL_RUN_ID }).status, 0);
+  const beforeClose = fs.readFileSync(f.eventsPath);
+  const denied = addAll(f, 'close', {});
+  assert.equal(denied.status, 1, denied.stdout);
+  assert.match(denied.stdout, /not_ready/);
+  assert.deepEqual(fs.readFileSync(f.eventsPath), beforeClose);
+  assert.equal(addAll(f, 'final', { 'final-verdict': 'ready', 'run-id': FINAL_RUN_ID_2 }).status, 0);
+  const closed = addAll(f, 'close', {});
+  assert.equal(closed.status, 0, closed.stdout);
+  assert.match(readLedger(f), /^state: complete/m);
+  assert.match(readLedger(f), /^outcome: completed$/m);
+  assert.match(readLedger(f), /anomaly ↩ ref-seq 5 .*收尾核对曾失败/);
+  assert.equal(readEvents(f).filter((e) => e.type === 'anomaly').length, 1);
+  assert.equal(readEvents(f).find((e) => e.type === 'anomaly').payload.refSeq, String(mergeSeq));
+  assert.ok(fs.readFileSync(f.eventsPath).subarray(0, history.length).equals(history), '旧历史原字节保留，只有正式裁决与 close 追加');
 });
 
 test('--help：anomaly 用法行含 --ref-seq，并说明 refSeq 指向既有事件的语义', (t) => {
@@ -1744,4 +1978,163 @@ test('tracker=github 快照：封账门同样吃快照票文件——未闭环�
   assert.equal(close.status, 1, '未闭环的快照票必须阻塞封账');
   assert.match(close.stdout, /票 1042/, '快照票文件即票文件——封账门逐票列出');
   assert.match(close.stdout, /票 1043/);
+});
+
+test('#16 显式 abandoned：未完成票可封账，不补 final/escalate、不改票状态', (t) => {
+  const f = makeFixture(t);
+  initRun(f);
+  const ticketPath = path.join(f.dir, '.scratch/demo/issues/01-x.md');
+  const ticketBefore = fs.readFileSync(ticketPath, 'utf8');
+  const history = fs.readFileSync(f.eventsPath, 'utf8');
+  const r = addAll(f, 'close', { outcome: 'abandoned', note: '用户明确放弃' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.deepEqual(readEvents(f).map((e) => e.type), ['init', 'close']);
+  assert.equal(readEvents(f).at(-1).payload.outcome, 'abandoned');
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(history));
+  assert.equal(fs.readFileSync(ticketPath, 'utf8'), ticketBefore);
+  assert.match(readLedger(f), /^state: complete/m);
+  assert.match(readLedger(f), /^outcome: abandoned/m);
+  assert.match(readLedger(f), /close outcome=abandoned note="用户明确放弃"/);
+});
+
+test('#16 新 close 省略 outcome 写 completed，显式 completed 同义；空任务运行无需 final', (t) => {
+  for (const flags of [{}, { outcome: 'completed' }]) {
+    const f = makeFixture(t);
+    writeTicketFile(f.dir, '01', '不实施', { status: 'wontfix' });
+    writeTicketFile(f.dir, '02', '已解决研究', { status: 'resolved', type: 'research' });
+    initRun(f);
+    const r = addAll(f, 'close', flags);
+    assert.equal(r.status, 0, r.stdout);
+    assert.equal(readEvents(f).at(-1).payload.outcome, 'completed');
+    assert.match(readLedger(f), /^outcome: completed$/m);
+    assert.match(readLedger(f), /close outcome=completed/);
+    assert.equal(readEvents(f).filter((e) => e.type === 'final').length, 0);
+  }
+});
+
+test('#16 abandoned 豁免终审：有 merge 无 final 和 latest not_ready 都可退出', (t) => {
+  for (const finalVerdict of [null, 'not_ready']) {
+    const f = makeFixture(t);
+    initRun(f);
+    const { head, merge } = mergeTicket(f, '01');
+    assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' }).status, 0);
+    assert.equal(addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge }).status, 0);
+    if (finalVerdict) {
+      assert.equal(addAll(f, 'final', { 'final-verdict': finalVerdict, 'run-id': FINAL_RUN_ID }).status, 0);
+    }
+    const r = addAll(f, 'close', { outcome: 'abandoned' });
+    assert.equal(r.status, 0, r.stdout);
+    assert.equal(readEvents(f).at(-1).payload.outcome, 'abandoned');
+    assert.equal(readEvents(f).filter((e) => e.type === 'final').length, finalVerdict ? 1 : 0);
+    assert.equal(readEvents(f).filter((e) => e.type === 'escalate').length, 0);
+    assert.match(fs.readFileSync(path.join(f.dir, '.scratch/demo/issues/02-x.md'), 'utf8'), /Status:\*\* ready-for-agent/);
+    assert.match(readLedger(f), /^outcome: abandoned$/m);
+  }
+});
+
+test('#16 abandoned 仍拒绝未初始化和非法输入，拒绝不落盘', (t) => {
+  const f = makeFixture(t);
+  const early = addAll(f, 'close', { outcome: 'abandoned' });
+  assert.equal(early.status, 1, early.stdout);
+  assert.match(early.stdout, /未初始化/);
+  assert.ok(!fs.existsSync(f.eventsPath));
+  initRun(f);
+  const before = fs.readFileSync(f.eventsPath, 'utf8');
+  for (const flags of [
+    { outcome: 'abandon' }, { outcome: 'ready' }, { outcome: '' },
+    { outcome: 'abandoned', ticket: '01' }, { outcome: 'abandoned', force: 'true' },
+  ]) {
+    const r = addAll(f, 'close', flags);
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /outcome|ticket|force/);
+    assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), before);
+  }
+});
+
+test('#16 help 区分 completed 默认与显式 abandoned，同步 abandon 成功后指向 abandoned', (t) => {
+  const r = ledger(['--help'], { cwd: os.tmpdir() });
+  assert.equal(r.status, 0, r.stdout);
+  assert.match(r.stdout, /close\s+\[--outcome\(completed\|abandoned\)\]/);
+  assert.match(r.stdout, /缺省 completed/);
+  assert.match(r.stdout, /abandon[^\n]*close --outcome abandoned/);
+});
+
+// #14 的缝仍是 CLI/git/票事实；此合成轨迹不证明编排器会自主派发 agent 或作出冷恢复判断。
+test('#14 未入账合并恢复：集成红→证据/build/check 非零→验证绿→正常 merge 记账/票完成/check', (t) => {
+  const f = makeFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'integration.test.js'), [
+    "const { test } = require('node:test');",
+    "const assert = require('node:assert/strict');",
+    "const fs = require('node:fs');",
+    "test('merged work satisfies integration contract', () => {",
+    "  assert.equal(fs.readFileSync('work-01.txt', 'utf8'), '01\\nvalidated\\n');",
+    '});',
+    '',
+  ].join('\n'));
+  sh(f.dir, 'git add integration.test.js && git commit -qm "Add integration contract"');
+  initRun(f, { 'test-command': 'node --test integration.test.js' });
+  writeTicketFile(f.dir, '01', '自检基线', { status: 'claimed' });
+  assert.equal(addAll(f, 'dispatch', { ticket: '01', key: 't-01', 'run-id': '9ea3e64b' }).status, 0);
+  const { head, merge } = mergeTicket(f, '01');
+  assert.equal(addAll(f, 'settled', { ticket: '01', round: '1', 'head-sha': head }).status, 0);
+  assert.equal(addAll(f, 'verdict', { ticket: '01', round: '1', verdict: 'approved' }).status, 0);
+  const history = fs.readFileSync(f.eventsPath, 'utf8');
+  const ticketPath = path.join(f.dir, '.scratch/demo/issues/01-x.md');
+  const ticketBefore = fs.readFileSync(ticketPath, 'utf8');
+  // 子进程是独立的 fixture 验证命令，不继承外层 node:test 的递归运行标记。
+  const validationEnv = { ...process.env };
+  delete validationEnv.NODE_TEST_CONTEXT;
+  const validate = () => spawnSync(process.execPath, ['--test', 'integration.test.js'], {
+    cwd: f.dir, encoding: 'utf8', env: validationEnv,
+  });
+  const red = validate();
+  assert.equal(red.status, 1, red.stdout + red.stderr);
+  assert.match(red.stdout + red.stderr, /AssertionError|ERR_ASSERTION/);
+  fs.writeFileSync(path.join(f.runtime, 'integration-red.log'), red.stdout + red.stderr);
+  fs.writeFileSync(path.join(f.runtime, 'notes.md'),
+    `Actual merge ${merge} is pending integration validation. See integration-red.log; recover only this difference.\n`);
+
+  // 新进程重建事实，不通过提前记 merge / 完成票把暂停时的差异变绿。
+  const built = ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(built.status, 0, built.stdout);
+  const pendingDiff = `git 有票 01 的合并提交 ${merge.slice(0, 7)}，事件流无 merge 事件`;
+  assert.ok(built.stdout.includes(pendingDiff), built.stdout);
+  const pending = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(pending.status, 1, pending.stdout);
+  assert.match(pending.stdout, /1 处账实差异/);
+  assert.ok(pending.stdout.includes(`1. ${pendingDiff}`), pending.stdout);
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), history);
+  assert.equal(fs.readFileSync(ticketPath, 'utf8'), ticketBefore);
+
+  // 仅在 fixture 主 feature 树中修复实际集成条件，保留测试与原 merge；不模拟 CLI 派 agent。
+  fs.writeFileSync(path.join(f.dir, 'work-01.txt'), '01\nvalidated\n');
+  sh(f.dir, 'git add work-01.txt && git commit -qm "Fix integration validation"');
+  const green = validate();
+  assert.equal(green.status, 0, green.stdout + green.stderr);
+  fs.writeFileSync(path.join(f.runtime, 'integration-green.log'), green.stdout + green.stderr);
+  const stillPending = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(stillPending.status, 1, stillPending.stdout);
+  assert.equal(stillPending.stdout, pending.stdout, '验证绿也不隐去未记账合并差异');
+  assert.equal(fs.readFileSync(f.eventsPath, 'utf8'), history);
+  assert.equal(fs.readFileSync(ticketPath, 'utf8'), ticketBefore);
+
+  const recorded = addAll(f, 'merge', { ticket: '01', 'head-sha': head, 'merge-sha': merge });
+  assert.equal(recorded.status, 0, recorded.stdout);
+  const beforeCleanup = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(beforeCleanup.status, 1, beforeCleanup.stdout);
+  assert.match(beforeCleanup.stdout, /2 处账实差异/);
+  assert.match(beforeCleanup.stdout, /票 01 文件 Status 为 claimed，账上已有 merge（应 resolved）/);
+  assert.match(beforeCleanup.stdout, /票 01 已合并但分支 ticket-01 仍存在（应清理）/);
+  assert.doesNotMatch(beforeCleanup.stdout, /事件流无 merge 事件/);
+  writeTicketFile(f.dir, '01', '自检基线', { status: 'resolved' });
+  f.git('branch -D ticket-01');
+  assert.equal(ledger(['build', '--runtime-dir', f.runtime], { cwd: f.dir }).status, 0);
+  const checked = ledger(['check', '--runtime-dir', f.runtime], { cwd: f.dir });
+  assert.equal(checked.status, 0, checked.stdout);
+  assert.match(checked.stdout, /账实一致/);
+  assert.deepEqual(readEvents(f).map((e) => e.type), ['init', 'dispatch', 'settled', 'verdict', 'merge']);
+  assert.ok(fs.readFileSync(f.eventsPath, 'utf8').startsWith(history));
+  assert.equal(readEvents(f).at(-1).payload.mergeSha, merge);
+  assert.match(readLedger(f), /^state: running/m);
+  assert.match(fs.readFileSync(path.join(f.dir, '.scratch/demo/issues/02-x.md'), 'utf8'), /Status:\*\* ready-for-agent/);
 });

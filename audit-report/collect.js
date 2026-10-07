@@ -115,7 +115,7 @@ function buildRunModel(events) {
       case 'pr': run.prs.push({ ...p, seq: e.seq, ts: e.ts }); break;
       case 'anomaly': run.anomalies.push({ seq: e.seq, ts: e.ts, note: p.note || '', refSeq: refSeqNumber(p.refSeq) }); break;
       case 'escalate': run.escalates.push({ seq: e.seq, ts: e.ts, ticket: p.ticket, note: p.note || '' }); break;
-      case 'close': run.close = { seq: e.seq, ts: e.ts, note: p.note || '' }; break;
+      case 'close': run.close = { seq: e.seq, ts: e.ts, outcome: p.outcome, note: p.note || '' }; break;
       case 'final': {
         // run 级终审裁决：无 ticket，runId 必选（事件驱动审计与平台证据核验的唯一锚点）。
         // 多轮终审 = 多条事件，一律以最新一条为准；派发终审的动作本身不记事件。
@@ -125,8 +125,8 @@ function buildRunModel(events) {
       }
       case 'dispatch': {
         const t = ticketOf(p.ticket);
-        // 修复后的重派发（fallback fresh coder）事件无 round 字段：按该票已消耗的修复数归入下一轮
-        const round = p.round != null ? Number(p.round) : t.fixes.length + 1;
+        // 正式评审与修复次数独立；缺少显式轮号时不从修复数补造。
+        const round = p.round != null ? Number(p.round) : null;
         t.dispatches.push({ seq: e.seq, ts: e.ts, key: p.key, runId: p.runId, worktree: p.worktree, note: p.note || '', round });
         if (p.runId) runRefs.push({ runId: p.runId, ticket: p.ticket, key: p.key, role: RUN_ROLE_BY_TYPE.dispatch, seq: e.seq, ts: e.ts });
         break;
@@ -558,27 +558,24 @@ function deriveRisks(model) {
         T('risk.r3.detailCorrected', { note: a.note, tseq: fix.target.seq, ttype: fix.target.type, tticket: fix.target.payload.ticket, cseq: fix.correction.seq }),
         [{ label: T('ev.event'), ref: `seq ${a.seq}` }, { label: T('ev.correction'), ref: `seq ${fix.correction.seq}` }]);
     } else {
-      add('high', T('risk.r3.title', { seq: a.seq }), a.note, [{ label: T('ev.event'), ref: `seq ${a.seq}` }]);
+      add('high', T('risk.r3.title', { seq: a.seq }), `${a.note} | ${T('history.checkDisposition')}`,
+        [{ label: T('ev.event'), ref: `seq ${a.seq}` }, ...(a.refSeq != null ? [{ label: 'refSeq', ref: `seq ${a.refSeq}` }] : [])]);
     }
   }
   // R4 升级
   for (const e of model.run.escalates) {
-    add('medium', T('risk.r4.title', { ticket: e.ticket }), e.note || T('risk.r4.defaultDetail'), [{ label: T('ev.event'), ref: `seq ${e.seq}` }]);
+    const ticket = [...model.tickets.values()].find((t) => t.id === e.ticket);
+    const merge = ticket && ticket.merges.find((m) => m.seq > e.seq);
+    add('medium', T('risk.r4.title', { ticket: e.ticket }),
+      `${e.note || T('risk.r4.defaultDetail')}${merge ? T('risk.r4.mergedDetail', { seq: merge.seq, sha: merge.mergeSha }) : T('risk.r4.unmergedDetail')}`,
+      [{ label: T('ev.event'), ref: `seq ${e.seq}` }, ...(merge ? [{ label: T('ev.event'), ref: `seq ${merge.seq}` }] : [])]);
   }
-  // R5 修复预算耗尽
-  const budget = model.run.init && model.run.init.maxFixRounds != null ? Number(model.run.init.maxFixRounds) : 2;
-  for (const t of model.tickets.values()) {
-    if (t.fixes.length >= budget && !model.run.escalates.some((e) => e.ticket === t.id)) {
-      add('medium', T('risk.r5.title', { id: t.id, used: t.fixes.length, budget }),
-        T('risk.r5.detail'),
-        [{ label: T('ev.ticket'), ref: `ticket-${t.id}.html` }]);
-    }
-  }
+  // R5 retired: historical fix budgets remain in init but do not imply a current risk (ADR-0009).
   // R6 未封账
   if (!model.run.sealed) {
     add('medium', T('risk.r6.title'), T('risk.r6.detail'), []);
   }
-  // R7 带伤封账：封账时最新终审裁决为 not_ready（用户拍板放弃的合法出口，但代码带着已知问题收场）
+  // R7 封账时最新已记录终审为 not_ready：保留已知问题，不从封账推断放弃或解决意图。
   const finals = model.run.finals || [];
   const latestFinal = finals.length ? finals[finals.length - 1] : null;
   if (model.run.sealed && latestFinal && latestFinal.finalVerdict === 'not_ready') {
@@ -663,7 +660,7 @@ function incidentRefs(model, liveRefs) {
 function recoveryFor(model, ref, incidents) {
   if (ref.ticket === 'final') return null; // run 级终审无票：不存在「同票后续运行」这一判据
   // model.tickets 即真相来源（collect 产物是渲染用的排序数组、测试装置是 Map）：
-  // 用 .values() 统一取票（与 R5/R9/R10 同一取法），不再为此重建一份 Map。
+  // 用 .values() 统一取票（与 R9/R10 同一取法），不再为此重建一份 Map。
   const ticket = [...(model.tickets || []).values()].find((t) => t.id === ref.ticket);
   if (!ticket || !(ticket.settles || []).length) return null;
   const seq = Number(ref.seq) || 0;

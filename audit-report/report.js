@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { collect } = require('./collect');
 const { renderAll } = require('./render');
-const { DEFAULT_LANG, makeT, normLang } = require('./i18n');
+const { DEFAULT_LANG, makeT, normLang, closeOutcomeLabel } = require('./i18n');
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -61,12 +61,18 @@ function buildAiBrief(model) {
   }
   lines.push('');
   lines.push(T('brief.s4'));
-  for (const a of model.run.anomalies) lines.push(T('brief.anomalyLine', { seq: a.seq, note: a.note }));
+  if (model.run.anomalies.length || model.run.escalates.length) lines.push(T('history.checkDisposition'));
+  for (const a of model.run.anomalies) lines.push(T('brief.anomalyLine', {
+    seq: a.seq, note: a.note, refSeq: a.refSeq != null ? T('history.refSeq', { seq: a.refSeq }) : '',
+  }));
   for (const e of model.run.escalates) lines.push(T('brief.escalateLine', { seq: e.seq, ticket: e.ticket, note: e.note }));
   if (!model.run.anomalies.length && !model.run.escalates.length) lines.push(T('brief.none'));
   lines.push('');
   lines.push(T('brief.s5'));
-  lines.push(model.run.sealed ? T('brief.sealed', { note: model.run.close.note }) : T('brief.unsealed'));
+  lines.push(model.run.sealed ? T('brief.sealed', {
+    outcome: closeOutcomeLabel(T.lang, model.run.close.outcome), note: model.run.close.note,
+  }) : T('brief.unsealed'));
+  if (model.run.close && model.run.close.outcome === 'abandoned') lines.push(T('close.abandonedDetail'));
   const pr = model.run.prs[model.run.prs.length - 1];
   lines.push(T('brief.prLine', { value: pr ? `${pr.state} ${pr.url || ''}` : T('brief.noPr') }));
   lines.push('');
@@ -80,6 +86,11 @@ function buildAiBrief(model) {
     lines.push(T('brief.runLine', { runId: r.runId, role: r.role, ref, key: r.key, status }));
   }
   lines.push('');
+  if (model.notes) {
+    lines.push(T('brief.notesTitle'));
+    lines.push(model.notes);
+    lines.push('');
+  }
   return lines.join('\n');
 }
 

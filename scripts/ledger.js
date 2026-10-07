@@ -39,7 +39,7 @@ const USAGE = `pi-matt-implement-flow ledger — 机械台账（真相层 / 事�
 
 用法:
   node ledger.js init --runtime-dir <dir> --branch <branch> --branch-base <base> --baseline-sha <sha>
-               --spec <spec 文件路径> --test-command <cmd> [--reviewer on|off] [--max-fix-rounds N]
+               --spec <spec 文件路径> --test-command <cmd> [--reviewer on|off]
                [--max-concurrent N] [--tickets 01,02,1042]
   node ledger.js add <type> --runtime-dir <dir> [--flag value ...]
   node ledger.js build --runtime-dir <dir>
@@ -51,9 +51,9 @@ init（run 初始化，票 04——契约驱动）:
   # 选中契约预设；识别结果（tracker 字段）照旧入账，事件格式零迁移。
   # 缺 setup 产物 → 指引运行 /setup-matt-pocock-skills；范本认不出 → 贴出「仅支持
   # local / github / gitlab 三种」并列出支持面——两者都是显式停下，不猜测不降级。
-  # --tracker 旗标已废除（配置单源是 setup 产物，不再重复声明）。票集边界 --tickets、
-  # 流程形态快照 --reviewer/--max-fix-rounds/--max-concurrent 与既往 init 同参同对：
-  # 流程形态冻结后校验按其执行；票集边界冻结后，边界外的票号记账被拒。
+  # --tracker 旗标已废除（配置单源是 setup 产物，不再重复声明）。
+  # 流程形态快照 --reviewer/--max-concurrent 与票集边界 --tickets 冻结后按其校验。
+  # --max-fix-rounds 已退役：修复次数不再限制未封账 run；历史预算仅保留为无效记录。
 
 事件类型与参数集 (add):
   dispatch    --ticket --key --run-id [--worktree] [--note]
@@ -69,7 +69,10 @@ init（run 初始化，票 04——契约驱动）:
               # refSeq 指向本异常所针对/更正的既有事件序号：须为正整数、小于当前序号，
               # 且该序号的事件已入账；违规拒绝（无绕过旗标）。指不到对应事件时去掉 --ref-seq 重记。
   pr          --state(opened-draft|ready) [--url] [--note]
-  close       [--note]
+  close       [--outcome(completed|abandoned)] [--note]
+              # 缺省 completed 并记录结果；正常完成不以 escalate 代替 merge，latest not_ready 拒绝。
+              # 显式 abandoned 仅豁免票完成/终审；仍须已初始化、合法输入、未封账。
+              # 旧 close 无 outcome 显示 unknown，不补写；封账后拒绝全部事件。
 
 快照初始化 (snapshot-init，契约驱动——tracker 由 setup 产物自动识别):
   snapshot-init --spec <契约声明的 spec 引用形态> [--tickets 01,02,1042]
@@ -88,6 +91,7 @@ init（run 初始化，票 04——契约驱动）:
               # 把 tracker/ 快照的待推送状态幂等推送到 tracker 本体（票 06；执行 03 的
               # 同步规划）。seal（缺省）：合并票关票附 merge SHA、escalate 票留评保持开放、
               # spec 母票收尾关闭；abandon：撤占坑（--claimant）+ 留评说明（--reason）。
+              # abandon 成功后 add close --outcome abandoned，不关未完成票、不标 PR ready。
               # 幂等键（票 02）：每条同步评论携带隐藏机器 marker
               # \`<!-- matt-implement:<runId>:<kind> -->\`（runId = 本 run 的运行目录名，
               # kind = merge|escalate|closing|abandon；HTML 注释，tracker 上人类不可见）。
@@ -361,11 +365,11 @@ function atomicWrite(filePath, content) {
 
 // init 子命令（票 04）：契约驱动的 run 初始化——Round 0 的首条（也是唯一一条）init。
 // 与 add 的唯一区分：tracker 不是旗标而是识别结果——setup 产物判型选契约预设；
-// 事件里 tracker 字段照旧（零迁移），载荷参数集与既往 init 事件完全一致。
+// 事件里 tracker 字段照旧（零迁移）；新 init 不再接受已退役的修复预算旗标。
 // 识别先于一切写入（零半成品）：缺 setup 产物 → 指引运行 /setup-matt-pocock-skills；
 // 范本认不出 → 「仅支持三种」，都停下不猜测不降级；词表违约指到文件+行+列+期望。
 const INIT_REQUIRED = ['branch', 'branchBase', 'baselineSha', 'spec', 'testCommand'];
-const INIT_OPTIONAL = ['reviewer', 'maxFixRounds', 'maxConcurrent', 'tickets'];
+const INIT_OPTIONAL = ['reviewer', 'maxConcurrent', 'tickets'];
 
 
 // setup 产物 → tracker（契约驱动）：判型输入是 repo 内的两份上游文档。
@@ -438,6 +442,10 @@ function cmdInit({ runtimeDir, rest }) {
       }
       continue;
     }
+    if (key === 'maxFixRounds') {
+      errors.push('--max-fix-rounds 已退役：修复次数不再限制未封账 run；移除此旗标后重试（历史预算记录仍可读取）');
+      continue;
+    }
     if (!INIT_REQUIRED.includes(key) && !INIT_OPTIONAL.includes(key)) {
       errors.push(`旗标 --${flag} 不属于 init 的参数集`);
       continue;
@@ -508,6 +516,8 @@ function cmdAdd({ runtimeDir, rest }) {
     out(`✗ 拒绝（未入账）：`, ...errors.map((e) => `  - ${e}`));
     return 1;
   }
+  // 只对新 close 写入默认结果；读取旧 close 不推断、不补写历史意图。
+  if (type === 'close' && payload.outcome === undefined) payload.outcome = 'completed';
   return recordEvent({ runtimeDir, type, payload });
 }
 
@@ -909,8 +919,8 @@ function syncCleanupLines(mode, runtimeDir) {
     `  - 留存 findings：${runtime}/findings/（事件流引用其路径，不可删）`,
     `  - 留存账本三件套：${runtime}/events.jsonl、ledger.md、notes.md（长存）`,
     mode === 'abandon'
-      ? '  随后：封账（add close）——放弃路径已撤占坑留评，tracker 不留假占坑。'
-      : '  随后：PR 标 ready（add pr --state ready）→ 封账（add close）——同步已先行，PR closing keywords 不会抢关已关的票。',
+      ? '  随后：放弃封账（add close --outcome abandoned）——放弃路径已撤占坑留评；未完成票保持开放，不标 PR ready。'
+      : '  随后：PR 标 ready（add pr --state ready）→ 正常封账（add close --outcome completed）——同步已先行，PR closing keywords 不会抢关已关的票。',
   ];
 }
 
