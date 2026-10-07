@@ -11,9 +11,11 @@ suite does not prove that the model made the right decision in a native session.
 
 ## Evidence tiers and recorded coverage
 
-The following summarizes the supplied spec #12 acceptance reports, not a replay performed by
-this documentation change. Their names identify run-local hand-off artifacts, not permanent
-repository links. Preserve them with the corresponding run evidence when archiving acceptance.
+The following summarizes retained spec #12 acceptance reports and selected source artifacts, not
+a native replay performed by this documentation change. Their names identify run-local hand-off
+artifacts, not permanent repository links or downloadable evidence. Archive the reports, native
+session artifacts, and corresponding run evidence together, with a manifest mapping these names
+and short identifiers to their retained locations.
 
 | Tier | Recorded evidence | What it establishes | Boundary |
 | --- | --- | --- | --- |
@@ -21,7 +23,8 @@ repository links. Preserve them with the corresponding run evidence when archivi
 | Native cancellation | `scenario16-result.md` | A native child was stopped and terminal status checked before a real local abandonment seal; unfinished work stayed open and later writes were refused | Synthetic abandonment decision; local tracker only, not live remote claim handling or a guarantee for every provider |
 | Controlled walkthrough A–F | `scenario-walkthrough-results.md` | A model selected actions and proposed notes from bounded inputs; D also read existing native-scene evidence | No dispatch, testing, sync, cancellation, edits, or sealing was executed by the walkthrough |
 | CLI black-box | Repository tests linked below | Observable command results, append-only records, projections, refusals, and tracker-stub state changes | Synthetic fixtures and external command stubs; neither autonomous choices nor live tracker accounts |
-| Partial-delivery native scene: pending | A/B complete, C permission-blocked, explicit user acceptance, later permission and same-run completion | Required cross-stage scenario to execute after the #17 components are integrated | The supplied reports do **not** establish that this scene ran |
+| Native partial-delivery continuation: FAILURE | `scenario17-result.md`; fixture HEAD `6527c17` | Partial-stage retention and native C-only work ran, but the parent sealed before verifying all remote closures; C remained open | Required snapshot merge metadata was omitted; the sealed failed run is retained, not reopened |
+| Native partial-delivery continuation: bounded success | `scenario17b-result.md`; independent fixture HEAD `41969fec` | Native C-only continuation, actual formal/whole-branch review, ordinary full sync, independent all-four-closed check before ready/seal, and normal close executed | A distinct run, not recovery of sealed scenario 17; synthetic A/B historical identities, user acceptance, permission and tracker |
 
 ## Reproduction and evidence capture
 
@@ -116,7 +119,9 @@ not a completed partial-delivery scene; F does not substitute for actual cancell
 
 ### Partial delivery and same-run continuation (#17)
 
-This is the remaining native scene. Use a fresh fixture, not the sealed scenario-16 run.
+Two independent bounded native scenes have executed this sequence: original scenario 17 failed
+operational acceptance, and scenario 17b passed the bounded continuation/closing checks below.
+For reproduction, use a fresh fixture, never a sealed scenario-16 or scenario-17 run.
 
 1. Complete A and B with real commits and passing validation; leave C blocked on a verifiable
    external permission. Record the missing condition without treating escalation as completion.
@@ -135,18 +140,105 @@ This is the remaining native scene. Use a fresh fixture, not the sealed scenario
    pull delayed remote state again. If check finds a known unvalidated merge, handle only that
    difference with valid recovery evidence first. **Done:** C alone continues; A/B are not
    reimplemented, redispatched, or merged again, and historical escalation is not a permanent stop.
-4. Complete C with required current-candidate validation and review, then perform final review,
-   idempotent final sync where declared, readiness, cleanup, and normal sealing in the skill's
-   order. Test sealed-write refusal. **Done:** tracker-stub state, git, notes, and ledger agree on
-   full completion after continuation, with the history retained.
+4. Complete C with required current-candidate validation and review. Verify that the snapshot
+   includes the exact git/event merge SHA in the existing closing-comment format, then perform
+   final review and ordinary idempotent final sync where declared. Independently check that all
+   three tickets and the spec are closed while the PR is still draft and the run unsealed, before
+   readiness, cleanup and normal sealing. Test sealed-write refusal. **Done:** tracker-stub state,
+   git, notes and ledger agree on full completion, not just a zero sync exit or a completed close
+   payload. Follow the skill's existing metadata and finishing steps; this adds no new mode.
 
 Capture pre-acceptance, post-acceptance, cold-resume, and completed evidence separately. Inspect
 snapshot retention and the absence of closing calls at the partial stage; the sync CLI does not
 recognize user acceptance or implement a partial-sync mode. This exercise does not include
 publishing a release, automatically splitting a PR/MR, or reopening a sealed run.
 
-**Status at this hand-off:** pending native execution by the integrating parent. None of the
-supplied scenario reports is evidence that all four stages above executed.
+**Recorded status:** native C-only continuation and ordinary sync/normal close executed in
+scenario 17b. Keep the original scenario-17 operational failure alongside that result; these are
+different runs, not a continuation or reopening of the original sealed run.
+
+#### Original scenario 17 — FAILURE
+
+The original fixture ended sealed at HEAD `6527c17` with 20 events. Its original 11-event prefix
+and A/B snapshot hashes survived partial selection and C-only continuation. Native coder
+`f56a60ad` committed `5a7d907`; candidate/integration tests passed 4/4, formal reviewer `9237b010`
+approved, and whole-final reviewer `cee34925` reviewed the source. A local descriptive README
+finding was corrected at `6527c17`; the parent checked unchanged source/tests and recorded why
+that correction did not require another full review. Earlier merge-message and missing spec
+closing-guidance failures were recorded and corrected, not erased.
+
+**Operational failure:** the parent marked C resolved in the snapshot but omitted the required
+`merge SHA:` closing comment from the existing skill's Merge and close step. Ordinary sync
+closed A, B and the spec, but only posted C's historical escalation comment: C remained open.
+The parent incorrectly marked the PR ready and sealed as completed before independently checking
+that result. Post-seal assertions exposed the open C ticket. A successful sync command or a
+recorded completed outcome was therefore **not** evidence of complete operational delivery.
+This was a parent omission, not evidence of a production sync defect or a reason to add a bypass.
+The sealed failed run is retained and not reopened; later ledger writes were refused.
+
+**Verification entry:** retain `scenario17-result.md`, the original `events.jsonl`/notes/snapshot,
+C and whole-final findings, git history, external tracker-stub state and call log. Within the run's
+`evidence/`, inspect `parent-partial-prefix.jsonl`, `parent-partial-AB-snapshots.sha256`,
+`parent-resume-build.log`, `parent-resume-check.log`, `parent-C-candidate-tests.log`,
+`parent-C-integration-tests.log`, `parent-postfinding-tests.log`, `parent-final-sync.log`,
+`parent-final-sync-retry.log` (three closes and a C comment), and
+`parent-postseal-write-refused.log`. Compare C's open tracker-stub state with the completed close
+payload rather than relying on the parent's mistaken completion note. All inputs concerning
+user acceptance, permission, tracker and historical A/B reviews were controlled and synthetic;
+git, tests, ledger commands and native C/review/final execution were actual.
+
+#### Independent scenario 17b — bounded success
+
+Scenario 17b is a distinct run in an independent fixture, not a resume of sealed scenario 17.
+Its baseline was `8367fa9` and final fixture HEAD `41969fec`. The parent executed real snapshot/init,
+git merges, tests and ledger commands. Initial A/B dispatch identities and historical approvals,
+user acceptance of partial delivery, permission and the tracker were synthetic fixture inputs.
+The current A/B-only tests passed 2/2; the initial full suite failed the two unimplemented C tests.
+
+At partial delivery, the parent retained the 11-event prefix, snapshot, findings and claim, with
+no final sync, spec closure, PR ready, seal or final cleanup. A positive controlled permission
+probe and fresh build/check preceded C dispatch. Prefix and A/B snapshot comparisons confirmed
+no reinit, repull, A/B redispatch or repeat merge. Only C's ticket events followed the pause.
+
+| Executed stage | Native identity / retained report | Recorded result and evidence |
+| --- | --- | --- |
+| Isolated C coding | Native run `13089448`; `coder17b.md`, artifact `6c4f6bea` | RED reproduced the two C failures, then commit `ce268f4` changed only `src/farewell.js`; actual platform typed gate reported 4/4. The coder report records permission scope, commit and gate command |
+| Full C formal review | Native run `95d7aabf`; `reviewC17b.md`, artifact `822ba0bf` | Both axes completed with zero findings and approved candidate `ce268f4`. The reviewer explicitly identifies the 4/4 platform gate as parent-reported, not independently verified from a separate platform artifact; it ran no tests |
+| C merge and snapshot facts | Parent actions | Real no-ff merge `41969fec`, independently run integration tests 4/4 before merge accounting at sequence 15, then C resolved with the exact `merge SHA:` comment. Parser evidence agrees with git/event SHA and retains historical escalation |
+| Fresh whole-branch final review | Native run `4d12d7b9`; `final17b.md`, artifact `518393bb` | Read all current source, tests and pinned whole-branch diff rather than trusting synthetic A/B approval history; both axes and cross-ticket hunt had zero findings, verdict ready at sequence 16. It independently read the parent's 4/4 integration log, not a platform gate-provenance artifact, and did not run tests |
+| Ordinary sync and close | Parent commands and independent state assertions | Ordinary full sync closed A, B, C and spec. An independent assertion found all four closed before ready or seal, with the PR still draft and 16 events/unsealed. Actual PATH-stub PR ready was sequence 17, completed close sequence 18; post-seal writing was rejected |
+
+**Verification entry:** archive `scenario17b-result.md`, the three native reports above, native
+session/gate artifacts, git history/diffs, findings and ledger/notes with the tracker-stub state
+and call log. The native run identifiers and report-artifact identifiers name different objects;
+use the archive manifest to resolve both. In the run's `evidence/`, retain:
+
+- Partial/continuation: `parent-partial-AB.log`, `parent-partial-build.log`,
+  `parent-partial-check.log`, `parent-partial-prefix.jsonl`,
+  `parent-partial-AB-snapshots.sha256`, `parent-permission-green.log`,
+  `parent-resume-build.log`, `parent-resume-check.log`.
+- C validation/accounting: `C-candidate.diff`, `parent-C-integration-tests.log`,
+  `parent-C-snapshot-facts.json`, `parent-presync-check.log`.
+- Closing assertions: `parent-final-sync.log` (four closes, no escalation-only substitute),
+  `parent-preseal-remote-check.json` (all four closed, PR draft, run unsealed, 16 events),
+  `parent-sealed-check.log`, `parent-postseal-write-refused.log`,
+  `parent-final-assertions.json` (original prefix unchanged, init once, A/B dispatch/merge once,
+  post-pause ticket events C-only, closure-before-ready, 18 events, completed outcome, refusal).
+
+Snapshot data was retained throughout partial delivery and continuation; only after the completed
+normal flow was it copied to external `archived-tracker/` for audit and removed from the active run.
+Findings, events, ledger, notes and evidence were retained. Full managed-worktree cleanup was not
+yet established by the scene report. Archive the evidence before any later cleanup; none of these
+files is promised as permanently available or downloadable from this repository.
+
+**Boundaries:** this is actual bounded native C-only execution with explicit briefs, actual git,
+tests and ledger commands, actual C formal/source final review, and stateful tracker stubs. It is
+not live GitHub or service authorization, autonomous native implementation/review of the synthetic
+A/B history, or approval of the plugin implementation itself. The final source review did not
+certify remote closure; the parent's later independent state assertions supply that evidence.
+Session-registered agent profiles may predate the modified source definitions, so this does not
+prove runtime reload/registration of the newer profiles. Neither this success nor the preserved
+failure guarantees general model correctness or finite total runtime/cost.
 
 ## Deterministic validation entry points
 
