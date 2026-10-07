@@ -44,6 +44,7 @@ const {
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
   checkDispatchScriptFiles,
+  checkPartialDeliveryContinuation,
 } = require('../scripts/registration-checks.js');
 
 function readAgentFrontmatter() {
@@ -390,7 +391,7 @@ test('SKILL.md cold resume verifies user-provided conditions against notes and f
   assert.match(resume, /verify.*user.*new conditions.*evidence/i);
   assert.match(resume, /continue.*not.*all.*resolved/i);
   assert.match(resume, /necessary.*validation.*formal approval/i);
-  assert.match(resume, /remaining.*not.*reimplement.*remerge.*completed/i);
+  assert.match(resume, /remaining.*not.*reimplement.*redispatch.*remerge.*completed/i);
   assert.match(resume, /running.*unsealed.*not.*child/i);
   assert.ok(resume.indexOf('Verify the user') < resume.indexOf('Recover the interrupted stage'));
 });
@@ -449,6 +450,12 @@ test('SKILL.md pre-seal sync records failure but allows verified idempotent reco
   assert.match(sync, /sync always precedes.*ready/i);
 });
 
+test('SKILL.md an empty frontier with unfinished tickets pauses instead of entering the normal Final gate', () => {
+  const loopEnd = skillText.match(/Recompute the frontier\.([^]*?)(?=\n### Final gate)/)?.[1] ?? '';
+  assert.match(loopEnd, /empty frontier.*unfinished.*not.*Final gate/i);
+  assert.match(loopEnd, /user.*Partial delivery/i);
+});
+
 test('SKILL.md final repairs check each finding and record evidence-based re-review choices', () => {
   const final = skillText.match(/### Final gate\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
   assert.match(final, /each finding.*evidence/i);
@@ -457,6 +464,29 @@ test('SKILL.md final repairs check each finding and record evidence-based re-rev
   assert.match(final, /orchestration notes/i);
   assert.match(final, /green tests.*old.*verdict.*coder.*alone/i);
   assert.match(final, /latest.*not_ready.*new.*final verdict/i);
+});
+
+test('SKILL.md partial delivery checks the current candidate and requires explicit user acceptance with notes evidence', () => {
+  const partial = skillText.match(/### Partial delivery[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  assert.match(partial, /verify.*current.*deliverab.*not.*past merge/i);
+  assert.match(partial, /completed.*unfinished.*impact.*risk/i);
+  assert.match(partial, /only after.*user explicitly accepts.*branch.*SHA.*validation/i);
+  assert.match(partial, /notes.*decision.*conditions.*next step/i);
+  assert.match(partial, /not.*abandon.*remaining scope/i);
+});
+
+test('SKILL.md partial delivery retains an unsealed run and recovery artifacts outside the final sync chain', () => {
+  assert.deepEqual(checkPartialDeliveryContinuation(skillText), []);
+});
+
+test('breakage simulation: partial-delivery continuation anchors must stay in their section', () => {
+  const fixture = '### Partial delivery\nKeep unsealed tracker snapshot findings; skip final sync; follow Cold resume.\n### User abandonment\n';
+  assert.deepEqual(checkPartialDeliveryContinuation(fixture), []);
+  for (const anchor of ['unsealed', 'tracker snapshot', 'findings', 'final sync', 'Cold resume']) {
+    const broken = fixture.replace(anchor, '') + anchor;
+    assert.ok(checkPartialDeliveryContinuation(broken).some((p) => p.includes(anchor)), anchor);
+  }
+  assert.match(checkPartialDeliveryContinuation('### User abandonment\n')[0], /missing.*Partial delivery/);
 });
 
 test('SKILL.md user abandonment stops children and preserves unfinished code/evidence before tracker actions', () => {
