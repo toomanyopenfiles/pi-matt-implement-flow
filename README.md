@@ -165,6 +165,29 @@ choice. Passing tests or an earlier favorable review alone do not prove the chan
 
 For the design and its limits, see [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md).
 
+### Partial delivery and continuation
+
+You can explicitly accept partial delivery when some finished work is useful but the rest is
+blocked. Before you decide, the run checks that the completed work is usable on the current
+branch and gives you the branch name, commit SHAs, and validation evidence. The hand-off explains
+what is complete, the unfinished items and their effects, the risks, and what is needed next.
+A previous merge or a ticket handed to you for a decision is not enough to claim full delivery.
+Your acceptance, the blocker, and the next steps are saved in `notes.md`.
+
+For example, if A and B are complete but C needs permission, you can accept A and B now without
+abandoning C. The same open run keeps its local ticket copies, findings, and continuation evidence;
+the spec stays open, and the PR / MR stays draft rather than being marked ready for review. There
+is no final tracker update or final cleanup at this stage. Keep the run directory even if no agent
+is currently executing. Partial delivery provides a branch and evidence, not an automatic release
+or a separate PR / MR split from the unfinished work.
+
+After the permission is available, provide it and rerun the same command if the session was
+interrupted. The run checks the new condition and the saved notes and evidence, then continues C
+without reimplementing or merging A and B again. It does not start a new run or replace the saved
+local progress with delayed remote ticket statuses. Only after all agreed work is complete does
+it perform the necessary validation and final review, update the tracker, mark the PR / MR ready
+where applicable, and finish normally. Closed runs cannot be reopened.
+
 ### Ending a run
 
 **Normal completion** means the agreed work is complete and the required validation and final
@@ -243,7 +266,7 @@ Every run writes a local run directory, `.pi/matt-implement/<feature>/`:
 
 ```text
 .pi/matt-implement/<feature>/
-  ledger.md          # human-readable progress for this run: active / done, per-ticket status, timeline
+  ledger.md          # human-readable progress: open / closed, per-ticket status, timeline
   events.jsonl       # machine-run record; an interrupted run resumes from it
   notes.md           # process notes and decisions worth remembering (for you)
   reviews/           # diffs used by each review round
@@ -251,13 +274,14 @@ Every run writes a local run directory, `.pi/matt-implement/<feature>/`:
   tracker/           # local copy of your remote spec + tickets (GitHub / GitLab runs only)
 ```
 
-- The path is gitignored and never enters version control. This is run data, not a cache — do not delete it while a run is active or might be resumed.
+- `running` means the run has not ended and can continue; it does not mean an agent is currently executing. Pauses and accepted partial delivery keep the run open.
+- The path is gitignored and never enters version control. This is run data, not a cache — keep the local ticket copies, findings, notes, and other evidence while the run is open or might be resumed.
 - `ledger.md` and `events.jsonl` are maintained by the flow; do not hand-edit them. Notes belong in `notes.md`.
-- After the run, once only the branch / PR / MR matters, keep the directory as a record or clean it up — your call.
+- Once the run has closed and only the branch / PR / MR matters, keep the directory as a record or clean it up — your call. Accepting partial delivery is not that endpoint.
 
 ## Audit report
 
-Audit a finished run after the fact: [`audit-report/`](./audit-report/README.md) turns the run directory into a browsable static report site — no LLM calls, and it never changes your run data. It ships with the npm package: `node <install-dir>/audit-report/report.js --runtime-dir <repo>/.pi/matt-implement/<feature>` (with `pi install`, `<install-dir>` is `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`).
+Inspect a paused or partially delivered run, or audit a finished one: [`audit-report/`](./audit-report/README.md) turns the run directory into a browsable static report site — no LLM calls, and it never changes your run data. It ships with the npm package: `node <install-dir>/audit-report/report.js --runtime-dir <repo>/.pi/matt-implement/<feature>` (with `pi install`, `<install-dir>` is `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`).
 
 ## FAQ & troubleshooting
 
@@ -284,7 +308,9 @@ No — run the same command again and it continues from the recorded state (see 
 **Can I stop without losing the work?**
 Ask to pause if you may continue later; the run stays open. If you explicitly abandon it, the
 code, evidence, and unfinished-work summary are saved, but the run closes and cannot be reopened.
-Neither choice means the unfinished feature is ready (see [Ending a run](#ending-a-run)).
+Neither choice means the unfinished feature is ready (see [Ending a run](#ending-a-run)). If you
+want to use completed work while keeping the rest for later, explicitly accept
+[partial delivery](#partial-delivery-and-continuation) after checking its evidence and limitations.
 
 **What exactly did the run do, and are there hidden problems?**
 Generate an [audit report](#audit-report): a browsable, per-ticket account of the whole run, with
@@ -295,6 +321,7 @@ an "anomalies & risks" section found by rules.
 Contributions are welcome! Before diving in:
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — dev workflow (`npm test`, no build step), the issue lifecycle labels, and the PR checklist
+- When validating repair, pause, partial-delivery, or abandonment behavior: [scenario acceptance](./docs/agents/prompt-driven-scenario-acceptance.md) — reproducible steps and the limits of recorded native, walkthrough, and CLI evidence
 - File a [bug report](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=bug.yml) or a [feature request](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=feature.yml) through the issue forms
 - Report security vulnerabilities privately via [SECURITY.md](./SECURITY.md) — never as public issues
 

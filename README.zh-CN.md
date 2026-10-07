@@ -156,6 +156,23 @@ flowchart TD
 
 设计与限制见 [ADR-0009](./docs/adr/0009-prompt-driven-repair-and-run-continuation.md)。
 
+### 阶段性交付与续跑
+
+部分已完成工作有用、剩余工作仍被阻塞时，你可以明确接受阶段性交付。决定前，run 会核验
+当前分支上已完成部分是否可用，提供分支名、提交 SHA 和验证证据。交接说明会列出已完成
+内容、未完成项及其影响、风险，以及下一步需要什么。曾经合并过，或把一张票交给你决策，
+都不足以宣称完整交付。你的接受决定、阻塞条件与下一步会保存在 `notes.md`。
+
+例如，A、B 已完成但 C 缺权限，你可以先接受 A、B，而不放弃 C。同一个未封账 run 会保留
+本地工单副本、评审问题和续跑证据；spec 保持开放，PR / MR 保持草稿，不标为可审查。
+此时不会做最终工单更新或最终清理。即使当前没有 agent 执行，也请保留运行目录。
+阶段性交付提供的是分支和证据，不会自动发布版本，也不会把已完成部分拆成独立 PR / MR。
+
+权限补齐后，请提供新条件；会话中断时重新运行同一条命令即可。run 会核验新条件，读取
+已保存的笔记和证据，再继续 C，不重复实现或合并 A、B。它不会另起一次 run，也不会用
+延迟的远端工单状态覆盖已保存的本地进度。只有全部约定工作完成后，才做必要验证与终审、
+更新工单、在适用时把 PR / MR 标为可审查，并正常结束。已封账的 run 不能重开。
+
 ### 结束 run
 
 **正常完成**表示约定工作已全部完成，必要验证与终审支持交付。终审结论为“未就绪”时，
@@ -230,7 +247,7 @@ flowchart TD
 
 ```text
 .pi/matt-implement/<功能名>/
-  ledger.md          # 这次 run 的可读进度：进行中 / 已完成、各票状态、时间线
+  ledger.md          # 这次 run 的可读进度：未封账 / 已封账、各票状态、时间线
   events.jsonl       # 机器使用的运行记录，中断后靠它续跑
   notes.md           # 过程说明、需要记住的决定（给人看）
   reviews/           # 各轮 review 用的 diff
@@ -238,13 +255,14 @@ flowchart TD
   tracker/           # 远端工单的本地副本：从 GitHub / GitLab 拉下来的 spec 与工单（仅远端 run）
 ```
 
-- 路径已写入 `.gitignore`，不会进版本库。这是运行数据，不是缓存——run 进行中或还打算续跑时，不要删。
+- `running` 表示 run 尚未终结，可以续跑，不表示当前有 agent 执行。暂停或接受阶段性交付后，run 仍保持开放。
+- 路径已写入 `.gitignore`，不会进版本库。这是运行数据，不是缓存——run 未封账或还打算续跑时，请保留本地工单副本、评审问题、笔记和其他证据。
 - `ledger.md` 和 `events.jsonl` 由流程维护，不要手工修改；想留备注写到 `notes.md`。
-- 跑完后如果只关心 feature 分支 / PR / MR，目录可以留作记录，也可以自行清理。
+- run 封账后，如果只关心 feature 分支 / PR / MR，目录可以留作记录，也可以自行清理。接受阶段性交付还没有到这个终点。
 
 ## 审计报告
 
-跑完可以做事后审计：[`audit-report/`](./audit-report/README.zh-CN.md) 把运行目录生成为可浏览的静态报告网站——不消耗大模型调用，也不会改动你的运行数据。工具随 npm 包发布：`node <安装目录>/audit-report/report.js --runtime-dir <仓库>/.pi/matt-implement/<feature>`（`pi install` 安装时 `<安装目录>` 为 `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`）。
+暂停或阶段性交付时可以查看，跑完也可以做事后审计：[`audit-report/`](./audit-report/README.zh-CN.md) 把运行目录生成为可浏览的静态报告网站——不消耗大模型调用，也不会改动你的运行数据。工具随 npm 包发布：`node <安装目录>/audit-report/report.js --runtime-dir <仓库>/.pi/matt-implement/<feature>`（`pi install` 安装时 `<安装目录>` 为 `~/.pi/agent/npm/node_modules/pi-matt-implement-flow`）。
 
 ## 常见问题与排错
 
@@ -268,6 +286,8 @@ flowchart TD
 **能停止又不丢掉工作吗？**
 以后可能继续时，请要求暂停，run 会保持开放。明确放弃后，代码、证据与未完成项说明仍会
 保存，但 run 会封账且不能重开。两种选择都不代表未完成的功能已就绪（见[结束 run](#结束-run)）。
+如果想先使用已完成部分、保留剩余工作待续跑，请核对证据与限制后，明确接受
+[阶段性交付](#阶段性交付与续跑)。
 
 **这次 run 到底做了什么？有没有隐患？**
 用[审计报告](#审计报告)生成静态报告：逐票可查完整过程，还有专门的"异常与风险"区。
@@ -277,6 +297,7 @@ flowchart TD
 欢迎贡献！动手前先看：
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md)——开发流程（`npm test`，无构建步骤）、issue 生命周期标签、PR 检查清单
+- 验证修复、暂停、阶段性交付或放弃行为时，请看[场景验收](./docs/agents/prompt-driven-scenario-acceptance.md)——可复查步骤，以及已有原生执行、受控推演与 CLI 证据的边界
 - 用 issue 表单提交 [Bug 报告](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=bug.yml) 或 [功能请求](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=feature.yml)
 - 安全漏洞请按 [SECURITY.md](./SECURITY.md) 私密上报——永远不要开公开 issue
 
