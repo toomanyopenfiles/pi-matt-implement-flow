@@ -32,6 +32,7 @@ const {
   AGENT_TIMEOUT_MS,
   GATE_VERIFY_TIMEOUT_MS,
   checkAgentTimeouts,
+  checkDispatchRunDeadlines,
   checkCoderDispatchTypedGate,
   checkDispatchSchemaMatchesSource,
   checkFixLoopHandRun,
@@ -148,8 +149,13 @@ test('the flow-config extension file ships with the package', () => {
   assert.deepEqual(checkFlowConfigExtension(), []);
 });
 
-test('all three agents declare timeoutMs: 3600000 (1h run deadline)', () => {
+test('all three agents declare timeoutMs: 14400000 (4h run deadline, issue #26)', () => {
   assert.deepEqual(checkAgentTimeouts(readAgentFrontmatter()), []);
+});
+
+test('every new dispatch carries the freshly resolved run deadline; the retained resume carries none (issue #26)', () => {
+  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  assert.deepEqual(checkDispatchRunDeadlines(skillText), []);
 });
 
 // --- 模拟破坏：假想 fixture，绝不改动真实文件。每条恰好对应一条真实不变量。 ---
@@ -201,7 +207,57 @@ test('breakage simulation: an agent losing its timeoutMs is flagged', () => {
   const broken = { ...frontmatter, coder: { ...frontmatter.coder, timeoutMs: undefined } };
   const problems = checkAgentTimeouts(broken).filter((p) => p.includes('coder'));
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /must declare timeoutMs: 3600000/);
+  assert.match(problems[0], /must declare timeoutMs: 14400000/);
+});
+
+test('breakage simulation: a dispatch template that drops the run deadline is flagged (issue #26)', () => {
+  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const broken = skillText.replace('    timeoutMs: RUN_TIMEOUT_MS,\n    task: `<reviewer brief', '    task: `<reviewer brief');
+  assert.notEqual(broken, skillText);
+  const problems = checkDispatchRunDeadlines(broken);
+  assert.ok(problems.some((p) => /per-ticket review dispatch is missing the run deadline/.test(p)), problems.join('\n'));
+  assert.ok(problems.some((p) => /fresh-dispatch template is missing `timeoutMs: RUN_TIMEOUT_MS`/.test(p)), problems.join('\n'));
+});
+
+test('breakage simulation: a resume snippet that smuggles a run deadline is flagged (issue #26)', () => {
+  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const broken = skillText.replace(
+    'const r = await runs.run("fix-01-<fixNo>", { resume: "<coderRunId>",',
+    'const r = await runs.run("fix-01-<fixNo>", { timeoutMs: RUN_TIMEOUT_MS, resume: "<coderRunId>",',
+  );
+  assert.notEqual(broken, skillText);
+  assert.deepEqual(checkDispatchRunDeadlines(broken), [
+    "SKILL.md retained-resume snippet must not carry a run deadline — a resume keeps the platform's retained-child contract and is never a new dispatch (issue #26)",
+  ]);
+});
+
+test('breakage simulation: losing the run-deadline section or its resolution pointer is flagged (issue #26)', () => {
+  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const noSection = skillText.replace('### Run deadline (per new dispatch)', '### Deadlines (retired)');
+  assert.match(checkDispatchRunDeadlines(noSection)[0], /missing the "### Run deadline" section/);
+  const noCli = skillText.replaceAll('flow-config-cli.js run-timeout', 'flow-config-cli.js nothing');
+  const problems = checkDispatchRunDeadlines(noCli);
+  assert.ok(problems.some((p) => /run-deadline section is missing the anchor: flow-config-cli.js run-timeout/.test(p)), problems.join('\n'));
+  assert.ok(problems.some((p) => /substitution pointer/.test(p)), problems.join('\n'));
+});
+
+test('breakage simulation: the final gate dropping the final-reviewer deadline is flagged (issue #26)', () => {
+  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const broken = skillText.replace('acceptance: false`, `timeoutMs: RUN_TIMEOUT_MS` (the run deadline', 'acceptance: false` (the run deadline');
+  assert.notEqual(broken, skillText);
+  const problems = checkDispatchRunDeadlines(broken);
+  assert.ok(problems.some((p) => /final-reviewer dispatch must carry the run deadline/.test(p)), problems.join('\n'));
+});
+
+test('breakage simulation: the fix-loop fallback losing its deadline is flagged (issue #26)', () => {
+  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const broken = skillText.replace(
+    'acceptance: false, timeoutMs: RUN_TIMEOUT_MS` (a fresh dispatch',
+    'acceptance: false` (a fresh dispatch',
+  );
+  assert.notEqual(broken, skillText);
+  const problems = checkDispatchRunDeadlines(broken);
+  assert.ok(problems.some((p) => /fix-loop integrity fallback must carry the run deadline/.test(p)), problems.join('\n'));
 });
 
 test('breakage simulation: SKILL.md name drifting from the package name is flagged', () => {

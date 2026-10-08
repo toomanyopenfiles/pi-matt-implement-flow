@@ -16,6 +16,7 @@
 
 基线（2026-10-08，`113df1ea`）：`npm test` = 483/483 通过（macOS x86_64，Node v24.19.0，
 约 205 秒）。阶段 B 补齐后：495/495（含 2 条产品缺陷回归 + 10 条包级测试）。
+issue #26（运行时限）补齐后：514/514。
 `test/repro-reviewer-axes.js`（真实模型探针）不在 `npm test` 与 CI 内。
 
 ## 主体功能矩阵
@@ -23,7 +24,8 @@
 | 功能 | 最终需求 | 测试（文件 · 代表用例） | 层级 | 关键断言 | 未验证边界 |
 | --- | --- | --- | --- | --- | --- |
 | 初始化 | `init` 子命令入账、payload 与旧 `add init` 形态一致、前置核验 spec | `init-cli.test.js` · "init（local/github/gitlab 范本）"；`ledger-cli.test.js` · "init: 事件行含…" | CLI 黑盒 | 事件信封四件套（版本/序号/权威时间戳/HEAD 锚点）；缺 spec 拒绝 | 平台 settings 真实读取 |
-| 流程配置冻结 | reviewer/concurrency 拉取时冻结进事件流；中途改配置不影响进行中 run；预算退役 | `init-cli.test.js` · "init 拒绝退役的 --max-fix-rounds"；`ledger-cli.test.js` · "旧 init 预算仅显示为历史无效值"；`flow-config-core.test.js` · "flowSectionFor ignores historical fix limits…" | 单元 + CLI 黑盒 | 旗标缺失按旧默认解释；旧设置只读不覆写 | 平台 settings UI 写入 |
+| 流程配置冻结 | reviewer/concurrency 拉取时冻结进事件流；中途改配置不影响进行中 run（运行时限除外，见「运行时限配置」行）；预算退役 | `init-cli.test.js` · "init 拒绝退役的 --max-fix-rounds"；`ledger-cli.test.js` · "旧 init 预算仅显示为历史无效值"；`flow-config-core.test.js` · "flowSectionFor ignores historical fix limits…" | 单元 + CLI 黑盒 | 旗标缺失按旧默认解释；旧设置只读不覆写 | 平台 settings UI 写入 |
+| 运行时限配置 | 默认 4h；`agentTimeoutMs` 每次新派发重读、不冻结进 init；作用域优先级/校验/清除；派发面携带 `timeoutMs: RUN_TIMEOUT_MS` | `flow-config-core.test.js` · "normalizeRunTimeoutMs mirrors the platform dispatch contract"、"a saved change is what the NEXT resolution sees"；`flow-config-cli.test.js` · 5 用例；`self-check.test.js` · "every new dispatch carries the freshly resolved run deadline…" + breakage 4 用例 | 单元 + CLI 黑盒 + 静态合同 | 非法值不写入不放大；A→B 下次解析即见；retained resume 围栏零时限 | **非行为证据**：不证明编排器运行时真的替换 `RUN_TIMEOUT_MS`（提示词纪律）；axis 子代、retained resume 不受本配置（边界，ADR-0010） |
 | 原生票号 | tracker 原生编号归一化单转换点，多位号全生命周期 | `ledger-cli.test.js` · "票号空间" 6 用例 | CLI 黑盒 | 补零/拒绝面/数值排序/令牌核验同口径 | — |
 | spec 引用与票集边界 | `--tickets` 冻结执法，边界外拒绝，对账盯边界 | `ledger-cli.test.js` · "票集边界" 5 用例；`tracker-set-core.test.js` · "三层解析" 系列 | 单元 + CLI 黑盒 | 中途偷加票被拒；快照票文件与事件流双向对账 | 真实 tracker 拉取不全的现场诊断 |
 | 契约识别 | local/github/gitlab 三范本判型；认不出显式停下；缺 setup 产物指引 | `tracker-contract-core.test.js` · "判型" 系列、"范本认不出"；`init-cli.test.js` · "init 拒绝" 系列 | 单元 + CLI 黑盒 | 预设是数据（JSON 往返）；判型容错（正文编辑/节序/CRLF） | 其他 tracker 产品（显式不支持） |
@@ -68,6 +70,7 @@
 | #15 | 升级后合并为 done、历史保留、异常不冒充当前故障 | `ledger-cli.test.js` · "#15" 2 用例；`audit-report.test.js` · 升级/anomaly 3 用例 | CLI 黑盒 + 单元 | 升级原因与合并依据都保留 | 不从笔记产生"已授权/已解决"机械事实 |
 | #16 | 显式 abandoned、同步失败不封账、封账后拒写 | `ledger-cli.test.js` · "#16" 4 用例；`sync-cli.test.js` · abandon 4 用例；`gitlab-cli.test.js` · abandon 4 用例 | CLI 黑盒 | 未完成票保持开放；重试幂等；封账拒一切写 | 停止真实 child 本轮仅合同覆盖 |
 | #17 | 部分阶段不 sync/ready/close、留存后继续 C、最终正常收尾 | `sync-cli.test.js` · "#17" 2 用例；`self-check.test.js` · partial delivery 4 用例 | CLI 黑盒 + 静态合同 | 开放 run 与延迟快照保留；只续剩余票 | CLI 合成轨迹≠模型自主执行 |
+| #26 | 默认 4h、`agentTimeoutMs` 可配、派发面携带 `RUN_TIMEOUT_MS`、resume 不冒充新派发 | `flow-config-core.test.js` · 运行时限 4 用例；`flow-config-cli.test.js` · 5 用例；`self-check.test.js` · "every new dispatch carries the freshly resolved run deadline…" + breakage 5 用例；agents frontmatter 由 `checkAgentTimeouts` 钉 14400000 | 单元 + CLI 黑盒 + 静态合同 | 默认/优先级/校验/保存/清除/下次解析即见逐项在测；模板丢死线即红 | 不证明编排器运行时真的替换 `RUN_TIMEOUT_MS`（提示词纪律，ADR-0010）；不等 4 小时、不付真费；axis 子代与 retained resume 不受本配置（有意边界） |
 
 ## 缺口分类（阶段 A 结论；阶段 B 已关闭）
 

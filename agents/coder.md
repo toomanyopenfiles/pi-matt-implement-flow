@@ -4,7 +4,7 @@ description: Implements a ticket or repairs integration/final findings in the wo
 package: pi-matt-implement-flow
 tools: read, grep, find, ls, bash, edit, write, contact_supervisor
 thinking: max
-timeoutMs: 3600000
+timeoutMs: 14400000
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

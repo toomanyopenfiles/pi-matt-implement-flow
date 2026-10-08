@@ -5,7 +5,7 @@ package: pi-matt-implement-flow
 tools: read, grep, find, ls, subagent, contact_supervisor
 allowNestedSubagents: true
 thinking: max
-timeoutMs: 3600000
+timeoutMs: 14400000
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

@@ -264,14 +264,14 @@ function checkFlowConfigExtension({ isFile = (p) => isFileAt(PKG_ROOT, p) } = {}
     : [`flow-config extension missing: ${EXTENSION_SCRIPT} — /matt-flow-config is its registration surface`];
 }
 
-// —— 不变量 10：超时契约：三个 agent 各自声明 1h run 死线；
+// —— 不变量 10：超时契约：三个 agent 各自声明 4h run 死线（issue #26）；
 // SKILL.md 派发模板的 gate 对象显式 10 分钟（平台常量 120s 不可配，只能 per-entry 覆盖；断锚 1/7 钉死）。
 function checkAgentTimeoutFrontmatter(frontmatter, agentName) {
   if (!frontmatter) return [`missing agent file for "${agentName}"`];
   return frontmatter.timeoutMs === String(AGENT_TIMEOUT_MS)
     ? []
     : [
-        `agent "${agentName}" frontmatter must declare timeoutMs: ${AGENT_TIMEOUT_MS} (1h run deadline; platform default without it is 30 min), got: ${frontmatter.timeoutMs ?? '(missing)'}`,
+        `agent "${agentName}" frontmatter must declare timeoutMs: ${AGENT_TIMEOUT_MS} (4h run deadline; platform default without it is 30 min), got: ${frontmatter.timeoutMs ?? '(missing)'}`,
       ];
 }
 
@@ -307,6 +307,7 @@ module.exports = {
   AGENT_TIMEOUT_MS,
   GATE_VERIFY_TIMEOUT_MS,
   checkAgentTimeouts,
+  checkDispatchRunDeadlines,
   checkCoderDispatchTypedGate,
   checkDispatchSchemaMatchesSource,
   checkFixLoopHandRun,
@@ -346,6 +347,96 @@ function presentForbidden(normalized, forbidden, describe) {
   const problems = [];
   for (const token of forbidden) {
     if (normalized.includes(token)) problems.push(describe(token));
+  }
+  return problems;
+}
+
+// —— 运行时限派发合同（issue #26）：每次新派发都携带从配置新读的死线；
+// retained resume 保持平台既有的保留合同，永不携带运行时限（接续不是新派发）。
+// 五条新派发路径（逐票 coder、逐票评审、修复兑底 fresh coder、集成 fixer、终审 +
+// 终审 fixer）逐节钉 `timeoutMs: RUN_TIMEOUT_MS`；模板围栏钉替换指针（指向解析 CLI），
+// 防「只改显示值 / 只改 frontmatter 不改派发参数」的漂移。
+const RUN_DEADLINE_SYMBOL = 'RUN_TIMEOUT_MS';
+const RUN_DEADLINE_CLI = 'flow-config-cli.js run-timeout';
+const RUN_DEADLINE_SECTION_ANCHORS = [
+  RUN_DEADLINE_CLI,
+  RUN_DEADLINE_SYMBOL,
+  String(AGENT_TIMEOUT_MS),
+  '2147483647',
+  'not frozen',
+  'retained-child contract',
+];
+// [name, section start, section end] —— 每节都必须携带新派发死线。
+const RUN_DEADLINE_DISPATCH_SECTIONS = [
+  ['ticket coder dispatch', '### Each round', '### Verify'],
+  ['per-ticket review dispatch', '### Verify each finished ticket', '### Fix loop'],
+  ['fix-loop fallback dispatch', '### Fix loop', '### Merge'],
+  ['integration fixer dispatch', '### Merge', '### Final gate'],
+  ['final gate dispatches', '### Final gate', '## Briefs'],
+];
+
+function checkDispatchRunDeadlines(skillText) {
+  const problems = [];
+  const section = sectionBetween(skillText, '### Run deadline', '## Ledger');
+  if (section === null) {
+    return ['SKILL.md is missing the "### Run deadline" section (per-dispatch run deadline contract, issue #26)'];
+  }
+  const normalized = normalizeWhitespace(section);
+  problems.push(
+    ...missingAnchors(
+      normalized,
+      RUN_DEADLINE_SECTION_ANCHORS,
+      (anchor) => `SKILL.md run-deadline section is missing the anchor: ${anchor}`
+    )
+  );
+  for (const [name, start, end] of RUN_DEADLINE_DISPATCH_SECTIONS) {
+    const sub = sectionBetween(skillText, start, end);
+    if (sub === null) {
+      problems.push(`SKILL.md is missing the "${start}" section`);
+      continue;
+    }
+    if (!normalizeWhitespace(sub).includes(`timeoutMs: ${RUN_DEADLINE_SYMBOL}`)) {
+      problems.push(
+        `SKILL.md ${name} is missing the run deadline (timeoutMs: ${RUN_DEADLINE_SYMBOL}) — every new dispatch must pass the freshly resolved value (issue #26)`
+      );
+    }
+  }
+  // 终审派发是散文面（无围栏），单独钉它的字段清单：只靠节级存在性会被同节的
+  // 终审 fixer 围栏拖绿，漏掉终审本身。修复兑底 fresh coder 同理（散文面）。
+  const finalSection = sectionBetween(skillText, '### Final gate', '## Briefs');
+  if (finalSection !== null && !normalizeWhitespace(finalSection).includes('acceptance: false`, `timeoutMs: RUN_TIMEOUT_MS')) {
+    problems.push(
+      'SKILL.md final-reviewer dispatch must carry the run deadline in its field list (`acceptance: false`, `timeoutMs: RUN_TIMEOUT_MS`) — issue #26'
+    );
+  }
+  const fixLoopSection = sectionBetween(skillText, '### Fix loop', '### Merge');
+  if (fixLoopSection !== null && !normalizeWhitespace(fixLoopSection).includes('acceptance: false, timeoutMs: RUN_TIMEOUT_MS')) {
+    problems.push(
+      'SKILL.md fix-loop integrity fallback must carry the run deadline in its dispatch shape (acceptance: false, timeoutMs: RUN_TIMEOUT_MS) — issue #26'
+    );
+  }
+  // 逐围栏：新派发块携带死线与替换指针；retained resume 块零运行时限。
+  for (const fence of skillText.matchAll(/```js\n([\s\S]*?)\n```/g)) {
+    const block = fence[1];
+    if (/resume:\s*["'`]/.test(block)) {
+      if (/timeoutMs/.test(block)) {
+        problems.push(
+          'SKILL.md retained-resume snippet must not carry a run deadline — a resume keeps the platform\'s retained-child contract and is never a new dispatch (issue #26)'
+        );
+      }
+      continue;
+    }
+    if (!/agent:\s*["'`]pi-matt-implement-flow\./.test(block)) continue;
+    if (!block.includes(`timeoutMs: ${RUN_DEADLINE_SYMBOL}`)) {
+      problems.push(
+        `SKILL.md fresh-dispatch template is missing \`timeoutMs: ${RUN_DEADLINE_SYMBOL}\` on its dispatch entry (issue #26)`
+      );
+    }
+    if (!block.includes(RUN_DEADLINE_CLI)) {
+      problems.push(
+        `SKILL.md fresh-dispatch template lost the substitution pointer (${RUN_DEADLINE_CLI}) — the entry value must be the freshly resolved deadline, not a copy of the default (issue #26)`
+      );
+    }
   }
   return problems;
 }

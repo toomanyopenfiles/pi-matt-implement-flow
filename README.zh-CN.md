@@ -188,7 +188,7 @@ flowchart TD
 推荐用包内置的交互向导 `/matt-flow-config`（即时生效，不消耗模型调用）：
 
 ```
-/matt-flow-config        # 选角色 → 选模型 / thinking 档位，或编辑流程选项
+/matt-flow-config        # 选角色 → 选模型 / thinking 档位，或编辑流程选项（reviewer / 并发 / 运行时限）
 /matt-flow-config show   # 查看当前生效的流程选项，以及三个角色实际用的模型与 thinking 档位
 ```
 
@@ -201,6 +201,7 @@ flowchart TD
 
 - 改模型 / thinking 档位：下一次派出该角色时生效，不用重启 pi。
 - 改流程选项：从下一次 `/pi-matt-implement-flow` 开始生效；正在跑的 run 不受影响。
+- 改运行时限（`agentTimeoutMs`）：流程下一次启动自己的子代理（逐票 coder / 评审 / 终审 / 修复者）时生效，正在跑的 run 中途改也一样。已经在跑的子代理继续用它启动时的死线。
 
 ### 流程选项（`mattImplementFlow`）
 
@@ -208,15 +209,19 @@ flowchart TD
 |---|---|---|
 | `reviewer` | 开启 | 每张 ticket 合入前做双轴 review 并进入修复。关闭后单票只保留测试门禁，整分支 final review 仍会跑。并行数量和逐票 review 都会明显增加模型调用——想省，先关这项或调低 `maxConcurrent`。 |
 | `maxConcurrent` | `3` | 同时工作的 coder 数量。命令 `/pi-matt-implement-flow 5` 里的数字优先于这项。 |
+| `agentTimeoutMs` | `14400000`（4 小时） | 流程每次启动子代理（逐票 coder / 评审 / 终审 / 修复者）的单次运行时限，到点由平台终止。单位毫秒，合法值是不超过 `2147483647` 的正整数（向导按分钟输入，其他值拒绝写入）。 |
 
 ```jsonc
 {
   "mattImplementFlow": {
     "reviewer": true,
-    "maxConcurrent": 3
+    "maxConcurrent": 3,
+    "agentTimeoutMs": 14400000
   }
 }
 ```
+
+`reviewer` 和 `maxConcurrent` 在 run 启动时冻结。`agentTimeoutMs` 不同：它在每次准备启动子代理时重新读取，改了之后下一次启动即生效，run 进行到一半也一样。修复轮接续（resume）同一个 coder 时，它继续用自己原有的死线——新值只对之后启动的运行生效。
 
 旧修复次数设置不再生效，尚未封账的旧 run 也一样；已保存的设置和历史运行记录不会被改写。命令超时、并发上限与取消能力仍保留；没有修复配额**不保证总运行时间或费用有限**。
 
@@ -233,7 +238,7 @@ flowchart TD
 
 1. `/pi-matt-implement-flow [N]` 的 `N` 只覆盖并发，不影响 review 开关。
 2. 项目配置覆盖用户配置，是按字段覆盖，不是整段替换。
-3. 开跑后中途改 `settings.json` 不影响正在跑的那次 run。
+3. 开跑后中途改 `settings.json` 不影响正在跑的那次 run——运行时限（`agentTimeoutMs`）除外：它从该 run 下一次启动子代理时生效；已经在跑的子代理继续用它启动时的死线。
 
 ## 运行目录
 

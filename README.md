@@ -207,7 +207,7 @@ an abandoned or otherwise closed run cannot be reopened. A pause does not close 
 The built-in interactive wizard — instant, no model calls:
 
 ```
-/matt-flow-config        # pick a role → pick model / thinking level, or edit flow options
+/matt-flow-config        # pick a role → pick model / thinking level, or edit flow options (reviewer / concurrency / run deadline)
 /matt-flow-config show   # show the effective flow options and each role's actual model / thinking level
 ```
 
@@ -220,6 +220,7 @@ When changes take effect:
 
 - Model / thinking level: the next time that role is dispatched — no pi restart needed.
 - Flow options: from the next `/pi-matt-implement-flow`; a run already in progress is never affected.
+- Run deadline (`agentTimeoutMs`): the next time the flow starts one of its own subagent runs (ticket coder / reviewer / final reviewer / fixer) — including inside a run already in progress. A subagent that is already working keeps the deadline it started with.
 
 ### Flow options (`mattImplementFlow`)
 
@@ -227,15 +228,19 @@ When changes take effect:
 | --- | --- | --- |
 | `reviewer` | on | Runs a two-axis review per ticket before merge, with a fix loop. Off: each ticket keeps only the test gate; the whole-branch final review still runs. Parallelism and per-ticket review both cost extra model calls — to spend less, turn this off first or lower `maxConcurrent`. |
 | `maxConcurrent` | `3` | Coders working at the same time. The number in `/pi-matt-implement-flow 5` overrides this. |
+| `agentTimeoutMs` | `14400000` (4 h) | Run deadline for each subagent run the flow starts (ticket coder / reviewer / final reviewer / fixer): how long it may work before the platform stops it. In milliseconds; valid values are positive whole numbers up to `2147483647` (the wizard inputs minutes and refuses anything else). |
 
 ```jsonc
 {
   "mattImplementFlow": {
     "reviewer": true,
-    "maxConcurrent": 3
+    "maxConcurrent": 3,
+    "agentTimeoutMs": 14400000
   }
 }
 ```
+
+`reviewer` and `maxConcurrent` are frozen when a run starts. `agentTimeoutMs` is read again every time a subagent is about to start: change it and the next subagent run picks it up, even mid-run. A fix round that continues (resume) an existing coder keeps that coder's original deadline — the changed value applies only to runs that start afterwards.
 
 Old repair-limit settings are no longer effective, including for older runs that have not been closed. Your saved settings and historical run records are not rewritten. Command timeouts, concurrency limits, and cancellation remain available; having no repair quota does **not** guarantee a finite total runtime or cost.
 
@@ -252,7 +257,7 @@ A typical split: a strong model for `coder`; reviewers on a cheaper (or differen
 
 1. `N` in `/pi-matt-implement-flow [N]` overrides concurrency only — not the review switch.
 2. Project settings override user settings field by field, not as a whole block.
-3. Changing settings mid-run never affects a run already in progress.
+3. Changing settings mid-run never affects a run already in progress — except the run deadline (`agentTimeoutMs`), which applies from the next subagent run the flow starts inside that run. A subagent that is already working keeps the deadline it started with.
 
 ## Run directory
 

@@ -21,9 +21,17 @@ const FLOW_SECTION = 'mattImplementFlow';
 const FLOW_DEFAULTS = { reviewer: true, maxConcurrent: 3 };
 const FLOW_KEYS = Object.keys(FLOW_DEFAULTS);
 
-// 三个 agent frontmatter 的 run 级墙钟默认（每个 dispatch child 一个死线，
-// fix-resume 继承同一 frontmatter）。平台不设时是 30 分钟。
-const AGENT_TIMEOUT_MS = 3600000;
+// 三个 agent frontmatter 的 run 级墙钟默认（每个 dispatch child 一个死线）。
+// 平台不设时是 30 分钟。4h = issue #26 确认的默认值。
+const AGENT_TIMEOUT_MS = 14400000;
+
+// 运行时限覆盖键（mattImplementFlow 节内，与流程形态键同居一处但语义不同）：
+// 不冻结进 init 旗标，每次派发新子代理时重读（issue #26）。
+const RUN_TIMEOUT_KEY = 'agentTimeoutMs';
+
+// 镜像平台的 Node 定时器上限（pi-subagents MAX_TIMER_DELAY_MS）：超过此值的
+// setTimeout 会溢出并几乎立即触发，平台对派发时限同样拒收。
+const MAX_TIMER_DELAY_MS = 2147483647;
 
 // SKILL.md 派发模板里 gate verify 条目的显式超时。平台常量
 // DEFAULT_VERIFY_TIMEOUT_MS = 120_000 且不可配置，只能 per-entry 覆盖。
@@ -308,6 +316,47 @@ function renderPatchPreview(patch, { role, scopeLabel }) {
   return lines.join('\n');
 }
 
+// --- 运行时限（RUN_TIMEOUT_KEY）解析：派发时新读，不进 init 旗标 ---
+
+// 校验镜像平台派发参数合同：正整数毫秒且不超过定时器上限。0 / false / 负值 /
+// 非整数 / 字符串一律拒绝——它们不解释为「无死线」。
+function normalizeRunTimeoutMs(raw) {
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) {
+    return {
+      ok: false,
+      error: `${RUN_TIMEOUT_KEY} must be a positive integer in milliseconds, got ${JSON.stringify(raw)} — 0 or false never means "no deadline"`,
+    };
+  }
+  if (raw > MAX_TIMER_DELAY_MS) {
+    return {
+      ok: false,
+      error: `${RUN_TIMEOUT_KEY} must be no larger than ${MAX_TIMER_DELAY_MS} ms (the Node timer ceiling the platform enforces), got ${raw}`,
+    };
+  }
+  return { ok: true, value: raw };
+}
+
+// 单层 settings 的运行时限覆盖：缺键 = undefined（回退下一层），非法值 = {ok:false}
+// （解析时忽略并记入 invalid，绝不放大成无限时长）。
+function runTimeoutOverrideFor(settings) {
+  const raw = settings?.[FLOW_SECTION]?.[RUN_TIMEOUT_KEY];
+  return raw === undefined ? undefined : normalizeRunTimeoutMs(raw);
+}
+
+// 分层解析（project 逐字段赢 user，与流程形态同一优先级纪律）：
+// 返回 { value, source, invalid }——source 是 'default'|'user'|'project'，
+// invalid 列出被忽略的手写非法值（{scope, raw}），供 show 视图给出明确提示。
+function resolveRunTimeoutDetailed(userSettings = {}, projectSettings = {}) {
+  const invalid = [];
+  for (const [scope, settings] of [['project', projectSettings], ['user', userSettings]]) {
+    const override = runTimeoutOverrideFor(settings);
+    if (override === undefined) continue;
+    if (override.ok) return { value: override.value, source: scope, invalid };
+    invalid.push({ scope, raw: settings[FLOW_SECTION][RUN_TIMEOUT_KEY] });
+  }
+  return { value: AGENT_TIMEOUT_MS, source: 'default', invalid };
+}
+
 // agent frontmatter 里与本功能相关的三个字段（行式 key: value，够用即可）。
 function extractFrontmatterFields(text) {
   if (typeof text !== 'string' || !text.startsWith('---')) return {};
@@ -334,6 +383,8 @@ const FLOW_HINTS = {
     'per-ticket two-axis review + fix loop; off = merge straight after the platform gate (final-reviewer still runs)',
   maxConcurrent: 'parallel coders; /pi-matt-implement-flow <N> wins',
 };
+const RUN_TIMEOUT_HINT =
+  'run deadline per new subagent dispatch (coder / reviewer / final-reviewer); effective from the NEXT dispatch, never frozen at init';
 
 function buildShowView({ frontmatterByRole = {}, userSettings = {}, projectSettings = {}, userPath, projectPath, parentModel } = {}) {
   const { values: flow, sources: flowSources } = resolveFlowConfigDetailed(userSettings, projectSettings);
@@ -342,10 +393,19 @@ function buildShowView({ frontmatterByRole = {}, userSettings = {}, projectSetti
   if (parentModel) lines.push(`parent session model (inherit target): ${parentModel}`);
   lines.push('');
   lines.push(`Flow (settings key "${FLOW_SECTION}"; project wins user per field)`);
-  const keyWidth = Math.max(...FLOW_KEYS.map((k) => k.length));
+  const keyWidth = Math.max(...FLOW_KEYS.map((k) => k.length), RUN_TIMEOUT_KEY.length);
   for (const key of FLOW_KEYS) {
     const shown = typeof flow[key] === 'boolean' ? (flow[key] ? 'on' : 'off') : String(flow[key]);
     lines.push(`  ${key.padEnd(keyWidth)}  ${shown.padEnd(4)} [${flowSources[key]}]  ${FLOW_HINTS[key]}`);
+  }
+  const runTimeout = resolveRunTimeoutDetailed(userSettings, projectSettings);
+  lines.push(
+    `  ${RUN_TIMEOUT_KEY.padEnd(keyWidth)}  ${`${runTimeout.value} ms (${Math.round(runTimeout.value / 60000)} min)`.padEnd(16)} [${runTimeout.source}]  ${RUN_TIMEOUT_HINT}`
+  );
+  for (const bad of runTimeout.invalid) {
+    lines.push(
+      `  ⚠ ignoring invalid ${RUN_TIMEOUT_KEY} in ${bad.scope} settings (${JSON.stringify(bad.raw)}); keeping the lower layer / the ${AGENT_TIMEOUT_MS} ms default`
+    );
   }
   const scopeParts = [];
   if (projectPath) scopeParts.push(`project → ${projectPath}`);
@@ -371,6 +431,11 @@ module.exports = {
   THINKING_LEVELS,
   AGENT_TIMEOUT_MS,
   GATE_VERIFY_TIMEOUT_MS,
+  RUN_TIMEOUT_KEY,
+  MAX_TIMER_DELAY_MS,
+  normalizeRunTimeoutMs,
+  runTimeoutOverrideFor,
+  resolveRunTimeoutDetailed,
   FLOW_SECTION,
   FLOW_DEFAULTS,
   FLOW_KEYS,

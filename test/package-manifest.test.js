@@ -129,7 +129,7 @@ test('入口烟测：CLI 帮助/只读入口可启动；CJS 与 ESM 脚本各过
   assert.equal(axisCheck.status, 0, `scripts/axis-axes.js 函数体语法: ${axisCheck.stderr}`);
   assert.match(axisCheck.stdout, /axis-ok/);
   // CJS 入口走原生 --check（require 即执行 CLI，不能用加载来验语法）。
-  for (const rel of ['scripts/ledger.js', 'scripts/mechanical-report.js', 'audit-report/report.js']) {
+  for (const rel of ['scripts/ledger.js', 'scripts/mechanical-report.js', 'scripts/flow-config-cli.js', 'audit-report/report.js']) {
     const check = spawnSync(process.execPath, ['--check', path.join(pkg.root, rel)], { encoding: 'utf8', timeout: 60000 });
     assert.equal(check.status, 0, `${rel} CJS 语法: ${check.stderr}`);
   }
