@@ -1,15 +1,18 @@
 // /matt-flow-config —— 无 LLM 配置向导（pi 扩展）。
-// 两个配置面：
+// 三个配置面：
 //   1. 三 agent（coder / reviewer / final-reviewer）的 model / thinking 覆盖
 //      （subagents.agentOverrides）；
 //   2. 流程开关（settings 顶层自定义节 mattImplementFlow：reviewer / maxConcurrent）
-//      ——本包私有，不碰任何平台键；生效语义是 init 快照。
+//      ——本包私有，不碰任何平台键；生效语义是 init 快照；
+//   3. 运行时限（同节 agentTimeoutMs）——每个新派发子代理的墙钟死线；
+//      不冻结进 init，保存后下一次派发即生效（issue #26）。
 // 纯 ctx.ui 菜单流，不经过大模型；文案全英文（用户要求）。
 //
 // 生效语义（源码核实）：pi-subagents 每次
 // subagent 调用都重读 settings（discoverAgentsUncached）——写入后下一次派发
-// 即生效，无需重启 pi；正在运行的 child 不受影响。流程配置则在下一次 run 的
-// init 事件冻结进台账，进行中的 run 不受中途改配置影响。
+// 即生效，无需重启 pi；正在运行的 child 不受影响。流程开关在下一次 run 的
+// init 事件冻结进台账；运行时限例外：每次都作为派发参数新读，中途修改在
+// 同一未封账 run 的下一次新派发生效。
 //
 // 纯逻辑（合并/生效/IO）在 scripts/flow-config-core.js，由 npm test 守护。
 
@@ -23,7 +26,7 @@ import flowConfig from '../scripts/flow-config-core.js';
 
 const ENTRY_TYPE = 'matt-flow-config-view';
 
-const { CLEAR, ROLES, THINKING_LEVELS, FLOW_SECTION, FLOW_DEFAULTS, FLOW_KEYS, fullName } = flowConfig;
+const { CLEAR, ROLES, THINKING_LEVELS, FLOW_SECTION, FLOW_DEFAULTS, FLOW_KEYS, RUN_TIMEOUT_KEY, fullName } = flowConfig;
 
 // --- IO（扩展侧薄封装；错误统一冒泡到命令 handler 的 notify） ---
 
@@ -124,6 +127,10 @@ async function runConfigureFlow(ctx, paths) {
   const settings = readSettings(scopePath);
   const otherSettings = otherPath ? readSettings(otherPath) : {};
   const { values: current, sources } = flowConfig.resolveFlowConfigDetailed(settings, otherSettings);
+  // 运行时限不在流程形态里，单独按作用域解析（project 逐字段赢 user）。
+  const scopedSettings = (scoped) => (scope === 'project' ? { user: otherSettings, project: scoped } : { user: scoped, project: otherSettings });
+  const beforeScoped = scopedSettings(settings);
+  const beforeTimeout = flowConfig.resolveRunTimeoutDetailed(beforeScoped.user, beforeScoped.project);
 
   // 结构化菜单（复用 toMenu/fromMenu）：label 与 key 在同一对象内定义，匹配自反——
   // 改文案只改 label，不再用文案前缀反解 key（评审发现③：文案一改即静默错键）。
@@ -142,11 +149,18 @@ async function runConfigureFlow(ctx, paths) {
         'parallel coders; the skill argument /pi-matt-implement-flow <N> wins',
       ),
     },
+    {
+      value: RUN_TIMEOUT_KEY,
+      label: label(
+        `${RUN_TIMEOUT_KEY} (currently ${beforeTimeout.value} ms [${beforeTimeout.source}])`,
+        'run deadline per new subagent dispatch (coder / reviewer / final-reviewer); saved value applies from the NEXT dispatch, even mid-run',
+      ),
+    },
   ];
   const pickedField = await ctx.ui.select('Which flow setting?', toMenu(flowChoices));
   if (!pickedField) return;
   const key = fromMenu(flowChoices, pickedField);
-  if (!FLOW_KEYS.includes(key)) return; // 反解失败 → 无害退出，绝不静默选错键
+  if (![...FLOW_KEYS, RUN_TIMEOUT_KEY].includes(key)) return; // 反解失败 → 无害退出，绝不静默选错键
 
   let patchValue;
   if (key === 'reviewer') {
@@ -156,6 +170,31 @@ async function runConfigureFlow(ctx, paths) {
     ]);
     if (!picked) return;
     patchValue = picked.startsWith('on');
+  } else if (key === RUN_TIMEOUT_KEY) {
+    const picked = await ctx.ui.select('Run deadline for new subagent dispatches', [
+      'set — type the deadline in minutes (saved as whole milliseconds)',
+      `clear — back to the ${flowConfig.AGENT_TIMEOUT_MS} ms (${flowConfig.AGENT_TIMEOUT_MS / 60000} min) default`,
+    ]);
+    if (!picked) return;
+    if (picked.startsWith('clear')) {
+      patchValue = CLEAR;
+    } else {
+      const minutesText = await ctx.ui.input(
+        `Run deadline in minutes (positive; validated as whole milliseconds, max ${Math.floor(flowConfig.MAX_TIMER_DELAY_MS / 60000)} min):`,
+        String(Math.round(beforeTimeout.value / 60000)),
+      );
+      if (minutesText === undefined) return;
+      // UI 用分钟，按换算后的毫秒值校验（镜像平台派发参数合同）；浮点噪声先归整到
+      // 整毫秒（如 1.1 分钟 = 66000 ms），真正非整毫秒仍拒绝；非法值不写入。
+      const rawMs = Number(String(minutesText).trim()) * 60000;
+      const ms = Number.isFinite(rawMs) && Math.abs(rawMs - Math.round(rawMs)) < 1e-6 ? Math.round(rawMs) : rawMs;
+      const normalized = flowConfig.normalizeRunTimeoutMs(ms);
+      if (!normalized.ok) {
+        ctx.ui.notify(`Not saved: ${normalized.error}`, 'error');
+        return;
+      }
+      patchValue = normalized.value;
+    }
   } else {
     const def = FLOW_DEFAULTS[key];
     const choices = [];
@@ -170,17 +209,32 @@ async function runConfigureFlow(ctx, paths) {
   const preview = [
     `Write to: ${scopePath}`,
     '',
-    `[${scope}] ${FLOW_SECTION}.${key}: ${shown}`,
+    `[${scope}] ${FLOW_SECTION}.${key}: ${patchValue === CLEAR ? '(removed — falls back to the lower layer)' : shown}`,
     '',
-    `effective ${key}: ${flowShown(current[key])} [${sources[key]}] → ${shown}`,
   ];
+  if (key === RUN_TIMEOUT_KEY) {
+    const afterScoped = scopedSettings(nextSettings);
+    const afterTimeout = flowConfig.resolveRunTimeoutDetailed(afterScoped.user, afterScoped.project);
+    preview.push(
+      `effective ${key}: ${beforeTimeout.value} ms [${beforeTimeout.source}] → ${afterTimeout.value} ms [${afterTimeout.source}]`,
+    );
+  } else {
+    preview.push(`effective ${key}: ${flowShown(current[key])} [${sources[key]}] → ${shown}`);
+  }
   const ok = await ctx.ui.confirm('Apply configuration?', preview.join('\n'));
   if (!ok) return;
   writeSettings(scopePath, nextSettings);
-  ctx.ui.notify(
-    `Saved ${FLOW_SECTION}.${key}=${shown} → ${scopePath}. Frozen into the ledger at the NEXT run's init event; a running flow keeps its current shape.`,
-    'info',
-  );
+  if (key === RUN_TIMEOUT_KEY) {
+    ctx.ui.notify(
+      `Saved ${FLOW_SECTION}.${key}=${patchValue === CLEAR ? '(cleared)' : `${patchValue} ms`} → ${scopePath}. Effective on the NEXT new subagent dispatch, even inside a run already in progress; a running child keeps its deadline.`,
+      'info',
+    );
+  } else {
+    ctx.ui.notify(
+      `Saved ${FLOW_SECTION}.${key}=${shown} → ${scopePath}. Frozen into the ledger at the NEXT run's init event; a running flow keeps its current shape.`,
+      'info',
+    );
+  }
 }
 
 async function runConfigure(ctx, paths) {
@@ -343,12 +397,12 @@ export default function (pi) {
         else {
           const action = await ctx.ui.select('matt-flow-config', [
             'Configure a role (model / thinking)',
-            'Configure flow options (reviewer / concurrency)',
+            'Configure flow options (reviewer / concurrency / run deadline)',
             'Show current effective configuration',
             "Clear a role's overrides",
           ]);
           if (action === 'Configure a role (model / thinking)') await runConfigure(ctx, paths);
-          else if (action === 'Configure flow options (reviewer / concurrency)') await runConfigureFlow(ctx, paths);
+          else if (action === 'Configure flow options (reviewer / concurrency / run deadline)') await runConfigureFlow(ctx, paths);
           else if (action === 'Show current effective configuration') await runShow(pi, ctx, paths);
           else if (action === "Clear a role's overrides") await runClear(ctx, paths);
         }

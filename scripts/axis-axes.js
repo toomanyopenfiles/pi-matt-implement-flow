@@ -6,6 +6,7 @@
 //     args: {
 //       agent: "pi-matt-implement-flow.reviewer", // 轴子代理：生产 = 调用方自身 agent（探针可注入廉价 agent）
 //       context: "fork",                          // 可选，默认 "fork"（轴继承调用方的阅读）
+//       timeoutMs: 14400000,                      // 必填，axis 派发前新读的配置（不是父启动值）
 //       standards: "<Standards 轴任务书>",          // 必填，非空字符串
 //       spec: "<Spec 轴任务书>",                    // 必填，非空字符串
 //     },
@@ -22,11 +23,14 @@ for (const name of ['agent', 'standards', 'spec']) {
     throw new Error(`axis-axes.js: args.${name} must be a non-empty string`);
   }
 }
+if (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 1 || args.timeoutMs > 2147483647) {
+  throw new Error('axis-axes.js: args.timeoutMs must be a positive integer no larger than 2147483647');
+}
 const context = typeof args.context === 'string' && args.context.trim() ? args.context : 'fork';
 
 const results = await runs.all([
-  { key: 'standards', label: 'Review against standards', agent: args.agent, context, task: args.standards },
-  { key: 'spec', label: 'Review against spec', agent: args.agent, context, task: args.spec },
+  { key: 'standards', label: 'Review against standards', agent: args.agent, context, timeoutMs: args.timeoutMs, task: args.standards },
+  { key: 'spec', label: 'Review against spec', agent: args.agent, context, timeoutMs: args.timeoutMs, task: args.spec },
 ]);
 
 return results.map((r) => ({

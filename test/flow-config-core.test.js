@@ -16,6 +16,10 @@ const {
   THINKING_LEVELS,
   AGENT_TIMEOUT_MS,
   GATE_VERIFY_TIMEOUT_MS,
+  RUN_TIMEOUT_KEY,
+  MAX_TIMER_DELAY_MS,
+  normalizeRunTimeoutMs,
+  resolveRunTimeoutDetailed,
   fullName,
   resolveAgentDir,
   userSettingsPath,
@@ -256,9 +260,77 @@ test('buildShowView renders all three roles, their effective values, and the inh
 });
 
 test('constants: the documented timeout contract values', () => {
-  assert.equal(AGENT_TIMEOUT_MS, 3600000);
+  assert.equal(AGENT_TIMEOUT_MS, 14400000);
   assert.equal(GATE_VERIFY_TIMEOUT_MS, 600000);
+  assert.equal(MAX_TIMER_DELAY_MS, 2147483647);
   assert.deepEqual(THINKING_LEVELS, ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+});
+
+// --- 运行时限（issue #26）：派发时新读的 agentTimeoutMs，不冻结进 init 旗标 ---
+
+test('normalizeRunTimeoutMs mirrors the platform dispatch contract: positive integer, bounded by the Node timer ceiling', () => {
+  assert.deepEqual(normalizeRunTimeoutMs(14400000), { ok: true, value: 14400000 });
+  assert.deepEqual(normalizeRunTimeoutMs(1), { ok: true, value: 1 });
+  assert.deepEqual(normalizeRunTimeoutMs(MAX_TIMER_DELAY_MS), { ok: true, value: MAX_TIMER_DELAY_MS });
+  for (const raw of [0, -1, 2.5, '7200000', true, false, null, undefined, NaN, Infinity, MAX_TIMER_DELAY_MS + 1]) {
+    const r = normalizeRunTimeoutMs(raw);
+    assert.equal(r.ok, false, `must reject ${JSON.stringify(raw)}`);
+    assert.match(r.error, /agentTimeoutMs/);
+  }
+  // 0 / false 不解释为无限时长
+  assert.match(normalizeRunTimeoutMs(0).error, /never means "no deadline"/);
+  // 超上限点名平台定时器天花板
+  assert.match(normalizeRunTimeoutMs(MAX_TIMER_DELAY_MS + 1).error, /2147483647/);
+});
+
+test('resolveRunTimeoutDetailed: project wins user, default 4h fills the rest; invalid values never win', () => {
+  const user = { [FLOW_SECTION]: { [RUN_TIMEOUT_KEY]: 7200000 } };
+  const project = { [FLOW_SECTION]: { [RUN_TIMEOUT_KEY]: 3600000 } };
+  assert.deepEqual(resolveRunTimeoutDetailed(user, project), { value: 3600000, source: 'project', invalid: [] });
+  assert.deepEqual(resolveRunTimeoutDetailed(user, {}), { value: 7200000, source: 'user', invalid: [] });
+  assert.deepEqual(resolveRunTimeoutDetailed(), { value: AGENT_TIMEOUT_MS, source: 'default', invalid: [] });
+  // 手写非法值：忽略并记入 invalid，回退下一层 / 默认值（绝不变成无限时长）
+  const brokenProject = { [FLOW_SECTION]: { [RUN_TIMEOUT_KEY]: 'abc' } };
+  assert.deepEqual(resolveRunTimeoutDetailed(user, brokenProject), {
+    value: 7200000,
+    source: 'user',
+    invalid: [{ scope: 'project', raw: 'abc' }],
+  });
+  const brokenBoth = { [FLOW_SECTION]: { [RUN_TIMEOUT_KEY]: 0 } };
+  assert.deepEqual(resolveRunTimeoutDetailed(brokenBoth, brokenProject), {
+    value: AGENT_TIMEOUT_MS,
+    source: 'default',
+    invalid: [{ scope: 'project', raw: 'abc' }, { scope: 'user', raw: 0 }],
+  });
+  // 与流程形态键互不干扰
+  assert.deepEqual(
+    resolveRunTimeoutDetailed({ [FLOW_SECTION]: { reviewer: false, maxConcurrent: 5 } }, {}),
+    { value: AGENT_TIMEOUT_MS, source: 'default', invalid: [] },
+  );
+});
+
+test('a saved change is what the NEXT resolution sees (A → B mid-run, no re-init)', () => {
+  let settings = withFlowConfig({}, { [RUN_TIMEOUT_KEY]: 3600000 });
+  assert.equal(resolveRunTimeoutDetailed({}, settings).value, 3600000);
+  settings = withFlowConfig(settings, { [RUN_TIMEOUT_KEY]: 7200000 });
+  assert.deepEqual(resolveRunTimeoutDetailed({}, settings), { value: 7200000, source: 'project', invalid: [] });
+  // 清除覆盖 → 恢复默认（已更新的默认值）
+  settings = withFlowConfig(settings, { [RUN_TIMEOUT_KEY]: CLEAR });
+  assert.deepEqual(resolveRunTimeoutDetailed({}, settings), { value: AGENT_TIMEOUT_MS, source: 'default', invalid: [] });
+});
+
+test('buildShowView renders the run deadline with its source and flags ignored invalid values', () => {
+  const view = buildShowView({
+    frontmatterByRole: {},
+    userSettings: { [FLOW_SECTION]: { [RUN_TIMEOUT_KEY]: 7200000 } },
+    projectSettings: { [FLOW_SECTION]: { [RUN_TIMEOUT_KEY]: 'oops' } },
+    userPath: '/u/settings.json',
+    projectPath: '/p/.pi/settings.json',
+  });
+  assert.match(view, /agentTimeoutMs\s+7200000 ms \(120 min\) \[user\]\s+run deadline per new subagent dispatch/);
+  assert.match(view, /ignoring invalid agentTimeoutMs in project settings \("oops"\)/);
+  const defaultView = buildShowView({ frontmatterByRole: {}, userSettings: {}, projectSettings: {} });
+  assert.match(defaultView, /agentTimeoutMs\s+14400000 ms \(240 min\) \[default\]/);
 });
 
 // --- 流程配置（settings 顶层自定义节） ---
@@ -327,7 +399,7 @@ test('buildShowView renders the Flow section with sources and hints, then agents
 
 // Load the unchanged extension with only its external pi SDK boundary stubbed.
 // Exercise the registered command against real temporary settings files.
-test('matt-flow-config UI offers only reviewer and concurrency and preserves legacy settings on save', async (t) => {
+async function loadExtension(t, initialSettings) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-config-ui-'));
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   t.after(() => {
@@ -350,11 +422,8 @@ test('matt-flow-config UI offers only reviewer and concurrency and preserves leg
   }
   put('scripts/flow-config-core.js', readText(PKG_ROOT, 'scripts/flow-config-core.js'));
   const extension = put('extensions/matt-flow-config.mjs', readText(PKG_ROOT, 'extensions/matt-flow-config.js'));
-  const settingsPath = put('user/settings.json', serializeSettings({
-    [FLOW_SECTION]: { reviewer: false, maxFixRounds: 1, maxConcurrent: 3, futureKey: 'keep' },
-    subagents: { agentOverrides: { [fullName('coder')]: { model: 'a/x', thinking: 'high' } } },
-    unrelated: true,
-  }));
+  put('.pi/.keep', ''); // 项目层 settings 的锚点：让 findProjectRoot 找到 <root>
+  const settingsPath = put('user/settings.json', serializeSettings(initialSettings));
   process.env.PI_CODING_AGENT_DIR = path.dirname(settingsPath);
   let command;
   (await import(pathToFileURL(extension).href)).default({
@@ -364,11 +433,20 @@ test('matt-flow-config UI offers only reviewer and concurrency and preserves leg
       command = registered;
     },
   });
+  return { root, command, settingsPath, projectSettingsPath: path.join(root, '.pi', 'settings.json') };
+}
+
+test('matt-flow-config UI offers reviewer, concurrency, and the run deadline, and preserves legacy settings on save', async (t) => {
+  const { command, settingsPath } = await loadExtension(t, {
+    [FLOW_SECTION]: { reviewer: false, maxFixRounds: 1, maxConcurrent: 3, futureKey: 'keep' },
+    subagents: { agentOverrides: { [fullName('coder')]: { model: 'a/x', thinking: 'high' } } },
+    unrelated: true,
+  });
   const menus = [];
   const notifications = [];
   await command.handler('', {
     hasUI: true,
-    cwd: root,
+    cwd: path.dirname(settingsPath),
     ui: {
       async select(title, choices) {
         menus.push({ title, choices });
@@ -384,9 +462,10 @@ test('matt-flow-config UI offers only reviewer and concurrency and preserves leg
   assert.equal(notifications.length, 1);
   assert.equal(notifications[0].level, 'info');
   const fields = menus.find((menu) => menu.title === 'Which flow setting?').choices;
-  assert.equal(fields.length, 2);
+  assert.equal(fields.length, 3);
   assert.match(fields[0], /^reviewer /);
   assert.match(fields[1], /^maxConcurrent /);
+  assert.match(fields[2], /^agentTimeoutMs \(currently 14400000 ms \[default\]\)/);
   assert.doesNotMatch(JSON.stringify(menus), /maxFixRounds|fix budget|Fix attempts per ticket/);
   const saved = readSettingsFile(settingsPath);
   assert.deepEqual(saved, {
@@ -395,4 +474,68 @@ test('matt-flow-config UI offers only reviewer and concurrency and preserves leg
     unrelated: true,
   });
   assert.deepEqual(resolveFlowConfigDetailed(saved).values, { reviewer: false, maxConcurrent: 4 });
+});
+
+async function configureRunTimeout(t, initialSettings, { input, clear = false }) {
+  const { command, projectSettingsPath } = await loadExtension(t, {});
+  if (initialSettings) fs.writeFileSync(projectSettingsPath, serializeSettings(initialSettings));
+  const notifications = [];
+  await command.handler('', {
+    hasUI: true,
+    cwd: path.dirname(projectSettingsPath),
+    ui: {
+      async select(title, choices) {
+        if (title === 'matt-flow-config') return choices.find((s) => s.startsWith('Configure flow options'));
+        if (title === 'Where should the override live?') return choices.find((s) => s.startsWith('project'));
+        if (title === 'Which flow setting?') return choices.find((s) => s.startsWith('agentTimeoutMs'));
+        if (title === 'Run deadline for new subagent dispatches') {
+          return choices[clear ? 1 : 0];
+        }
+        return null;
+      },
+      async input() { return input; },
+      async confirm() { return true; },
+      notify(message, level) { notifications.push({ message, level }); },
+    },
+  });
+  return { notifications, saved: readSettingsFile(projectSettingsPath) };
+}
+
+test('run deadline wizard: minutes convert to milliseconds and save under mattImplementFlow.agentTimeoutMs', async (t) => {
+  const { notifications, saved } = await configureRunTimeout(
+    t,
+    { unrelated: true },
+    { input: '120' },
+  );
+  assert.deepEqual(saved, { [FLOW_SECTION]: { agentTimeoutMs: 7200000 }, unrelated: true });
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].level, 'info');
+  assert.match(notifications[0].message, /Effective on the NEXT new subagent dispatch/);
+  assert.match(notifications[0].message, /running child keeps its deadline/);
+  assert.deepEqual(resolveRunTimeoutDetailed({}, saved), { value: 7200000, source: 'project', invalid: [] });
+  // 小数分钟只要换算成整毫秒就合法（浮点噪声归整，非整毫秒仍拒）
+  const fractional = await configureRunTimeout(t, {}, { input: '1.1' });
+  assert.deepEqual(fractional.saved, { [FLOW_SECTION]: { agentTimeoutMs: 66000 } });
+});
+
+test('run deadline wizard: invalid input is refused with a clear error and nothing is written (0/false ≠ infinite)', async (t) => {
+  for (const input of ['0', '-30', 'abc', '2.333333', String(Math.ceil(MAX_TIMER_DELAY_MS / 60000))]) {
+    const { notifications, saved } = await configureRunTimeout(t, { unrelated: true }, { input });
+    assert.deepEqual(saved, { unrelated: true }, `input ${input} must not be written`);
+    assert.equal(notifications.length, 1);
+    assert.equal(notifications[0].level, 'error');
+    assert.match(notifications[0].message, /Not saved/);
+  }
+});
+
+test('run deadline wizard: clear removes the override and the next resolution falls back to the 4h default', async (t) => {
+  const { notifications, saved } = await configureRunTimeout(
+    t,
+    { [FLOW_SECTION]: { agentTimeoutMs: 7200000, maxConcurrent: 3 } },
+    { clear: true },
+  );
+  assert.deepEqual(saved, { [FLOW_SECTION]: { maxConcurrent: 3 } });
+  assert.equal(notifications[0].level, 'info');
+  assert.match(notifications[0].message, /\(cleared\)/);
+  assert.deepEqual(resolveRunTimeoutDetailed({}, saved), { value: AGENT_TIMEOUT_MS, source: 'default', invalid: [] });
 });

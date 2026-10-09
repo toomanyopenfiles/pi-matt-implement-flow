@@ -55,6 +55,18 @@ This run's shape — whether each ticket gets a reviewer and the coder concurren
 
 Pass them to `init` as `--reviewer on|off --max-concurrent N`; omitted flags mean the defaults. The ledger script enforces the frozen shape from that point on: with `reviewer=off` it rejects `verdict`/`fix` events and lets `merge` proceed without a verdict. Configure via `/matt-flow-config` → "Configure flow options"; changes apply from the next run's `init`, never mid-run.
 
+One key is deliberately **not frozen** with the shape: the run deadline `mattImplementFlow.agentTimeoutMs` (below) is re-read before every new dispatch, so a saved change takes effect at the next dispatch even inside a run already in progress.
+
+### Run deadline (per new dispatch)
+
+Every new subagent dispatch carries a **run deadline** — the wall clock one child gets before the platform terminates it (expiration is terminal; there is no auto-resume). The deadline is **not frozen** into the init snapshot: resolve it fresh before every dispatch so a saved change lands at the next dispatch, in an unsealed run included.
+
+- Key: `mattImplementFlow.agentTimeoutMs`, milliseconds, one value shared by `coder` / `reviewer` / `final-reviewer`. Default `14400000` (4 h) — the value the agent frontmatter declares. Project settings win over user settings; removing the key restores the default. Valid values are positive integers no larger than `2147483647` (the Node timer ceiling the platform enforces); anything else is ignored for resolution and refused by the wizard — `0` or `false` never means "no deadline".
+- Resolve it fresh before every dispatch: `node <this-package>/scripts/flow-config-cli.js run-timeout` prints one JSON line `{"timeoutMs": …, "source": "default|user|project", "invalid": […]}`. Put that number into the dispatch script as `const RUN_TIMEOUT_MS = <that number>;` and give **every** `runs.run` / `runs.all` item `timeoutMs: RUN_TIMEOUT_MS`.
+- It covers every fresh-dispatch path: ticket coders, per-ticket reviewers, the final reviewer, and the integration / final fixers (the fix loop's integrity fallback included). Independent and unchanged: the gate's own `timeoutMs: 600000` (the test-gate budget), command timeouts, the concurrency limit, user cancellation, and manual pause.
+- Review axes are new dispatches too. Before dispatching a reviewer or final-reviewer, resolve with `node <this-package>/scripts/flow-config-cli.js run-timeout --settings-paths --cwd <absolute main-repo cwd>`. Include the returned `settingsPaths` in its brief as `Run timeout settings: user: <absolute path>; project: <absolute path or null>` (read-only). The reviewer re-reads these files immediately before dispatching the axes, following `<this-package>/scripts/run-timeout-settings.md`, and supplies `args.timeoutMs`; the axis script passes it to both children. Pass paths, not a frozen launch value: a change while the reviewer is running must reach its next new axis dispatch.
+- Boundaries: a child that already started keeps the deadline it launched with. A retained resume (the fix loop) follows the platform's retained-child contract; this setting does not override its timeout behavior. It is not a new dispatch, so its script never carries `RUN_TIMEOUT_MS`.
+
 ## Ledger
 
 Your memory has three layers, each with exactly one owner. Terms (per `CONTEXT.md`): ledger 台账 / event stream 事件流 / orchestration notes 编排笔记 / record 记账 / seal 封账 / reconcile 对账. The old phrase "event log" is retired — never use it.
@@ -126,10 +138,13 @@ Optionally, when a survey finding is a durable repo-level lesson (e.g. a CLI syn
 Count running coders; while below N and the frontier is non-empty, claim the next tickets（认领）— write `Status: claimed` on the ticket's truth-layer file — the tracker snapshot's copy when the run reads one, the ticket file itself when the files are the truth layer; never a tracker-body write — tracker-side progress happens only at the pre-seal sync — and dispatch one wave. Dispatch delivery is always script-file form: **write the script below to a new file** `.pi/matt-implement/<slug>/wf/wave-<NN>.js` (one new file per call — the audit report recovers briefs from these files), then make one top-level `subagent` call naming that file: `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/wave-<NN>.js", async: true })`:
 
 ```js
+const RUN_TIMEOUT_MS = 14400000; // ← substitute the number just printed by `node <this-package>/scripts/flow-config-cli.js run-timeout` (see Run deadline)
+
 const results = await runs.all([
   {
     key: "t-01",
     agent: "pi-matt-implement-flow.coder",
+    timeoutMs: RUN_TIMEOUT_MS,
     task: `<coder brief — see Briefs>`,
     worktree: true,
     gate: {
@@ -207,10 +222,13 @@ When a coder reports, first make its work mergeable, then review. The **formal-r
 4. **Dispatch the reviewer** for that ticket — only when the run's init snapshot has `reviewer=on` (the default). With `reviewer=off`, skip this step and the fix loop entirely and go straight to the merge: the platform gate and the post-merge integration suite are the remaining per-ticket defenses, and the whole-branch final-reviewer still runs at the end. Script-file delivery: write the script below to a new file `.pi/matt-implement/<slug>/wf/review-<NN>-r<k>.js`, then call `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/review-<NN>-r<k>.js", async: true })`:
 
 ```js
+const RUN_TIMEOUT_MS = 14400000; // ← substitute the number just printed by `node <this-package>/scripts/flow-config-cli.js run-timeout` (see Run deadline)
+
 const results = await runs.all([
   {
     key: "rev-01",
     agent: "pi-matt-implement-flow.reviewer",
+    timeoutMs: RUN_TIMEOUT_MS,
     task: `<reviewer brief — see Briefs>`,
     worktree: true,
     baseRef: "refs/heads/ticket-01",
@@ -258,7 +276,7 @@ cd <coderWorktree> && node <this-package>/scripts/mechanical-report.js --base <t
 Its stdout is that round's report and its exit code is that round's gate; the `settled` `--gate` summary for the round comes from the fresh report's `testResult`, same source as round one.
 - Judge the fix by **git truth** (new HEAD SHA on the coder's branch), never by run status — a rejected run may still contain the finished work.
 
-Then `git branch -f ticket-<NN> <newSha>` and retain the fresh validation evidence. Use **Repair decisions**: perform another supported repair if needed, or rebuild the bundle, record `settled` for this candidate, and dispatch the next complete formal-review round. Review ordinals count reviews, not fixes plus one. If the resume fails because the retained worktree is gone, fall back to a fresh coder — the ticket branch carries the accumulated commits — dispatched as `worktree: true, baseRef: "refs/heads/ticket-<NN>", acceptance: false`, with **no gate**: a gate would arm the platform's acceptance-report duty and settle the round by platform checks, while a fix round has exactly one verdict source — your hand-run gate. Record that fallback as a `fix` event too (new `--key`，`--resume-run-id` = the run it replaces).
+Then `git branch -f ticket-<NN> <newSha>` and retain the fresh validation evidence. Use **Repair decisions**: perform another supported repair if needed, or rebuild the bundle, record `settled` for this candidate, and dispatch the next complete formal-review round. Review ordinals count reviews, not fixes plus one. If the resume fails because the retained worktree is gone, fall back to a fresh coder — the ticket branch carries the accumulated commits — dispatched as `worktree: true, baseRef: "refs/heads/ticket-<NN>", acceptance: false, timeoutMs: RUN_TIMEOUT_MS` (a fresh dispatch is a new deadline, resolved per the **Run deadline** rule), with **no gate**: a gate would arm the platform's acceptance-report duty and settle the round by platform checks, while a fix round has exactly one verdict source — your hand-run gate. Record that fallback as a `fix` event too (new `--key`，`--resume-run-id` = the run it replaces).
 
 ### Merge and close
 
@@ -268,8 +286,11 @@ Serially, in the main checkout on the feature branch — merges never run in par
 2. Run the full suite. Red means an integration problem no ticket-level review could see: save the failing output to `findings/integration-<NN>.md` and dispatch **one** coder **without isolation** (omit `worktree`) on the feature branch, guarded by a pure-verdict gate (command plus timeout only — no `output`/`schema`, zero report because zero consumers). Script-file delivery: write the script below to a new file `.pi/matt-implement/<slug>/wf/integration-<NN>.js`, then call `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/integration-<NN>.js", async: true })`:
 
 ```js
+const RUN_TIMEOUT_MS = 14400000; // ← substitute the number just printed by `node <this-package>/scripts/flow-config-cli.js run-timeout` (see Run deadline)
+
 await runs.run("fix-integration-<NN>", {
   agent: "pi-matt-implement-flow.coder",
+  timeoutMs: RUN_TIMEOUT_MS,
   task: `<integration fixer brief — see Briefs>`,
   gate: { command: "<testCommand>", timeoutMs: 600000 }
 });
@@ -285,9 +306,22 @@ Recompute the frontier. While eligible tickets remain: top the dispatch back up 
 
 This is the normal completed-delivery path: escalation is not ticket completion and cannot substitute for it. With merged work, a full final verdict is required; a latest `not_ready` rejects normal sealing. For an explicit decision to stop unfinished work, use **User abandonment** below from any stage.
 
-1. Write the whole-branch bundle `git diff <feature-base>...HEAD` and dispatch `pi-matt-implement-flow.final-reviewer` with `worktree: true, baseRef: "refs/heads/feat/<slug>", acceptance: false` and a verdict schema of `ready | ready_with_fixes | not_ready` — its task carries the same `Axis script: <absolute path to this package>/scripts/axis-axes.js` pointer as the Reviewer brief.
+1. Write the whole-branch bundle `git diff <feature-base>...HEAD` and dispatch `pi-matt-implement-flow.final-reviewer` with `worktree: true, baseRef: "refs/heads/feat/<slug>", acceptance: false`, `timeoutMs: RUN_TIMEOUT_MS` (the run deadline — see **Run deadline**; the wf script defines the constant the same way as the other dispatch templates), and a verdict schema of `ready | ready_with_fixes | not_ready` — its task carries the same `Axis script: <absolute path to this package>/scripts/axis-axes.js` pointer and fresh `Run timeout settings` paths as the Reviewer brief.
 2. **Record the verdict**（记账 `final`）: write the findings to `.pi/matt-implement/<feature-slug>/findings/final-r<k>.md` (`<k>` = final-review round), then record — `node <this-package>/scripts/ledger.js add final --runtime-dir .pi/matt-implement/<feature-slug> --final-verdict <ready|ready_with_fixes|not_ready> --run-id <runId> [--findings .pi/matt-implement/<feature-slug>/findings/final-r<k>.md]`. It is a run-level event (no `--ticket`); the final-reviewer's dispatch is not recorded separately — `--run-id` carries it, the same shape as a ticket reviewer's `--rev-run-id`. Every round of final review is one `final` event, and the **latest** verdict is the branch's readiness — never an earlier round's.
-3. **With fixes**: dispatch one `pi-matt-implement-flow.coder` without isolation to fix every finding, guarded by the same pure-verdict gate (`gate: { command: "<testCommand>", timeoutMs: 600000 }` — no `output`/`schema`); commit on the feature branch. After each return, use **Repair decisions** to choose a supported next fix or request the user; a red gate is not an attempt-count stop. Check each finding against the actual diff and validation evidence after repairs. Local, explicit corrections may proceed after your verification; changes involving requirements, behavior, broader impact, or insufficient evidence require another final review. Write the per-finding checks, evidence pointers, and re-review choice with reasons in orchestration notes. Green tests, an old final verdict, or coder self-assessment alone do not prove the repaired candidate is acceptable. Every re-review gets its own `final` event; if the latest verdict is `not_ready`, obtain a new complete final verdict permitting normal closing before proceeding. **Not ready**: use the same repair decisions, retaining the review pointers and recording why repair can continue or which user input is needed. If the user explicitly calls the run off, switch to **User abandonment** below.
+3. **With fixes**: dispatch one `pi-matt-implement-flow.coder` without isolation to fix every finding, guarded by the same pure-verdict gate (`gate: { command: "<testCommand>", timeoutMs: 600000 }` — no `output`/`schema`); commit on the feature branch. Script-file delivery, same shape as the integration fixer:
+
+```js
+const RUN_TIMEOUT_MS = 14400000; // ← substitute the number just printed by `node <this-package>/scripts/flow-config-cli.js run-timeout` (see Run deadline)
+
+await runs.run("fix-final-<NN>", {
+  agent: "pi-matt-implement-flow.coder",
+  timeoutMs: RUN_TIMEOUT_MS,
+  task: `<final fixer brief — see Briefs>`,
+  gate: { command: "<testCommand>", timeoutMs: 600000 }
+});
+```
+
+After each return, use **Repair decisions** to choose a supported next fix or request the user; a red gate is not an attempt-count stop. Check each finding against the actual diff and validation evidence after repairs. Local, explicit corrections may proceed after your verification; changes involving requirements, behavior, broader impact, or insufficient evidence require another final review. Write the per-finding checks, evidence pointers, and re-review choice with reasons in orchestration notes. Green tests, an old final verdict, or coder self-assessment alone do not prove the repaired candidate is acceptable. Every re-review gets its own `final` event; if the latest verdict is `not_ready`, obtain a new complete final verdict permitting normal closing before proceeding. **Not ready**: use the same repair decisions, retaining the review pointers and recording why repair can continue or which user input is needed. If the user explicitly calls the run off, switch to **User abandonment** below.
 4. **Pre-seal sync** — after the last `final` verdict is in, and before the closing surface is ever marked ready: write the run's closing into the snapshot's `spec.md` (`closing: <交付指引>` under `## Comments` — the delivery note the closing comment will carry), then `node <this-package>/scripts/ledger.js sync --runtime-dir .pi/matt-implement/<slug>`: merged tickets close with their merge SHAs, escalated tickets get their comments and stay open, the spec closes with the delivery note. The sync is idempotent — after a partial failure, re-running plans only the still-missing actions. **A failed sync must not seal the run**: record `anomaly --note "sync failed: ..."`, retain the snapshot, and pause ready/cleanup/sealing. Verify and handle the failure, then retry the same idempotent sync for still-missing actions; request the user when needed conditions are absent. After success, write the disposition and evidence pointers in orchestration notes and continue the remaining closing steps after necessary checks. The historical anomaly is not a permanent stop, and notes do not replace successful sync or other validation. After `close` the event stream rejects every write, so a tracker failure can only be accounted for while the run is still open. The script itself refuses to sync a sealed run or one whose closing surface is already `ready`; the sync always precedes `pr --state ready`, so the closing keywords can never race-close a ticket the sync hasn't handled yet. Runs whose truth layer is the local files have no sync step: the local ticket files are the tracker already (zero change).
 5. **Clean up after a green sync** — the cleanup disciplines are per-runtime-file category, per the glossary, not per tracker: the **tracker snapshot** (a third category of its own, not a transfer artifact) and the **transfer artifacts** spent by the sync — the review bundles — are removed once the sync lands (`rm -rf .pi/matt-implement/<slug>/tracker/` and `reviews/`). Keep `findings/` (the event stream references those paths) and the ledger三件套 (`events.jsonl` / `ledger.md` / `notes.md`) for good. The sync command prints this checklist — execute it as printed.
 6. Push. Mark the closing surface ready — a PR ready for review, an MR ready — or report the branch name when there is no remote or the contract declares no closing surface; record `pr --state ready` when a closing surface exists.
@@ -346,6 +380,7 @@ Ticket 07 (ticket file: <absolute main-repo path>). Spec: <absolute main-repo pa
 Review bundle: <absolute main-repo path>/.pi/matt-implement/<slug>/reviews/07-r1.diff (three-dot diff + commit list against base <sha>).
 Implementer's report: the typed-gate report (`headSha` <sha>, `testResult` <one-line summary>) — mechanical gate evidence.
 Axis script: <absolute path to this package>/scripts/axis-axes.js (read-only) — you spawn both axes through it.
+Run timeout settings: user: <absolute user settings path>; project: <absolute main-repo project settings path or null> (read-only; from run-timeout --settings-paths). Read these again immediately before spawning the axes.
 Your worktree is checked out at refs/heads/ticket-07 — the post-change tree. Read the changed files there; review-bundle and findings paths are main-repo paths (read-only).
 
 Run your two-axis process and return the structured verdict.
