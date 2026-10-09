@@ -2,7 +2,8 @@
 'use strict';
 
 // /matt-flow-config 的只读解析入口，给编排器在**每次派发新子代理前**调用：
-//   node scripts/flow-config-cli.js run-timeout [--cwd <dir>]
+//   node scripts/flow-config-cli.js run-timeout [--cwd <dir>] [--settings-paths]
+// --settings-paths 附带主仓库设置路径，供只读 reviewer 在 axis 派发前重新读取。
 // 打印一行 JSON：{"timeoutMs":14400000,"source":"default","invalid":[]}
 // ——timeoutMs 就是派发项的 `timeoutMs` 参数（平台运行时限）。每次调用都重新读
 // settings（镜像 pi-subagents 每次派发重读的语义），所以同一未封账 run 中改配置、
@@ -17,7 +18,7 @@ const flowConfig = require('./flow-config-core.js');
 const CONFIG_DIR_NAME = '.pi';
 
 function usage() {
-  return 'usage: node scripts/flow-config-cli.js run-timeout [--cwd <dir>]\n';
+  return 'usage: node scripts/flow-config-cli.js run-timeout [--cwd <dir>] [--settings-paths]\n';
 }
 
 function main(argv) {
@@ -27,9 +28,12 @@ function main(argv) {
     return 1;
   }
   let cwd = process.cwd();
+  let includeSettingsPaths = false;
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === '--cwd' && rest[i + 1] !== undefined) {
       cwd = rest[++i];
+    } else if (rest[i] === '--settings-paths') {
+      includeSettingsPaths = true;
     } else {
       process.stderr.write(`unknown argument: ${rest[i]}\n${usage()}`);
       return 1;
@@ -44,7 +48,10 @@ function main(argv) {
     const userSettings = flowConfig.readSettingsFile(userPath);
     const projectSettings = projectPath ? flowConfig.readSettingsFile(projectPath) : {};
     const { value, source, invalid } = flowConfig.resolveRunTimeoutDetailed(userSettings, projectSettings);
-    process.stdout.write(`${JSON.stringify({ timeoutMs: value, source, invalid })}\n`);
+    const settingsPaths = includeSettingsPaths
+      ? { settingsPaths: { user: path.resolve(userPath), project: projectPath ? path.resolve(projectPath) : null } }
+      : {};
+    process.stdout.write(`${JSON.stringify({ timeoutMs: value, source, invalid, ...settingsPaths })}\n`);
     return 0;
   } catch (error) {
     process.stderr.write(`run-timeout resolution failed: ${error?.message ?? String(error)}\n`);

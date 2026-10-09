@@ -21,10 +21,11 @@
 - 派发参数 `timeoutMs` / `maxRuntimeMs` 要求正整数，上限 2147483647（Node 定时器上限）；
   0 / false / 负值 / Infinity 均不能代表无限。
 - 单代理派发的时限优先级：派发级 `timeoutMs` > agent frontmatter `timeoutMs`
-  （`defaultTimeoutMs`）> 全局 `config.timeoutMs` > 30 分钟兜底（`applySingleAgentLaunchDefaults`
+  （`defaultTimeoutMs`）> 工作流父截止时间（仅无 agent 默认时限时）> 全局 `config.timeoutMs` > 30 分钟兜底（`applySingleAgentLaunchDefaults`
   / `resolveSingleAgentLaunchTimeout`）。
-- retained resume 沿用保留子代理的合同（`gate` 被拒收、模型/工具合同沿用存档）；暂停 run
-  的恢复按存档的绝对死线只给余量（`remainingSteeringRecoveryLimits`，余量耗尽即拒绝接续）。
+- retained resume 沿用保留子代理的合同（`gate` 被拒收、模型/工具合同沿用存档），但不能
+  据此承诺普通 resume 保留原截止时间。steering recovery 会按存档绝对死线计算余量
+  （`remainingSteeringRecoveryLimits`，余量耗尽即拒绝接续）。本配置不覆盖其平台行为。
 - 代理管理面的 `config.timeoutMs: false` 只删除代理默认值，不禁用运行超时。
 
 ## Decision
@@ -43,6 +44,12 @@
 `runs.all` 条目（逐票 coder、逐票评审、终审、集成 / 终审 fixer、修复兜底 fresh coder）。
 这样同一未封账 run 中从 A 改到 B，下一次派发即用 B，无需重新 init。
 
+评审简报额外携带 `run-timeout --settings-paths --cwd <main-repo>` 返回的设置文件绝对路径。
+reviewer 没有 shell；它通过现有只读工具，按 `scripts/run-timeout-settings.md` 的规则，
+在双轴派发前重读文件、选择项目 / 用户 / 默认值，并给 axis 脚本传 `args.timeoutMs`。
+脚本检查合法性并显式传给两个 `runs.all` 条目。传的是路径而不是父启动值，因此用户在
+父 reviewer 运行中改配置，尚未启动的 axes 可用新值；父自身的截止时间仍不变。
+
 选派发参数而不是 `subagents.agentOverrides.timeoutMs`：后者不假定有效（调研裁定），
 派发级 `timeoutMs` 是平台明文支持且优先级最高的合同面。
 
@@ -57,9 +64,9 @@
 命令超时、测试门禁超时（`gate.timeoutMs: 600000` 固定值）、并发上限、用户取消与人工
 暂停能力不变。已启动子代理的截止时间不可改；修复轮的 retained resume 保持平台既有
 合同，派发脚本**不**携带 `RUN_TIMEOUT_MS`——接续不是新派发，也不把接续冒充新派发。
-双轴评审内部的两个 axis 子代理（axis-axes.js 的嵌套 fan-out）沿用包默认值（4 小时），
-不走本配置：需求的路径清单未列它们，沿链路（brief → reviewer → axis 调用）再传一层
-只会扩大提示词面；如需覆盖，另开小票核验平台对嵌套子代的时限语义后再做。
+双轴评审内部的两个 axis 子代理属于新派发，使用派发前重新读取的本配置（Decision 2）。
+平台不会自动把父 reviewer 本次派发的 timeoutMs 传给它们：自身 agent 的默认时限优先于
+工作流父截止时间。此前排除 axes 的范围解释已由维护者本次澄清取代；现在显式传参。
 不增加超时后自动恢复、停滞检测或恢复状态机。
 
 ## Consequences
@@ -68,10 +75,12 @@
   或费用有限；硬超时仍在。
 - 派发模板里的 `RUN_TIMEOUT_MS` 靠编排器替换为新读值；替换指针（解析 CLI 的调用行）
   与 `timeoutMs: RUN_TIMEOUT_MS` 由注册自检（`checkDispatchRunDeadlines`）钉进测试，
-  漂移即红，但「运行时确实替换了」仍属提示词纪律，不是机械保证。
+  漂移即红。`run-timeout-dispatch.test.js` 执行真实模板和 axis 脚本，在平台边界捕获
+  A→B 派发参数，并核验 resume 不携带覆盖值；测试显式模拟编排器读取与替换动作。
+  模型是否确实执行读取 / 替换（包括 reviewer 读配置）仍属提示词纪律，不是机械保证。
 - retained resume 不享受配置的新值：它继续按平台保留合同运行。这是有意的边界（不改
   合同、不冒充新派发）；若未来要给接续也配死线，需另行决策并核验平台 resume 的时限语义。
-- axis 子代理同样不享受配置的新值（见 Decision 4）；用户把时限调到 4 小时以上时，
-  评审内部的两个只读 axis 仍是 4 小时。典型评审远低于此，风险低，但不是零。
+- axes 可以使用新配置，但不能延长已启动的父 reviewer：父截止时间仍可能先到。
+  因此把时限调大不会追溯延长正在进行的整次评审；没有总时间保证。
 - 手改 settings 写坏值不会阻塞 run：解析回退默认并在 show 视图提示，向导是唯一常规
   写入口。

@@ -735,6 +735,15 @@ test('reviewer and final-reviewer axis-spawn contract: blocking call with stable
   }
 });
 
+test('breakage simulation: reviewer axes losing fresh timeout args or main-repo settings paths are flagged (#26)', () => {
+  for (const name of ['reviewer', 'final-reviewer']) {
+    const text = readText(PKG_ROOT, `agents/${name}.md`);
+    assert.ok(checkAxisSpawnContract(text.replace('timeoutMs: RUN_TIMEOUT_MS, ', '')).some((p) => p.includes('timeoutMs: RUN_TIMEOUT_MS')));
+    assert.ok(checkAxisSpawnContract(text.replaceAll('Run timeout settings', 'Retired settings')).some((p) => p.includes('settings paths')));
+    assert.ok(checkAxisSpawnContract(text.replaceAll('run-timeout-settings.md', 'retired.md')).some((p) => p.includes('resolution rules')));
+  }
+});
+
 test('breakage simulation: an async:true axis spawn without keys and without the turn rule is flagged (issue #6)', () => {
   const broken =
     'Spawn the two axes as parallel read-only children — exactly ONE top-level `subagent` workflow call with `async: true`,\n' +

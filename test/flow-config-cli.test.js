@@ -29,8 +29,8 @@ function makeFixture(t) {
   return { root, userDir, projectDir };
 }
 
-function runTimeout(fixture, { cwd = fixture.projectDir } = {}) {
-  const r = spawnSync(process.execPath, [CLI, 'run-timeout', '--cwd', cwd], {
+function runTimeout(fixture, { cwd = fixture.projectDir, settingsPaths = false } = {}) {
+  const r = spawnSync(process.execPath, [CLI, 'run-timeout', '--cwd', cwd, ...(settingsPaths ? ['--settings-paths'] : [])], {
     encoding: 'utf8',
     timeout: 30000,
     env: { ...process.env, PI_CODING_AGENT_DIR: fixture.userDir },
@@ -78,6 +78,18 @@ test('a settings change is visible to the very next resolution (the next dispatc
   // 清除覆盖 → 恢复默认
   writeSettings(projectSettings, {});
   assert.deepEqual(runTimeout(f), { timeoutMs: 14400000, source: 'default', invalid: [] });
+});
+
+test('review briefs can carry the main-repo settings paths, not isolated worktree paths', (t) => {
+  const f = makeFixture(t);
+  const out = runTimeout(f, { settingsPaths: true });
+  assert.deepEqual(out.settingsPaths, {
+    user: path.join(f.userDir, 'settings.json'),
+    project: path.join(f.projectDir, '.pi', 'settings.json'),
+  });
+  assert.equal(out.timeoutMs, 14400000);
+  const noProject = runTimeout(f, { cwd: f.root, settingsPaths: true });
+  assert.equal(noProject.settingsPaths.project, null);
 });
 
 test('bad invocation exits non-zero with usage; broken settings JSON fails loud', (t) => {

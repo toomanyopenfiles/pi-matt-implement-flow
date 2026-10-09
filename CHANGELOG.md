@@ -20,9 +20,11 @@ implementation history live in [`docs/adr/`](./docs/adr/).
 
 - `/matt-flow-config` can change the run deadline for these subagents (`mattImplementFlow.agentTimeoutMs`,
   in milliseconds; project settings win over user settings; the wizard inputs minutes). The saved
-  value applies from the next subagent run the flow starts — also inside a run already in progress.
-  A subagent already working keeps the deadline it started with, and a fix round that continues an
-  existing coder keeps that coder's original deadline. Removing the key restores the 4-hour default.
+  value applies to each new subagent when it is dispatched, including a reviewer's two review checks,
+  even while the flow is in progress. No restart or new initialization is needed. Subagents already
+  running are not affected. Continuing an existing subagent (resume) follows the platform's rules;
+  this setting does not override its resume timeout. Removing the key falls back to the user setting
+  or the 4-hour default.
   Command and test-gate timeouts, concurrency limits, and cancellation are unchanged. A longer
   deadline does not guarantee any single task fits, and total runtime and cost remain unbounded. (#26)
   (Design: [ADR-0010](./docs/adr/0010-configurable-subagent-run-deadline.md).)

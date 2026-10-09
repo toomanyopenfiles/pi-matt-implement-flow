@@ -70,12 +70,15 @@ append-only 的 JSONL 机器事实文件，一行一个结构化事件；每行�
 `scripts/flow-config-cli.js run-timeout` 重读配置并作为派发参数（`timeoutMs`）传给平台，
 同一未封账 run 中改配置在下一次新派发生效。已启动子代理沿用启动时的截止时间；
 retained resume（修复轮接续）沿用平台保留合同，不携带新值——接续不是新派发。
-双轴评审内部的两个 axis 子代理是评审 run 的嵌套 fan-out，沿用包默认值，不由本键配置。
+双轴评审内部的两个 axis 子代理同样是新派发：reviewer 根据简报中的主仓库配置绝对路径，
+在派发双轴前重新读取最新值，并通过 axis-axes.js 的 args.timeoutMs 显式传给两个子代理。
+父 reviewer 的启动时限不会自动透传；已运行的 reviewer 不延长自己的截止时间。
 门禁超时（gate.timeoutMs 600000）、命令超时、并发上限与取消能力独立不变。校验镜像
 平台派发合同：正整数毫秒且不超过 2147483647（Node 定时器上限），0 / false 不解释为
 无限时长。平台合同（对 pi-subagents 0.76.1 源码核对）：派发级 timeoutMs 优先于 agent
-frontmatter 的 defaultTimeoutMs，再回退全局默认与 30 分钟兜底；暂停 run 的恢复沿用原
-绝对死线，余量不足则拒绝接续。
+frontmatter 的 defaultTimeoutMs，再回退工作流父截止时间（仅无 agent 默认时限时）、
+全局默认与 30 分钟兜底。普通 retained resume 不等于 steering recovery；后者按原
+绝对死线计算余量，余量不足则拒绝接续。本配置不覆盖两者的既有平台行为。
 
 ### 修复（fix）与正式评审（formal review）
 

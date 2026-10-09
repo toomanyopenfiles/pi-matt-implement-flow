@@ -365,6 +365,9 @@ const RUN_DEADLINE_SECTION_ANCHORS = [
   '2147483647',
   'not frozen',
   'retained-child contract',
+  '--settings-paths',
+  'run-timeout-settings.md',
+  'args.timeoutMs',
 ];
 // [name, section start, section end] —— 每节都必须携带新派发死线。
 const RUN_DEADLINE_DISPATCH_SECTIONS = [
@@ -841,6 +844,15 @@ function checkNoIsolationBriefs(skillText) {
 // 收场；key 是 runs.all 的硬契约（缺 key 整个调用被拒）。三者缺一即回归。
 function checkAxisSpawnContract(agentText) {
   const problems = [];
+  if (!agentText.includes('timeoutMs: RUN_TIMEOUT_MS')) {
+    problems.push('axis-spawn args must carry `timeoutMs: RUN_TIMEOUT_MS` resolved immediately before axis dispatch');
+  }
+  if (!agentText.includes('Run timeout settings')) {
+    problems.push('axis-spawn must use the brief\'s main-repo settings paths');
+  }
+  if (!agentText.includes('run-timeout-settings.md')) {
+    problems.push('axis-spawn must point to the fresh timeout resolution rules');
+  }
   if (!/async:\s*false/.test(agentText)) {
     problems.push('axis-spawn must pin `async: false` (a blocking call); `async: true` can outlive the reviewer');
   }

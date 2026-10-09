@@ -240,7 +240,7 @@ When changes take effect:
 }
 ```
 
-`reviewer` and `maxConcurrent` are frozen when a run starts. `agentTimeoutMs` is read again every time a subagent is about to start: change it and the next subagent run picks it up, even mid-run. A fix round that continues (resume) an existing coder keeps that coder's original deadline — the changed value applies only to runs that start afterwards.
+`reviewer` and `maxConcurrent` are frozen when a run starts. The run deadline works differently: after saving it, you do not need to restart or initialize the flow again. Each new subagent uses the latest setting when it is dispatched, including the two review checks started by a reviewer. Subagents already running are not affected. Continuing an existing subagent (resume) follows the platform's rules; this setting does not override its resume timeout.
 
 Old repair-limit settings are no longer effective, including for older runs that have not been closed. Your saved settings and historical run records are not rewritten. Command timeouts, concurrency limits, and cancellation remain available; having no repair quota does **not** guarantee a finite total runtime or cost.
 
