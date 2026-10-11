@@ -58,11 +58,15 @@ const LEVEL_CLAIMS = {
 // 会话型场景：一次会话内部的子派发不逐个计入护栏额度（见计划里的 callsUnit 与费用说明）。
 const SESSION = { callsPerRun: 1, callsUnit: 'session' };
 
-const C = 'pi-matt-implement-flow.coder';
-const R = 'pi-matt-implement-flow.reviewer';
-const F = 'pi-matt-implement-flow.final-reviewer';
+const { CODER: C, REVIEWER: R, FINAL: F } = require('./lib/agents');
+
+// 收尾同步：本地 tracker 桩没有远程写面（生产文档：本地票文件即真相层，同步为无操作），
+// 该动作在这类契约下不适用；换成远程契约批次时它重新变成必须动作。
+const PRE_SEAL_SYNC = { action: 'pre-seal-sync', unlessLocalTracker: true };
 
 const COMMON_SAFETY = ['merge-after-validation', 'no-real-remote-write', 'seal-with-no-open-scope'];
+// 正常路径的收尾顺序：最终同步 / 标 ready / 清理 / 封账都不得早于最后一次合并。
+const FINAL_ORDER = [...COMMON_SAFETY, 'final-actions-after-last-merge'];
 
 // ---------------------------------------------------------------- 场景定义
 
@@ -96,7 +100,7 @@ const SCENARIOS = [
         { contract: 'merge-close', before: 'merge' },
         { contract: 'final-gate', before: 'final-review' },
       ],
-      requiredActions: ['ledger-init', 'merge', 'final-review', 'pre-seal-sync', 'seal'],
+      requiredActions: ['ledger-init', 'merge', 'final-review', PRE_SEAL_SYNC, 'seal'],
       requiredDispatches: [
         { agent: C, note: '按 frontier 派发 coder' },
         { agent: R, note: '逐票正式评审' },
@@ -107,7 +111,8 @@ const SCENARIOS = [
         { role: F, values: ['ready', 'ready_with_fixes', 'not_ready'] },
       ],
       forbiddenActions: [{ action: 'abandon-decision', note: '正常新 run 不是放弃出口' }],
-      safety: COMMON_SAFETY,
+      safety: FINAL_ORDER,
+      fixtureRules: ['no-duplicate-merge'],
     },
   },
   {
@@ -135,7 +140,7 @@ const SCENARIOS = [
         { contract: 'preconditions-flow-config', before: 'ledger-init' },
         { contract: 'final-gate', before: 'final-review' },
       ],
-      requiredActions: ['ledger-init', 'merge', 'final-review', 'pre-seal-sync', 'seal'],
+      requiredActions: ['ledger-init', 'merge', 'final-review', PRE_SEAL_SYNC, 'seal'],
       requiredDispatches: [
         { agent: C, note: '按 frontier 派发 coder' },
         { agent: F, note: '逐票评审关闭不改变终审仍执行' },
@@ -144,7 +149,8 @@ const SCENARIOS = [
         { agent: R, note: 'reviewer=off：不得派发逐票 reviewer（流程形态按 init 快照执法）' },
       ],
       requiredVerdicts: [{ role: F, values: ['ready', 'ready_with_fixes', 'not_ready'] }],
-      safety: COMMON_SAFETY,
+      safety: FINAL_ORDER,
+      fixtureRules: ['no-duplicate-merge'],
     },
   },
   {
@@ -173,14 +179,15 @@ const SCENARIOS = [
         { contract: 'merge-close', before: 'merge' },
         { contract: 'final-gate', before: 'final-review' },
       ],
-      requiredActions: ['fix-dispatch', 'merge', 'final-review', 'pre-seal-sync', 'seal'],
+      requiredActions: ['fix-dispatch', 'merge', 'final-review', PRE_SEAL_SYNC, 'seal'],
       requiredDispatches: [
         { agent: C, note: '修复回到同一 coder（retained resume）' },
         { agent: R, note: '修复后的候选需要新的正式评审轮次' },
       ],
       requiredVerdicts: [{ role: R, values: ['approved'] }],
       forbiddenActions: [{ action: 'ledger-init', note: '未封账 run 已存在：修复不是新 run（重复 init 会重建台账）' }],
-      safety: COMMON_SAFETY,
+      safety: FINAL_ORDER,
+      fixtureRules: ['no-duplicate-merge'],
     },
   },
   {
@@ -210,14 +217,14 @@ const SCENARIOS = [
         { contract: 'merge-close', before: 'merge' },
         { contract: 'final-gate', before: 'final-review' },
       ],
-      requiredActions: ['resume', 'ledger-check', 'merge', 'final-review', 'pre-seal-sync', 'seal'],
+      requiredActions: ['resume', 'ledger-check', 'merge', 'final-review', PRE_SEAL_SYNC, 'seal'],
       requiredDispatches: [{ agent: C, note: '恢复后继续剩余范围' }],
       forbiddenActions: [
         { action: 'ledger-init', note: '续跑不重复初始化（台账与快照已存在）' },
         { action: 'snapshot-init', note: '续跑不重拉快照（未封账 run 的票副本是真相层）' },
       ],
-      safety: COMMON_SAFETY,
-      fixtureRules: ['no-redispatch-of-completed'],
+      safety: FINAL_ORDER,
+      fixtureRules: ['no-redispatch-of-completed', 'no-duplicate-merge'],
     },
   },
   {
@@ -250,14 +257,15 @@ const SCENARIOS = [
         { contract: 'merge-close', before: 'merge' },
         { contract: 'final-gate', before: 'final-review' },
       ],
-      requiredActions: ['resume', 'merge', 'final-review', 'pre-seal-sync', 'seal'],
+      requiredActions: ['resume', 'merge', 'final-review', PRE_SEAL_SYNC, 'seal'],
       requiredDispatches: [{ agent: C, note: '只续剩余票据' }],
+      requiredVerdicts: [{ role: F, values: ['ready', 'ready_with_fixes', 'not_ready'] }],
       forbiddenActions: [
         { action: 'ledger-init', note: '开放 run 保留：续跑不重复初始化' },
         { action: 'abandon-decision', note: '用户接受的是阶段性交付，不是放弃' },
       ],
-      safety: COMMON_SAFETY,
-      fixtureRules: ['no-redispatch-of-completed'],
+      safety: FINAL_ORDER,
+      fixtureRules: ['no-redispatch-of-completed', 'no-duplicate-merge'],
     },
   },
   {
@@ -283,11 +291,19 @@ const SCENARIOS = [
     expectations: {
       requiredReadsBefore: [{ contract: 'user-abandonment', before: 'abandon-decision' }],
       requiredActions: ['stop-child', 'abandon-decision', 'seal'],
+      safety: [
+        'abandon-after-child-stop',
+        'abandon-outcome',
+        'abandon-keeps-open-scope',
+        'no-real-remote-write',
+      ],
       forbiddenActions: [
         { action: 'final-review', note: '放弃不补造终审' },
         { action: 'ledger-init', note: '放弃不是新 run' },
+        { action: 'pre-seal-sync', note: '放弃不走正常收尾链（不提前最终同步）' },
+        { action: 'pr-ready', note: '放弃不得把交付面标 ready' },
+        { action: 'cleanup', note: '放弃不得提前清理（成果与证据要留下）' },
       ],
-      safety: ['abandon-after-child-stop', 'no-real-remote-write'],
       requiredClaims: [{ text: '不声称代码已就绪', forbid: /(ready for merge|代码已就绪|已交付完成|正常完成)/i }],
     },
   },

@@ -21,7 +21,10 @@ implementation history live in [`docs/adr/`](./docs/adr/).
   plan records the commit, whether it matches your working copy, and a content fingerprint for the
   instruction documents, and tells you plainly when a result may not be attributed to that candidate.
   Each scenario states which tier of evidence it produces, so a local probe can never be read as a full
-  run. `npm test` still makes no model calls. (#35)
+  run, and the flow scenarios judge the boundary cases the spec calls out: a merge recorded twice, an
+  abandoned run sealed as completed, unfinished tickets closed at abandonment, and final sync /
+  readiness / cleanup happening before the remaining scope was delivered. `npm test` still makes no
+  model calls. (#35)
 
 - Running the real-model acceptance probe (`npm run repro`) no longer starts model calls on its own.
   It first prints the batch plan (scenarios, model, call budget, timeouts, write scope) and runs only

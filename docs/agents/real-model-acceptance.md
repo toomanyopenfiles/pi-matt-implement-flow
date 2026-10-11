@@ -48,6 +48,13 @@ The catalog (`test/e2e/scenarios.js`, seen through the plan; scenario data in
 - `reviewer-role-axes` / `final-reviewer-role-axes` — the two reviewer roles on a real candidate: shared protocol discovery, both axes finishing before the verdict, each role's own duties (the final review additionally records its cross-ticket / deferred-findings check). These are **full agent runs**, not the local probe wearing a different name.
 - `nav-stage-discovery` — navigation acceptance; `walkthrough-paused-repair` — controlled walkthrough.
 
+Two scenario contracts depend on the tracker contract in the fixture, and the judge says so instead
+of pretending a step happened: the fixture runs the `local` preset (no remote write surface), so
+`ledger.js sync` is refused by design and the pre-seal sync requirement is reported as *not
+applicable* rather than satisfied or failed. The abandonment exit is mapped the same way: with a
+remote write surface the decision point is `sync --mode abandon`; without one it lands on
+`add close --outcome abandoned`, and the judge still requires that outcome.
+
 `--scenario <id>[,<id>…]` selects them; the default is the whole catalog, so a real batch is normally
 approved with an explicit `--scenario` selection (plus a cap that matches the declared call units).
 
@@ -218,13 +225,20 @@ attempts). The judge then checks:
 - branch selection: required dispatches happened, forbidden ones did not, and continuation does not
   re-dispatch or re-merge work that is already delivered;
 - safety boundaries: no merge before a passing validation, no real remote tracker write, no seal with
-  open scope, and no abandonment before the still-running child is stopped and verified;
+  open scope, no duplicate merge (a second merge of a ticket that git already merged, or two distinct
+  merge commits for one ticket), and no abandonment before the still-running child is stopped and
+  verified — with the abandonment itself sealed as `abandoned`, its unfinished tickets still open, and
+  no early final sync / readiness / cleanup;
+- ordering: a final action (pre-seal sync, marking the closing surface ready, cleanup, sealing) that
+  lands before the last merge of the scope — or that appears at all in a session that recorded no
+  merge — is reported as an early final action, which is exactly the "don't finish before the
+  remaining scope is delivered" boundary;
 - the closing claim matches the lifecycle: a claim of completion that the event stream or the ticket
   copies contradict is reported as a misjudged completion;
 - role duties: a verdict never lands before both axes complete, read-only roles do not write, and the
   final review records its cross-ticket / deferred-findings check.
 
-Two harvest rules are worth knowing, because they are what keeps the waiting claims honest:
+Three harvest rules are worth knowing, because they are what keeps the waiting claims honest:
 
 - **A blocking dispatch return is the only axis-completion evidence.** The definitions require
   `async: false`, so the axes call returning means both axes finished. If the call carried
@@ -232,9 +246,18 @@ Two harvest rules are worth knowing, because they are what keeps the waiting cla
   dual-axis-wait duty fails outright, which is the issue #6 signature. If no `async` value can be
   observed at all, the check stays `inconclusive` rather than being assumed satisfied.
 - **A verdict is the role's own output; the waiting is a platform fact.** For the flow scenarios the
-  verdict value comes from the ledger record; for the reviewer role exercises it comes from the
-  reviewer's reply (`source: "reply-text"`). In both cases the axis timing that decides "grounded in
-  both axes" comes from the session trace, never from the reply.
+  verdict value comes from the ledger record only — a closing sentence such as "final verdict ready"
+  is recorded as a *claim* and never synthesized into a verdict, because the flow's own contract is
+  that the verdict is recorded (`add final` / `add verdict`). For the reviewer role exercises the
+  verdict value may come from the reviewer's reply (`source: "reply-text"`) — there the reply *is* the
+  output — while the axis timing that decides "grounded in both axes" still comes from the session
+  trace. Prose alone can therefore never satisfy a flow verdict requirement; the check stays
+  undetermined instead.
+- **Only successful ledger writes count as actions, and git history is not an action.** A `ledger.js`
+  command that the script refuses is recorded with `failed: true` and is not evidence that the action
+  happened. Merges already in git before the session are harvested as history facts (`source:
+  "git-log"`) used for duplicate-merge detection; the merge/readiness/ordering checks judge the
+  session's own merge actions.
 
 Evidence that could not be collected makes the corresponding check `inconclusive` (never a pass), and
 the trace records which facts were uncertain — for example a dispatch script whose agent name could not
@@ -253,8 +276,14 @@ An unlabelled candidate can never use that classification, and a failure that is
 
 `npm test` includes `test/e2e-flow-scenarios.test.js`, which builds the same fixtures, replays
 **synthetic traces** through the same judge, and asserts that missed reads, late reads, wrong branches,
-safety-boundary violations, role-duty violations, and a completion claim the lifecycle contradicts are
-all caught — and that missing evidence is reported as missing rather than as a pass. The self-check
+safety-boundary violations, role-duty violations, duplicate merges, early final actions, an
+`abandoned` run sealed as completed, unfinished tickets closed at abandonment, and a completion claim
+the lifecycle contradicts are all caught — and that missing evidence is reported as missing rather than
+as a pass. Several cases drive the **real** harvest-to-judge path instead of hand-written events: a
+session transcript executes actual `ledger.js` / `git` / test commands against the fixture (a real
+child is killed, a real abandoned seal is recorded, a real unrecorded merge is recovered until
+reconciliation is clean, a real duplicate merge is created), and the judgement runs on what actually
+happened. The self-check
 channel also runs without the entry:
 `node test/e2e/probes/flow-scenarios.js --only <id> --replay <trace.json>` judges a trace file with zero
 model calls. None of this is model acceptance: it proves the instrument, not the model. Only an

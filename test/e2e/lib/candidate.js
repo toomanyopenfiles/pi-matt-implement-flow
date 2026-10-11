@@ -15,21 +15,17 @@
 // 一次对照 = 各自单独授权的批次：候选范围进计划、进授权哈希，换候选必须重新授权。
 // ============================================================================
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { contractDocPaths } = require('../../../scripts/registration-checks.js');
+const { sha256 } = require('./digest');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const REGISTRY_DOCS = contractDocPaths();
 
 class CandidateError extends Error {}
-
-function sha256(text) {
-  return crypto.createHash('sha256').update(text).digest('hex');
-}
 
 // 内容标识 = 相关指令文档清单上的稳定哈希（只取有内容的文档；缺失的文档不进哈希，
 // 由 docs 列表里的 hash: null 单独如实呈现）。

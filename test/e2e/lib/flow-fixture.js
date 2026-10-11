@@ -18,6 +18,7 @@ const path = require('node:path');
 const { spawnSync, spawn } = require('node:child_process');
 
 const { fixtureFacts, fixtureManifest, STAGE_CANDIDATE_NOTE } = require('./fixture-spec');
+const { CODER } = require('./agents');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const LEDGER = path.join(REPO_ROOT, 'scripts', 'ledger.js');
@@ -86,6 +87,16 @@ const TICKET_FEATURES = {
 };
 
 const TEST_HEADER = "'use strict';\nconst { test } = require('node:test');\nconst assert = require('node:assert/strict');\n\n";
+
+// 一张票的实现文件（内容单一来源：fixture 写进项目、场景测试要用同一份内容）。
+function featureFiles(num) {
+  const f = TICKET_FEATURES[num];
+  if (!f) throw new FixtureError(`fixture 不认识票 ${num}`);
+  return [
+    { path: f.file, content: f.body },
+    { path: path.join('test', `${f.slug}.test.js`), content: `${TEST_HEADER}${f.test}` },
+  ];
+}
 
 function specText(def) {
   const tickets = def.fixture.tickets.map((t) => `- ${t.num} ${t.slug}`).join('\n');
@@ -163,7 +174,7 @@ function requireLedger(projectDir, runtimeDir, args, env) {
 // 一张票的完整现场：dispatch → settled → verdict（可选 merge）。
 function seedReviewedTicket(ctx, ticket, { verdictValue = 'approved', round = 1, merge: doMerge = true } = {}) {
   const runId = `fixture-run-${ticket.num}`;
-  requireLedger(ctx.projectDir, ctx.runtimeDir, ['add', 'dispatch', '--ticket', ticket.num, '--key', 'pi-matt-implement-flow.coder', '--run-id', runId]);
+  requireLedger(ctx.projectDir, ctx.runtimeDir, ['add', 'dispatch', '--ticket', ticket.num, '--key', CODER, '--run-id', runId]);
   const headSha = ctx.ticketHeads[ticket.num];
   requireLedger(ctx.projectDir, ctx.runtimeDir, ['add', 'settled', '--ticket', ticket.num, '--round', String(round), '--head-sha', headSha, '--gate', 'pass']);
   const findings = path.join(ctx.runtimeDir, 'findings', `${ticket.num}-r${round}.md`);
@@ -223,10 +234,8 @@ function buildFixture(def, { parentDir = os.tmpdir() } = {}) {
   for (const t of def.fixture.tickets) {
     if (!t.implemented) continue;
     const feature = TICKET_FEATURES[t.num];
-    if (!feature) throw new FixtureError(`fixture 不认识票 ${t.num}`);
     git(projectDir, ['checkout', '-q', '-b', `ticket-${t.num}`, baseline]);
-    write(path.join(projectDir, feature.file), feature.body);
-    write(path.join(projectDir, 'test', `${feature.slug}.test.js`), TEST_HEADER + feature.test);
+    for (const f of featureFiles(t.num)) write(path.join(projectDir, f.path), f.content);
     git(projectDir, ['add', '-A']);
     git(projectDir, ['commit', '-qm', `ticket ${t.num}: ${feature.title}`]);
     ticketHeads[t.num] = git(projectDir, ['rev-parse', 'HEAD']).stdout;
@@ -331,16 +340,46 @@ function isOpenTicket(status) {
   return !CLOSED_STATUSES.includes(String(status || '').toLowerCase());
 }
 
+// 进程是否真在跑：僵尸进程（已退出但未被回收）has 存在的 pid，但对「还在写入吗」毫无
+// 意义——用 `ps -o state=` 区分 Z（僵尸）与存活状态；ps 不可用时回退到信号探测。
+function processState(pid) {
+  if (!pid) return null;
+  const r = spawnSync('ps', ['-o', 'state=', '-p', String(pid)], { encoding: 'utf8' });
+  const state = (r.stdout || '').trim();
+  if (r.status !== 0 || !state) return null;
+  return state;
+}
+
+function isProcessAlive(pid) {
+  const state = processState(pid);
+  if (state != null) return !state.toUpperCase().startsWith('Z');
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ticketNumOf(file) {
+  const m = String(file).match(/^(\d+)/);
+  return m ? m[1] : String(file).replace(/\.md$/, '');
+}
+
 function trackerState(fx) {
   const issuesDir = path.join(fx.trackerDir, 'issues');
   const tickets = fs.existsSync(issuesDir)
     ? fs.readdirSync(issuesDir).sort().map((name) => {
       const body = fs.readFileSync(path.join(issuesDir, name), 'utf8');
       const status = (body.match(/\*\*Status:\*\*\s*(\S+)/) || [])[1] || 'unknown';
-      return { file: name, status };
+      return { file: name, num: ticketNumOf(name), status, open: isOpenTicket(status) };
     })
     : [];
-  return { tickets, open: tickets.filter((t) => isOpenTicket(t.status)).length };
+  return {
+    tickets,
+    open: tickets.filter((t) => t.open).length,
+    openIds: tickets.filter((t) => t.open).map((t) => t.num),
+  };
 }
 
 function ledgerState(fx) {
@@ -369,5 +408,8 @@ module.exports = {
   trackerState,
   ledgerState,
   git,
+  processState,
+  isProcessAlive,
+  featureFiles,
   TICKET_FEATURES,
 };

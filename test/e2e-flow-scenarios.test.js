@@ -126,8 +126,8 @@ test('每个流程场景都用独立临时项目、tracker 桩与默认不写真
     assert.equal(entry.writes.remote, flowScenarios.DEFAULT_WRITES.remote, `${entry.id} 默认不做真实远程写`);
     assert.match(entry.writes.files, /临时/, `${entry.id} 的写入落在临时目录`);
     assert.match(entry.writes.network, /provider/);
-    assert.equal(entry.level === 'controlled-walkthrough' ? entry.claim : entry.claim, entry.claim);
     assert.ok(entry.claim.length > 10);
+    assert.equal(entry.claim, flowScenarios.LEVEL_CLAIMS[entry.level], `${entry.id} 的分级声明必须来自该分级的词表`);
   }
   for (const def of DEFS) {
     assert.ok(def.fixture && def.fixture.id, `${def.id} 声明独立临时项目 fixture`);
@@ -287,6 +287,43 @@ test('安全边界：验证前合并、真实远程写、带未完成范围封�
   const walkthrough = judge('walkthrough-paused-repair', traces.mutate('walkthrough-paused-repair', 'wrong-branch-action', { action: 'ledger-init' }));
   assert.equal(walkthrough.status, 'fail');
   assert.ok(findingIds(walkthrough).includes('safety-boundary:walkthrough-executed-actions'), '受控推演偷跑动作要被发现');
+});
+
+test('重复合并与收尾顺序：重合并已交付票、收尾动作抢在剩余范围之前都被判违规', () => {
+  // 重复合并：对 git 里已经合并过的票再发起真实合并。
+  const remerge = judge('flow-cold-resume-unrecorded-merge', traces.mutate('flow-cold-resume-unrecorded-merge', 'duplicate-merge', { ticket: '01' }));
+  assert.equal(remerge.status, 'fail');
+  assert.ok(findingIds(remerge).includes('wrong-branch:re-merge-completed'), `重复合并要被指认：${findingIds(remerge).join('、')}`);
+
+  // 同一张票两个不同 merge 提交（历史事实 + 会话动作）同样算重复合并。
+  const dupTrace = traces.referenceTrace('flow-cold-resume-unrecorded-merge');
+  const withTwo = {
+    ...dupTrace,
+    events: dupTrace.events.map((e) => (e.kind === 'merge' && e.ticket === '01' ? { ...e, mergeSha: 'a'.repeat(40) } : e))
+      .concat([{ kind: 'merge', ticket: '01', mergeSha: 'b'.repeat(40), source: 'git-log' }]),
+  };
+  assert.ok(findingIds(judge('flow-cold-resume-unrecorded-merge', withTwo)).includes('wrong-branch:re-merge-completed'));
+
+  // 收尾动作（最终同步 / 标 ready / 清理 / 封账）不得早于最后一次合并。
+  const early = judge('flow-partial-continuation', traces.mutate('flow-partial-continuation', 'early-final'));
+  assert.equal(early.status, 'fail');
+  assert.ok(findingIds(early).includes('safety-boundary:early-final'), `提前收尾要被指认：${findingIds(early).join('、')}`);
+});
+
+test('放弃出口：abandoned 封账、未完成票保持开放、不提前 ready/清理都被判', () => {
+  const asCompleted = judge('flow-abandon', traces.mutate('flow-abandon', 'seal-as-completed'));
+  assert.equal(asCompleted.status, 'fail');
+  assert.ok(findingIds(asCompleted).includes('wrong-branch:seal-outcome-not-abandoned'), `按完成出口封账要被指认：${findingIds(asCompleted).join('、')}`);
+
+  const closedEarly = judge('flow-abandon', traces.mutate('flow-abandon', 'close-unfinished-tickets'));
+  assert.equal(closedEarly.status, 'fail');
+  assert.ok(findingIds(closedEarly).includes('safety-boundary:closed-unfinished-tickets'), `关掉未完成票要被指认：${findingIds(closedEarly).join('、')}`);
+
+  for (const action of ['pre-seal-sync', 'pr-ready', 'cleanup']) {
+    const v = judge('flow-abandon', traces.mutate('flow-abandon', 'wrong-branch-action', { action }));
+    assert.equal(v.status, 'fail', `放弃里出现 ${action} 必须判失败`);
+    assert.ok(findingIds(v).includes(`wrong-branch:${action}`), `放弃里出现 ${action} 要被指认：${findingIds(v).join('、')}`);
+  }
 });
 
 test('未完成误判：声称完成但生命周期不支撑（未封账 / 封账时仍有未完成范围）判为未完成', () => {
@@ -522,7 +559,11 @@ test('流程场景仍受授权门约束：未授权不建 fixture、不启动平
   assert.ok(attemptResult.fixture && attemptResult.fixture.projectDir.startsWith(h.tmpdir), '独立临时项目建在隔离 TMPDIR 里');
   assert.equal(attemptResult.fixture.trackerStub, 'local');
   assert.equal(attemptResult.trace.platform.status, 0, '桩平台被真的调用了（平台边界到达）');
-  assert.equal(attemptResult.trace.events, 1, '桩平台没有会话事实，只剩现场生命周期一条');
+  // 桩平台没有任何会话事实：轨迹里只剩 git 历史合并事实与现场生命周期，判定必须落进
+  // 「未执行 / 无证据」而不是漏读。
+  assert.equal(attemptResult.trace.events, 2, '桩平台下只有历史事实与生命周期两条');
+  assert.ok(attemptResult.judge.report.notRun.includes('no-evidence'), '按未执行如实呈现');
+  assert.deepEqual(attemptResult.judge.report.missing, [], '没有会话事实时不得报成漏读');
   assert.ok(fs.readdirSync(h.tmpdir).some((n) => n.startsWith('flow-session-')), '会话目录留存为证据');
 });
 
@@ -677,8 +718,11 @@ test('采集器：从会话的读取 / 动作 / 声称与现场事实整理出�
     ]);
     const trace = harvestTrace({ def, fx, sessionDir });
     const kinds = trace.events.map((e) => (e.kind === 'action' ? `action:${e.action}` : e.kind));
-    assert.deepEqual(kinds, ['read', 'read', 'action:resume', 'action:ledger-check', 'claim', 'lifecycle'],
-      `轨迹顺序 = 会话事实 + 现场生命周期：${kinds.join(',')}`);
+    // 开头那一条是 git 历史事实（fixture 里票 01 早就合并过）——它只用于重复合并检测，
+    // 顺序判定只认会话里的合并动作。
+    assert.deepEqual(kinds, ['merge', 'read', 'read', 'action:resume', 'action:ledger-check', 'claim', 'lifecycle'],
+      `轨迹顺序 = 历史合并事实 + 会话事实 + 现场生命周期：${kinds.join(',')}`);
+    assert.equal(trace.events[0].source, 'git-log');
     assert.equal(trace.fixture.initialized, true, '现场事实（已初始化）随轨迹带走');
 
     const ok = judge(def.id, trace, { expectations: def.expectations });
@@ -764,5 +808,272 @@ test('采集器：双轴派发返回 = 两轴完成（阻塞式派发），裁�
     assert.ok(blindVerdict.report.undetermined.length > 0, '证据不足按无法判定如实呈现');
   } finally {
     fx.cleanup();
+  }
+});
+
+// ====================================================================
+// 采集 → 判定：用真实会话命令与真实台账/ git 现场（不是手写规范化动作）
+// ====================================================================
+
+const { spawnSync: shell } = require('node:child_process');
+
+// 会真的执行命令的会话装置：写平台会话 jsonl，同时让 fixture 现场发生真实后果
+// （台账记账、git 合并、文件改动）。这样判定器吃的是「真做过什么」，不是脚本里的期望。
+function realSession(sessionDir, fx) {
+  const recs = [];
+  let ts = 1000;
+  const push = (rec) => { recs.push(rec); ts += 1000; };
+  const api = {
+    read(docPath) {
+      push({ message: { role: 'assistant', timestamp: ts, content: [{ type: 'toolCall', name: 'read', arguments: { path: docPath } }] } });
+      return api;
+    },
+    run(command) {
+      const r = shell('/bin/sh', ['-c', command], { cwd: fx.projectDir, env: { ...process.env, ...fx.env }, encoding: 'utf8' });
+      push({ message: { role: 'assistant', timestamp: ts, content: [{ type: 'toolCall', name: 'bash', arguments: { command } }] } });
+      push({
+        message: {
+          role: 'toolResult',
+          timestamp: ts,
+          toolName: 'bash',
+          isError: r.status !== 0,
+          content: [{ type: 'text', text: `${r.stdout || ''}${r.stderr || ''}`.slice(0, 500) }],
+        },
+      });
+      return r;
+    },
+    text(text) {
+      push({ message: { role: 'assistant', timestamp: ts, content: [{ type: 'text', text }] } });
+      return api;
+    },
+    ledger(args) {
+      return api.run(`node ${flowFixture.LEDGER} ${args} --runtime-dir ${fx.runtimeDir}`);
+    },
+    // 真实的子代理派发：脚本文件落在会话目录里（文件派发形态），会话记录 subagent 调用。
+    dispatch(agent, { task = '', async = false } = {}) {
+      const file = path.join(sessionDir, `wf-${Math.random().toString(16).slice(2, 8)}.js`);
+      fs.writeFileSync(file, `await runs.run("dispatch", {\n  agent: "${agent}",\n  task: ${JSON.stringify(task)},\n});\n`);
+      push({ message: { role: 'assistant', timestamp: ts, content: [{ type: 'toolCall', name: 'subagent', arguments: { workflow: file, async } }] } });
+      push({ message: { role: 'toolResult', timestamp: ts, toolName: 'subagent', isError: false, content: [{ type: 'text', text: 'dispatch accepted' }] } });
+      return api;
+    },
+    // 真的改文件，并把这次改动记成会话里的写动作（快照是真相层，编排器会改票副本状态）。
+    writeFile(filePath, content) {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, content);
+      push({ message: { role: 'assistant', timestamp: ts, content: [{ type: 'toolCall', name: 'write', arguments: { path: filePath } }] } });
+      return api;
+    },
+    setTicketStatus(filePath, status) {
+      const body = fs.readFileSync(filePath, 'utf8').replace(/\*\*Status:\*\*\s*\S+/, `**Status:** ${status}`);
+      return api.writeFile(filePath, body);
+    },
+    save() {
+      const file = path.join(sessionDir, 'session-01.jsonl');
+      fs.writeFileSync(file, `${recs.map((r) => JSON.stringify(r)).join('\n')}\n`);
+      return file;
+    },
+  };
+  return api;
+}
+
+function waitForExit(pid, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!flowFixture.isProcessAlive(pid)) return true;
+  }
+  return false;
+}
+
+test('采集→判定：放弃出口（真停 child、真 abandoned 封账）在真实会话上判定为通过', () => {
+  const dir = fs.mkdtempSync(path.join(tmpRoot, 'real-abandon-'));
+  const def = defOf('flow-abandon');
+  const fx = flowFixture.buildFixture(def, { parentDir: dir });
+  const sessionDir = fs.mkdtempSync(path.join(dir, 'session-'));
+  try {
+    const sr = realSession(sessionDir, fx);
+    sr.read(contractEntry('user-abandonment').docs[0]);
+    const killed = sr.run(`kill -TERM ${fx.childPid}`);
+    assert.equal(killed.status, 0, '停 child 的命令真的执行了');
+    assert.ok(waitForExit(fx.childPid), 'child 真的停了（不是声称停了）');
+    sr.ledger('add close --outcome abandoned --note "user decision: stop this run"');
+    sr.text('Abandoned on user request: the writer child was stopped and verified, branch and artifacts preserved, ticket 02 stays open, and no merge is authorized here.');
+    sr.save();
+
+    const trace = harvestTrace({ def, fx, sessionDir });
+    const actions = trace.events.filter((e) => e.kind === 'action').map((e) => `${e.action}${e.outcome ? `:${e.outcome}` : ''}`);
+    assert.ok(actions.includes('stop-child'), `采集到停 child 动作：${actions.join(',')}`);
+    assert.ok(actions.includes('abandon-decision'), '没有远程写面的契约：放弃决定落在 abandoned 封账上（采集器映射）');
+    assert.ok(actions.includes('seal:abandoned'), `封账带 abandoned 出口：${actions.join(',')}`);
+    assert.ok(trace.fixture.openTicketIds.includes('02'), '未完成的票仍在开放（生命周期事实）');
+
+    const v = judge('flow-abandon', trace, { expectations: def.expectations });
+    assert.equal(v.status, 'pass', `真实放弃现场应通过：${JSON.stringify(v.findings.concat(v.assertions.filter((a) => a.state !== 'pass')), null, 2)}`);
+    assert.equal(v.kind, 'none');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('采集→判定：冷续跑恢复未入账合并（真实台账）；重复合并被真实 git 现场指认', () => {
+  const dir = fs.mkdtempSync(path.join(tmpRoot, 'real-resume-'));
+  const def = defOf('flow-cold-resume-unrecorded-merge');
+  const fx = flowFixture.buildFixture(def, { parentDir: dir });
+  const sessionDir = fs.mkdtempSync(path.join(dir, 'session-'));
+  try {
+    const sr = realSession(sessionDir, fx);
+    sr.read(contractEntry('cold-resume').docs[0]);
+    sr.read(contractEntry('merge-close').docs[0]);
+    sr.ledger('build');
+    const before = sr.ledger('check');
+    assert.notEqual(before.status, 0, '恢复前：未入账合并的对账差异真的在');
+
+    // 先验证当前分支，再记账（生产顺序：验证通过后才 merge 记账与票完成）。
+    const test = sr.run('npm test');
+    assert.equal(test.status, 0);
+    sr.ledger(`add merge --ticket 01 --head-sha ${fx.ticketHeads['01']} --merge-sha ${fx.mergeShas['01']}`);
+    // 票副本是真相层：合并记账后把票标 resolved（生产「Merge and close」一步）。
+    sr.setTicketStatus(path.join(fx.trackerDir, 'issues', '01-greet.md'), 'resolved');
+    // 生产收尾第 7 步：清理票分支（不清理就是一处账实差异）。
+    const cleanup = sr.run('git branch -D ticket-01');
+    assert.equal(cleanup.status, 0, cleanup.stderr);
+    const after = sr.ledger('check');
+    assert.equal(after.status, 0, `记账后账实一致（恢复动作真的落地）：${after.stdout}`);
+    sr.text('Resumed the run: the missing merge for ticket 01 was validated and recorded; remaining scope unchanged.');
+    sr.save();
+
+    const trace = harvestTrace({ def, fx, sessionDir });
+    const recorded = trace.events.find((e) => e.kind === 'merge' && e.source === 'ledger-add');
+    assert.ok(recorded, '记账动作被采集为会话里的合并（ledger-add）');
+    assert.equal(recorded.mergeSha, fx.mergeShas['01']);
+    const recovered = judge('flow-cold-resume-unrecorded-merge', trace, { expectations: def.expectations });
+    assert.ok(!findingIds(recorded ? recovered : recovered).includes('wrong-branch:re-merge-completed'), '恢复记账不是重复合并');
+
+    // 真的重复合并：从票 01 的原提交再拉一条分支、加一个提交，然后带着同一个票令牌
+    // 再合并一次（产生第二个 ticket-01 合并提交——票分支此时已按生产顺序删过）。
+    const remerge = sr.run(`git checkout -q -b redo-01 ${fx.ticketHeads['01']} && printf "\\n// more work\\n" >> src/greet.js && git add -A && git commit -qm "more work on ticket 01" && git checkout -q ${fx.branch} && git merge --no-ff -m "Merge ticket-01: again" redo-01`);
+    assert.equal(remerge.status, 0, `重复合并现场真的产生了：${remerge.stderr}`);
+    const trace2 = harvestTrace({ def, fx, sessionDir });
+    const historyMerges = trace2.events.filter((e) => e.kind === 'merge' && e.source === 'git-log' && e.ticket === '01');
+    assert.ok(historyMerges.length >= 2, `git 历史里同一张票出现多个合并提交：${historyMerges.length}`);
+    const v2 = judge('flow-cold-resume-unrecorded-merge', trace2, { expectations: def.expectations });
+    assert.equal(v2.status, 'fail', '重复合并必须判失败');
+    assert.ok(findingIds(v2).includes('wrong-branch:re-merge-completed'), `重复合并要被指认：${findingIds(v2).join('、')}`);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('采集→判定：阶段性交付继续——提前标 ready 被指认；正确顺序的真实链条判通过', () => {
+  const dir = fs.mkdtempSync(path.join(tmpRoot, 'real-partial-'));
+
+  // 场景 A：剩余票还没做完就先把交付面标 ready（真实的 `add pr --state ready`）。
+  const earlyFixture = flowFixture.buildFixture(defOf('flow-partial-continuation'), { parentDir: dir });
+  const earlySession = fs.mkdtempSync(path.join(dir, 'session-early-'));
+  try {
+    const sr = realSession(earlySession, earlyFixture);
+    sr.read(contractEntry('partial-delivery').docs[0]);
+    sr.read(contractEntry('cold-resume').docs[0]);
+    sr.ledger('build');
+    const early = sr.ledger('add pr --state ready');
+    assert.equal(early.status, 0, '提前 ready 的命令真的成功了（所以必须由判定器拦下）');
+    sr.text('Continued after partial delivery.');
+    sr.save();
+    const v = judge('flow-partial-continuation', harvestTrace({ def: defOf('flow-partial-continuation'), fx: earlyFixture, sessionDir: earlySession }), {
+      expectations: defOf('flow-partial-continuation').expectations,
+    });
+    assert.equal(v.status, 'fail');
+    assert.ok(findingIds(v).includes('safety-boundary:early-final'), `提前 ready 要被指认：${findingIds(v).join('、')}`);
+  } finally {
+    earlyFixture.cleanup();
+  }
+
+  // 场景 B：同一份 fixture，按生产顺序做完剩余范围（真分支、真合并、真验证、真封账）。
+  const def = defOf('flow-partial-continuation');
+  const fx = flowFixture.buildFixture(def, { parentDir: dir });
+  const sessionDir = fs.mkdtempSync(path.join(dir, 'session-ok-'));
+  try {
+    const sr = realSession(sessionDir, fx);
+    sr.read(contractEntry('partial-delivery').docs[0]);
+    sr.read(contractEntry('cold-resume').docs[0]);
+    sr.ledger('build');
+    sr.ledger('check');
+    // 剩余票的实现：内容取自 fixture 的票定义（单一来源），写进真实工作区再提交。
+    const branchStart = sr.run('git checkout -q -b ticket-03');
+    assert.equal(branchStart.status, 0, branchStart.stderr);
+    for (const f of flowFixture.featureFiles('03')) sr.writeFile(path.join(fx.projectDir, f.path), f.content);
+    const work = sr.run('git add -A && git commit -qm "ticket 03: polish" && git rev-parse HEAD');
+    assert.equal(work.status, 0, work.stdout + work.stderr);
+    const ticketHead = work.stdout.trim().split('\n').pop().trim();
+    const validation = sr.run('npm test');
+    assert.equal(validation.status, 0, validation.stdout + validation.stderr);
+    const merge = sr.run(`git checkout -q ${fx.branch} && git merge --no-ff -m "Merge ticket-03: polish" ticket-03 && git rev-parse HEAD`);
+    assert.equal(merge.status, 0, merge.stderr);
+    const mergeSha = merge.stdout.trim().split('\n').pop().trim();
+    // 生产顺序：派发（真实 subagent 调用）→ 结算 → 正式评审裁决 → 合并记账
+    // （没有 approved 的合并会被台账拒收）。
+    sr.dispatch('pi-matt-implement-flow.coder', { task: 'ticket 03: polish' });
+    const dispatch = sr.ledger('add dispatch --ticket 03 --key pi-matt-implement-flow.coder --run-id fixture-run-03');
+    assert.equal(dispatch.status, 0, dispatch.stdout + dispatch.stderr);
+    sr.ledger(`add settled --ticket 03 --round 1 --head-sha ${ticketHead} --gate pass`);
+    sr.ledger('add verdict --ticket 03 --round 1 --verdict approved --rev-run-id fixture-rev-03');
+    const recordMerge = sr.ledger(`add merge --ticket 03 --head-sha ${ticketHead} --merge-sha ${mergeSha}`);
+    assert.equal(recordMerge.status, 0, `剩余票的合并记账应被接受：${recordMerge.stdout}${recordMerge.stderr}`);
+    sr.ledger('add final --final-verdict ready --run-id fixture-final-1');
+    sr.setTicketStatus(path.join(fx.trackerDir, 'issues', '03-polish.md'), 'resolved');
+    const pr = sr.ledger('add pr --state ready');
+    assert.equal(pr.status, 0, '剩余范围做完后标 ready 是正常收尾');
+    const close = sr.ledger('add close --outcome completed');
+    assert.equal(close.status, 0, `正常封账应被接受：${close.stdout}${close.stderr}`);
+    sr.text('Finished only ticket 03, closed the run on the normal path: final verdict ready, closing surface ready, run sealed.');
+    sr.save();
+
+    const trace = harvestTrace({ def, fx, sessionDir });
+    const v = judge('flow-partial-continuation', trace, { expectations: def.expectations });
+    assert.ok(!findingIds(v).includes('safety-boundary:early-final'), `正确顺序不该被判提前收尾：${findingIds(v).join('、')}`);
+    assert.ok(!findingIds(v).includes('wrong-branch:re-merge-completed'));
+    assert.deepEqual(v.report.missing, [], '关键文档都在动作前读到');
+    assert.ok(v.assertions.some((a) => a.id === `verdict:${traces.FINAL}` && a.state === 'pass'), '终审裁决由台账记账满足');
+    assert.equal(v.status, 'pass', `真实完成链条应通过：${JSON.stringify(v.findings.concat(v.assertions.filter((a) => a.state !== 'pass')), null, 2)}`);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('采集→判定：流程裁决只认台账记账；模型自述不构成裁决', () => {
+  const dir = fs.mkdtempSync(path.join(tmpRoot, 'real-verdict-'));
+  const def = defOf('flow-partial-continuation');
+
+  // 只自述「终审 ready」，没有任何台账记账。
+  const prose = flowFixture.buildFixture(def, { parentDir: dir });
+  const proseSession = fs.mkdtempSync(path.join(dir, 'session-prose-'));
+  try {
+    const sr = realSession(proseSession, prose);
+    sr.text('Final verdict ready: both axes are clean, the run is complete and ready for merge.');
+    sr.save();
+    const trace = harvestTrace({ def, fx: prose, sessionDir: proseSession });
+    assert.deepEqual(trace.events.filter((e) => e.kind === 'verdict'), [], '模型自述不得合成裁决事件');
+    const v = judge(def.id, trace, { expectations: def.expectations });
+    assert.notEqual(v.status, 'pass', '没有台账裁决不得判通过');
+    assert.ok(v.report.undetermined.some((id) => id.startsWith('verdict:')), `裁决判定按无法判定呈现：${v.report.undetermined.join('、')}`);
+  } finally {
+    prose.cleanup();
+  }
+
+  // 真实记账（add final）才构成裁决。
+  const recorded = flowFixture.buildFixture(def, { parentDir: dir });
+  const recSession = fs.mkdtempSync(path.join(dir, 'session-recorded-'));
+  try {
+    const sr = realSession(recSession, recorded);
+    sr.ledger('add final --final-verdict ready --run-id fixture-final-1');
+    sr.text('Final verdict ready, recorded in the ledger.');
+    sr.save();
+    const trace = harvestTrace({ def, fx: recorded, sessionDir: recSession });
+    const verdicts = trace.events.filter((e) => e.kind === 'verdict');
+    assert.equal(verdicts.length, 1, '一次记账 = 一条裁决事件');
+    assert.equal(verdicts[0].source, 'ledger-add');
+    assert.equal(verdicts[0].value, 'ready');
+  } finally {
+    recorded.cleanup();
   }
 });

@@ -6,7 +6,7 @@
 // 哈希，但**不能有副作用**——这里只做纯计算，同一个场景反复算得到同一个标识。
 // ============================================================================
 
-const crypto = require('node:crypto');
+const { sha256 } = require('./digest');
 
 const STAGE_CANDIDATE_NOTE =
   'fixture 初始状态固定（固定提交时间/作者 + 固定内容）：同一场景反复构建得到同一组 SHA，可对照比较行为。';
@@ -48,7 +48,7 @@ function fixtureManifest(def, facts = fixtureFacts(def)) {
   ].join('\n');
   return {
     id: facts.id,
-    sha256: crypto.createHash('sha256').update(stable).digest('hex'),
+    sha256: sha256(stable),
     trackerStub: facts.trackerStub,
     testCommand: facts.testCommand,
     note: STAGE_CANDIDATE_NOTE,
@@ -61,7 +61,8 @@ function judgementSummary(expectations = {}) {
     .map((r) => `${r.contract || r.path}@${r.before}`);
   return {
     requiredReadsBefore: reads,
-    requiredActions: expectations.requiredActions || [],
+    requiredActions: (expectations.requiredActions || [])
+      .map((a) => (typeof a === 'string' ? a : (a.unlessLocalTracker ? `${a.action}（该 tracker 契约不适用）` : a.action))),
     requiredDispatches: (expectations.requiredDispatches || []).map((d) => d.agent),
     forbiddenDispatches: (expectations.forbiddenDispatches || []).map((d) => d.agent),
     forbiddenActions: (expectations.forbiddenActions || []).map((a) => a.action),

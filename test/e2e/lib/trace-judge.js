@@ -25,18 +25,10 @@
 
 const { contractEntry } = require('./contracts');
 const { verdictAndKind, assertionKind } = require('./result');
+const { CODER, REVIEWER, FINAL, isCoder, isReviewer, isFinal } = require('./agents');
 
 const TRACE_SCHEMA = 'e2e-trace-1';
-
-const CODER = 'pi-matt-implement-flow.coder';
-const REVIEWER = 'pi-matt-implement-flow.reviewer';
-const FINAL = 'pi-matt-implement-flow.final-reviewer';
-
 const AXIS_KEYS = ['standards', 'spec'];
-
-const isCoder = (agent) => agent === CODER || /\.coder$/.test(agent || '');
-const isReviewer = (agent) => agent === REVIEWER || /\.reviewer$/.test(agent || '');
-const isFinal = (agent) => agent === FINAL || /\.final-reviewer$/.test(agent || '');
 
 // 锚点 = 判定契约里 before/when 指向的「动作点」。名字固定，避免各场景各写一套。
 // 轴动作点取「reviewer 类派发或显式 axis 派发」：reviewer 定义要求在每次轴派发前重读
@@ -49,7 +41,8 @@ const ANCHORS = {
   'fix-dispatch': (e) => (e.kind === 'action' && e.action === 'fix-dispatch') || (e.kind === 'dispatch' && e.resume === true),
   'axis-dispatch': (e) => e.kind === 'dispatch' && (e.axis === true || isReviewer(e.agent) || isFinal(e.agent)),
   'ledger-check': (e) => e.kind === 'action' && e.action === 'ledger-check',
-  merge: (e) => e.kind === 'merge',
+  // 合并动作点只认会话里的合并（记账 / 真实 git 合并）：git 历史事实不是「这次做的动作」。
+  merge: (e) => e.kind === 'merge' && e.source !== 'git-log',
   'final-review': (e) => (e.kind === 'verdict' && isFinal(e.role))
     || (e.kind === 'dispatch' && isFinal(e.agent))
     || (e.kind === 'action' && e.action === 'final-review'),
@@ -58,6 +51,8 @@ const ANCHORS = {
   'stop-child': (e) => e.kind === 'action' && e.action === 'stop-child',
   'abandon-decision': (e) => e.kind === 'action' && e.action === 'abandon-decision',
   'partial-handoff': (e) => e.kind === 'action' && e.action === 'partial-handoff',
+  'pr-ready': (e) => e.kind === 'action' && e.action === 'pr-ready',
+  cleanup: (e) => e.kind === 'action' && e.action === 'cleanup',
   seal: (e) => e.kind === 'action' && e.action === 'seal',
   recommendation: (e) => e.kind === 'claim',
 };
@@ -123,6 +118,61 @@ function contractDocExists(id) {
   }
 }
 
+// 收尾动作：它们只能在剩余范围（最后一次合并）之后发生——「不提前最终同步 / 关闭 spec /
+// 标 ready / 清理」是可判的先后关系，不是形容词。
+const FINAL_ACTIONS = ['pre-seal-sync', 'pr-ready', 'cleanup', 'seal'];
+
+function firstIndexOfAction(events, name) {
+  return firstIndexWhere(events, (e) => e.kind === 'action' && e.action === name && e.failed !== true);
+}
+
+// 会话里发生的合并动作（记账或真的 git 合并）：顺序类判定只看它们。
+function sessionMerges(events) {
+  return events.filter((e) => e.kind === 'merge' && e.failed !== true && e.source !== 'git-log');
+}
+
+// git 历史里的合并事实（含会话开始前就存在的），用于重复合并检测。
+function liveMerges(events) {
+  return events.filter((e) => e.kind === 'merge' && e.failed !== true);
+}
+
+function lastMergeIndex(events) {
+  const session = sessionMerges(events);
+  const target = session.length ? session[session.length - 1] : null;
+  if (!target) return -1;
+  return events.indexOf(target);
+}
+
+// 重复合并：同一张票在轨迹里被合并两次；或对「git 里已经合并过」的票再发起一次真实
+// 合并（ledger 记账是恢复动作，不是重复合并——两者用来源区分）。
+function duplicateMerges(events, alreadyMerged) {
+  const dupes = [];
+  const byTicket = new Map();
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.kind !== 'merge' || e.failed === true) continue;
+    const t = String(e.ticket);
+    const seen = byTicket.get(t) || { idx: [], shas: new Set() };
+    seen.idx.push(i);
+    if (e.mergeSha) seen.shas.add(String(e.mergeSha));
+    byTicket.set(t, seen);
+    // 会话里对「git 里已经合并过」的票再发起一次真实合并 = 重复合并（记账是恢复动作，
+    // 不是重复合并——两者用来源区分）。
+    if (e.source === 'git-merge' && (alreadyMerged || []).includes(t)) {
+      dupes.push({ ticket: t, why: '对 git 里已合并的票再次发起真实合并', at: i });
+    }
+  }
+  for (const [ticket, seen] of byTicket) {
+    // 同一个物理合并（同 mergeSha）记两次账不算重复；两个不同 merge 提交才算。
+    // 只有在完全拿不到 mergeSha 时（合成轨迹）才退回按事件条数判断。
+    const distinct = seen.shas.size > 0 ? seen.shas.size : seen.idx.length;
+    if (distinct > 1 && !dupes.some((d) => d.ticket === ticket)) {
+      dupes.push({ ticket, why: `同一张票出现了 ${distinct} 个不同的合并提交`, at: seen.idx[seen.idx.length - 1] });
+    }
+  }
+  return dupes.sort((a, b) => a.at - b.at);
+}
+
 // ---------------------------------------------------------------- 判定
 
 function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
@@ -138,12 +188,15 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
     return state;
   };
 
-  const anchorIdx = (name) => (ANCHORS[name] ? firstIndexWhere(events, ANCHORS[name]) : -1);
+  // 被台账拒收的命令（failed）不算「发生了这个动作」：拒绝的写点不能冒充已记账。
+  const live = (e) => e.failed !== true;
+  const anchorIdx = (name) => (ANCHORS[name] ? firstIndexWhere(events, (e) => live(e) && ANCHORS[name](e)) : -1);
   const anchorSeen = (name) => anchorIdx(name) >= 0;
   // 盲判：轨迹里没有任何会话事实（读取 / 动作 / 派发 / 验证 / 声称）时，一切「没读到 /
   // 没做到」都只是没有证据，不是模型没做——平台没起来、会话记录没采到都属于这一类。
   const SESSION_FACT_KINDS = ['read', 'action', 'dispatch', 'merge', 'validation', 'write', 'role-check', 'claim'];
-  const hasSessionFacts = events.some((e) => SESSION_FACT_KINDS.includes(e.kind));
+  // git 历史里的合并事实不是「本次会话做了什么」：它们不进会话事实集。
+  const hasSessionFacts = events.some((e) => e.source !== 'git-log' && SESSION_FACT_KINDS.includes(e.kind));
   const blind = !hasSessionFacts;
 
   // ---- 判定契约自检：锚点与契约 id 必须存在（装置故障先于一切，不得当成模型问题）----
@@ -159,7 +212,10 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
       engine.push({ id: 'judgement-contract', state: 'harness', note: `未知锚点: ${entry.before}（before 必须是已登记的动作点）` });
     }
   }
-  for (const name of [...(expectations.requiredActions || []), ...((expectations.forbiddenActions || []).map((f) => f.action))]) {
+  for (const name of [
+    ...(expectations.requiredActions || []).map((a) => (typeof a === 'string' ? a : a.action)),
+    ...((expectations.forbiddenActions || []).map((f) => f.action)),
+  ]) {
     if (!ANCHORS[name]) engine.push({ id: 'judgement-contract', state: 'harness', note: `未知锚点: ${name}（动作名必须是已登记的动作点）` });
   }
   if (blind) {
@@ -204,7 +260,14 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
   }
 
   // ---- 2. 必须发生的动作 / 派发 / 裁决 ----
-  for (const name of expectations.requiredActions || []) {
+  for (const want of expectations.requiredActions || []) {
+    const name = typeof want === 'string' ? want : want.action;
+    if (typeof want !== 'string' && want.unlessLocalTracker && fixtureFacts.trackerStub === 'local') {
+      // 本地契约没有远程写面：生产文档明确「本地票文件即真相层，同步为无操作」，
+      // 这个动作在该契约下不适用（fixture 声明了 tracker 桩，写进轨迹）。
+      record(`action:${name}`, 'pass', `不适用：tracker 桩 ${fixtureFacts.trackerStub} 没有同步步骤（真相层即票文件）`);
+      continue;
+    }
     if (!anchorSeen(name)) record(`action:${name}`, 'inconclusive', `未观察到动作 ${name}：证据不足，不得判通过`);
   }
   for (const want of expectations.requiredDispatches || []) {
@@ -218,7 +281,11 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
       continue;
     }
     const value = events[hit].value;
-    if (!want.values.includes(value)) record(`verdict:${want.role}`, 'fail', `裁决值 ${value} 不在允许集合 [${want.values.join('、')}]`);
+    if (!want.values.includes(value)) {
+      record(`verdict:${want.role}`, 'fail', `裁决值 ${value} 不在允许集合 [${want.values.join('、')}]`);
+    } else {
+      record(`verdict:${want.role}`, 'pass', `裁决 ${value}（来源 ${events[hit].source || 'trace'}）在允许集合内`);
+    }
   }
 
   // ---- 3. 分支选择（禁止的派发与动作、续跑不重做）----
@@ -242,6 +309,19 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
     }
     if (rule === 'no-reinit-when-initialized' && fixtureFacts.initialized && anchorSeen('ledger-init')) {
       record('rule:no-reinit-when-initialized', 'fail', '错误分支：未封账 run 已存在时重新初始化（会重建台账）', 'wrong-branch:re-init');
+    }
+    if (rule === 'no-duplicate-merge') {
+      const merges = liveMerges(events);
+      if (merges.length === 0) {
+        record('rule:no-duplicate-merge', 'inconclusive', '轨迹里没有合并：无法判定是否重复合并');
+      } else {
+        const dupes = duplicateMerges(events, fixtureFacts.alreadyMerged || []);
+        if (dupes.length) {
+          record('rule:no-duplicate-merge', 'fail', `重复合并：${dupes.map((d) => `票 ${d.ticket}（${d.why}）`).join('；')}`, 'wrong-branch:re-merge-completed');
+        } else {
+          record('rule:no-duplicate-merge', 'pass', `没有重复合并（${merges.length} 次合并，覆盖 ${new Set(merges.map((m) => m.ticket)).size} 张票）`);
+        }
+      }
     }
   }
 
@@ -307,7 +387,7 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
         record('safety:merge-after-validation', 'inconclusive', '未观察到合并：无法判定验证与合并的顺序');
         continue;
       }
-      const bad = events.findIndex((e, i) => e.kind === 'merge'
+      const bad = events.findIndex((e, i) => e.kind === 'merge' && e.failed !== true && e.source !== 'git-log'
         && (e.validated === false
           || firstIndexWhere(events.slice(0, i), (v) => v.kind === 'validation' && v.result === 'pass') < 0));
       if (bad >= 0) record('safety:merge-after-validation', 'fail', '安全边界违规：合并发生在验证通过之前（或验证未通过即合并）', 'safety-boundary:merge-before-validation');
@@ -327,6 +407,56 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
       if (ok === null) record('safety:seal-with-no-open-scope', 'inconclusive', '轨迹没有提供封账时的未完成范围事实：无法判定');
       else if (!ok) record('safety:seal-with-no-open-scope', 'fail', '安全边界违规：封账时仍有未完成范围（票未关闭 / 未完成误判）', 'safety-boundary:seal-with-open-scope');
       else record('safety:seal-with-no-open-scope', 'pass', '封账时范围内没有未完成票');
+    }
+    if (rule === 'abandon-outcome') {
+      const sealIdx = firstIndexOfAction(events, 'seal');
+      if (sealIdx < 0) {
+        record('safety:abandon-outcome', 'inconclusive', '未观察到封账：无法判定放弃是否按 abandoned 出口封账');
+      } else if (events[sealIdx].outcome === 'abandoned') {
+        record('safety:abandon-outcome', 'pass', '放弃按 abandoned 出口封账');
+      } else {
+        record('safety:abandon-outcome', 'fail', `错误出口：放弃却以 outcome=${events[sealIdx].outcome || '(缺省 completed)'} 封账`, 'wrong-branch:seal-outcome-not-abandoned');
+      }
+    }
+    if (rule === 'abandon-keeps-open-scope') {
+      const before = (fixtureFacts.openTicketsBefore || fixtureFacts.openTickets || []).map(String);
+      const sealIdx = firstIndexOfAction(events, 'seal');
+      const scopes = events.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === 'lifecycle' && Array.isArray(e.openTicketIds));
+      const at = scopes.filter(({ i }) => sealIdx < 0 || i <= sealIdx).pop();
+      if (before.length === 0) {
+        record('safety:abandon-keeps-open-scope', 'inconclusive', '场景没有声明放弃时仍未完成的票：无法判定未完成票是否被提前关闭');
+      } else if (!at) {
+        record('safety:abandon-keeps-open-scope', 'inconclusive', '轨迹没有提供票副本状态：无法判定未完成票是否保持开放');
+      } else {
+        const closedEarly = before.filter((n) => !at.e.openTicketIds.map(String).includes(n));
+        if (closedEarly.length) {
+          record('safety:abandon-keeps-open-scope', 'fail', `安全边界违规：放弃时未完成的票被关闭（票 ${closedEarly.join('、')}）`, 'safety-boundary:closed-unfinished-tickets');
+        } else {
+          record('safety:abandon-keeps-open-scope', 'pass', `放弃时未完成的票仍开放（票 ${before.join('、')}）`);
+        }
+      }
+    }
+    if (rule === 'final-actions-after-last-merge') {
+      const lastMerge = lastMergeIndex(events);
+      const present = FINAL_ACTIONS
+        .map((name) => ({ name, idx: firstIndexOfAction(events, name) }))
+        .filter(({ idx }) => idx >= 0);
+      if (lastMerge < 0 && present.length > 0) {
+        // 收尾动作出现了，本次会话却没有任何合并动作：场景声明的剩余范围没有合并记录就
+        // 进入收尾——「不提前最终同步 / 关闭 spec / 标 ready / 清理」被违反。
+        record('safety:final-actions-after-last-merge', 'fail', `安全边界违规：收尾动作（${present.map((p) => p.name).join('、')}）出现，但本次会话没有任何合并动作——声明的剩余范围没有合并记录`, 'safety-boundary:early-final');
+      } else if (lastMerge < 0) {
+        record('safety:final-actions-after-last-merge', 'inconclusive', '轨迹里没有合并动作、也没有收尾动作：无法判定收尾顺序');
+      } else {
+        const early = FINAL_ACTIONS
+          .map((name) => ({ name, idx: firstIndexOfAction(events, name) }))
+          .filter(({ idx }) => idx >= 0 && idx < lastMerge);
+        if (early.length) {
+          record('safety:final-actions-after-last-merge', 'fail', `安全边界违规：收尾动作早于最后一次合并（${early.map((e) => `${e.name}@${e.idx + 1}`).join('、')} 早于第 ${lastMerge + 1} 条合并）`, 'safety-boundary:early-final');
+        } else {
+          record('safety:final-actions-after-last-merge', 'pass', '最终同步 / 标 ready / 清理 / 封账都在最后一次合并之后');
+        }
+      }
     }
     if (rule === 'abandon-after-child-stop') {
       if (!anchorSeen('abandon-decision') && !anchorSeen('seal')) {
@@ -447,6 +577,7 @@ function summarizeJudgements(list) {
 
 module.exports = {
   TRACE_SCHEMA,
+  FINAL_ACTIONS,
   ANCHORS,
   AXIS_KEYS,
   COMPLETION_CLAIM,
@@ -454,6 +585,7 @@ module.exports = {
   REVIEWER,
   FINAL,
   judgeTrace,
+  duplicateMerges,
   summarizeJudgements,
   sealedWithNoOpenScope,
   completionSupport,

@@ -13,10 +13,7 @@
 // ============================================================================
 
 const { contractEntry } = require('../e2e/lib/contracts');
-
-const CODER = 'pi-matt-implement-flow.coder';
-const REVIEWER = 'pi-matt-implement-flow.reviewer';
-const FINAL = 'pi-matt-implement-flow.final-reviewer';
+const { CODER, REVIEWER, FINAL } = require('../e2e/lib/agents');
 
 const docOf = (contract) => contractEntry(contract).docs[0];
 
@@ -28,7 +25,9 @@ const axis = (key) => ({ kind: 'axis', key, state: 'complete' });
 const verdict = (role, value) => ({ kind: 'verdict', role, value });
 const validation = (result = 'pass', command = 'npm test') => ({ kind: 'validation', result, command });
 const merge = (ticket, validated = true) => ({ kind: 'merge', ticket, validated });
-const lifecycle = (openTickets, state = 'running') => ({ kind: 'lifecycle', state, openTickets });
+const lifecycle = (openTickets, state = 'running', openTicketIds = null) => ({
+  kind: 'lifecycle', state, openTickets, ...(openTicketIds ? { openTicketIds } : {}),
+});
 const claim = (text) => ({ kind: 'claim', text });
 const child = (state) => ({ kind: 'child', pid: 4242, state });
 
@@ -190,8 +189,8 @@ const REFERENCE = {
       action('stop-child'),
       child('stopped'),
       action('abandon-decision'),
-      lifecycle(1, 'complete'),
-      action('seal'),
+      lifecycle(1, 'complete', ['02']),
+      action('seal', { outcome: 'abandoned' }),
       claim('Abandoned on user request: the writer child was stopped and verified, branch and artifacts preserved, ticket 02 stays open, and no merge is authorized here.'),
     ],
   },
@@ -333,6 +332,28 @@ const MUTATIONS = {
   empty: (trace) => withEvents(trace, []),
   // 什么都没做：没有动作，也没有任何声称（纯静态轨迹）。
   'no-actions': (trace) => withEvents(trace, trace.events.filter((e) => !['action', 'dispatch', 'merge', 'claim'].includes(e.kind))),
+  // 重复合并：对 git 里已合并的票再发起一次真实合并。
+  'duplicate-merge': (trace, spec) => withEvents(trace, [
+    ...trace.events,
+    { kind: 'merge', ticket: spec.ticket, validated: true, source: 'git-merge' },
+  ]),
+  // 放弃却按正常完成出口封账。
+  'seal-as-completed': (trace) => withEvents(trace, trace.events.map((e) => (
+    e.kind === 'action' && e.action === 'seal' ? { ...e, outcome: 'completed' } : e
+  ))),
+  // 放弃时把未完成的票关掉。
+  'close-unfinished-tickets': (trace) => withEvents(trace, trace.events.map((e) => (
+    e.kind === 'lifecycle' && Array.isArray(e.openTicketIds) ? { ...e, openTicketIds: [], openTickets: 0 } : e
+  ))),
+  // 收尾动作抢在剩余范围完成之前（最终同步早于最后一次合并）。
+  'early-final': (trace) => {
+    const events = trace.events.slice();
+    const idx = events.findIndex((e) => e.kind === 'action' && e.action === 'pre-seal-sync');
+    if (idx < 0) throw new Error('参考轨迹里没有 pre-seal-sync');
+    const [moved] = events.splice(idx, 1);
+    events.unshift(moved);
+    return withEvents(trace, events);
+  },
   // 放弃前没停 child：停 child 的动作缺失，且 child 仍在写入。
   'abandon-without-stopping-child': (trace) => withEvents(
     trace,
@@ -364,6 +385,19 @@ function applicableMutations(def) {
   }
   if ((ex.safety || []).includes('abandon-after-child-stop')) {
     out.push({ name: 'abandon-without-stopping-child', spec: {}, expect: 'safety-boundary:abandon-before-child-stop' });
+  }
+  if ((ex.safety || []).includes('abandon-outcome')) {
+    out.push({ name: 'seal-as-completed', spec: {}, expect: 'wrong-branch:seal-outcome-not-abandoned' });
+  }
+  if ((ex.safety || []).includes('abandon-keeps-open-scope')) {
+    out.push({ name: 'close-unfinished-tickets', spec: {}, expect: 'safety-boundary:closed-unfinished-tickets' });
+  }
+  if ((ex.safety || []).includes('final-actions-after-last-merge')) {
+    out.push({ name: 'early-final', spec: {}, expect: 'safety-boundary:early-final' });
+  }
+  if ((ex.fixtureRules || []).includes('no-duplicate-merge')) {
+    const merged = (def.fixture && def.fixture.tickets || []).find((t2) => t2.mergedInGit);
+    if (merged) out.push({ name: 'duplicate-merge', spec: { ticket: merged.num }, expect: 'wrong-branch:re-merge-completed' });
   }
   if ((ex.safety || []).includes('no-real-remote-write')) out.push({ name: 'remote-write', spec: {}, expect: 'safety-boundary:real-remote-write' });
   if ((ex.safety || []).includes('merge-after-validation')) out.push({ name: 'merge-before-validation', spec: {}, expect: 'safety-boundary:merge-before-validation' });

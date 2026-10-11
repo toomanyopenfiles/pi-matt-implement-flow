@@ -16,11 +16,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
-const { ledgerState, trackerState } = require('./flow-fixture');
-
-const REVIEWER = 'pi-matt-implement-flow.reviewer';
-const FINAL = 'pi-matt-implement-flow.final-reviewer';
+const { ledgerState, trackerState, isProcessAlive } = require('./flow-fixture');
+const { REVIEWER, FINAL } = require('./agents');
 
 function walk(dir, out = []) {
   let entries;
@@ -57,18 +56,28 @@ function tsOf(rec) {
 const LEDGER_CMD = /scripts\/ledger\.js|ledger\.js\s/;
 
 // bash 命令 → 流程动作（名字与判定器的锚点词表一致）。
+//
+// 放弃出口的两种形态都要认：有远程写面的契约走 `sync --mode abandon`（放弃同步）；
+// 没有远程写面（local / fixture 桩）时那一步不存在，放弃决定就落在
+// `add close --outcome abandoned` 上——两者都记 abandon-decision（见下面的补记）。
 function actionOfCommand(cmd) {
-  if (!LEDGER_CMD.test(cmd)) return null;
-  if (/\binit\b/.test(cmd) && !/snapshot-init/.test(cmd)) return 'ledger-init';
-  if (/\bsnapshot-init\b/.test(cmd)) return 'snapshot-init';
-  if (/\bbuild\b/.test(cmd)) return 'resume';
-  if (/\bcheck\b/.test(cmd)) return 'ledger-check';
-  if (/\bsync\b/.test(cmd)) return 'sync';
-  if (/\badd\s+merge\b/.test(cmd)) return 'merge';
-  if (/\badd\s+final\b/.test(cmd)) return 'final-review';
-  if (/\badd\s+verdict\b/.test(cmd)) return 'verdict';
-  if (/\badd\s+fix\b/.test(cmd)) return 'fix-dispatch';
-  if (/\bclose\b/.test(cmd)) return 'seal';
+  if (LEDGER_CMD.test(cmd)) {
+    if (/\binit\b/.test(cmd) && !/snapshot-init/.test(cmd)) return 'ledger-init';
+    if (/\bsnapshot-init\b/.test(cmd)) return 'snapshot-init';
+    if (/\bbuild\b/.test(cmd)) return 'resume';
+    if (/\bcheck\b/.test(cmd)) return 'ledger-check';
+    if (/\bsync\b/.test(cmd)) return /--mode\s+abandon\b/.test(cmd) ? 'abandon-decision' : 'sync';
+    if (/\badd\s+merge\b/.test(cmd)) return 'merge';
+    if (/\badd\s+final\b/.test(cmd)) return 'final-review';
+    if (/\badd\s+verdict\b/.test(cmd)) return 'verdict';
+    if (/\badd\s+fix\b/.test(cmd)) return 'fix-dispatch';
+    if (/\badd\s+pr\b/.test(cmd)) return /--state\s+ready\b/.test(cmd) ? 'pr-ready' : 'pr-draft';
+    if (/\bclose\b/.test(cmd)) return 'seal';
+    return null;
+  }
+  // 收尾清理（生产第 5、7 步）：只认指向运行目录 / 评审包 / 工作树的删除与移除。
+  if (/git\s+worktree\s+remove\b/.test(cmd)) return 'cleanup';
+  if (/\brm\s+-[a-z]*[rf]/.test(cmd) && /(\.pi\/matt-implement|\/reviews\b|\.scratch\/)/.test(cmd)) return 'cleanup';
   return null;
 }
 
@@ -108,13 +117,17 @@ const VERDICT_RE = /verdict\s*[:：]?\s*`?([a-z_]+)`?/i;
 // reviewer 类角色的裁决值来自它的回复文本（角色的输出本身就是裁决）；
 // 值不在词表内就不记，绝不猜。
 function extractVerdict(text, roleExercise) {
+  // 流程场景的裁决必须来自台账记账（add verdict / add final）：模型自述不是裁决证据。
+  // 只有角色演练（reviewer / final-reviewer 本身在被测）才从回复文本里取裁决值——
+  // 角色的输出就是它的裁决，而双轴等待仍由平台侧事实判定。
+  if (!roleExercise) return null;
   const m = String(text || '').match(VERDICT_RE);
   if (!m) return null;
   const value = m[1].toLowerCase();
-  if (roleExercise === 'final-reviewer' || FINAL_VALUES.includes(value)) {
-    return FINAL_VALUES.includes(value) ? { role: roleExercise ? FINAL : FINAL, value } : null;
-  }
-  return REVIEWER_VALUES.includes(value) ? { role: roleExercise ? REVIEWER : REVIEWER, value } : null;
+  const allowed = roleExercise === 'final-reviewer' ? FINAL_VALUES : REVIEWER_VALUES;
+  if (!allowed.includes(value)) return null;
+  const role = roleExercise === 'final-reviewer' ? FINAL : REVIEWER;
+  return { role, value };
 }
 
 // 采集一次真实会话 + 现场 → 轨迹。
@@ -124,8 +137,25 @@ function harvestTrace({ def, fx, sessionDir }) {
   let clock = 0;
   const push = (e, ts) => {
     clock += 1;
-    events.push({ seq: events.length + 1, at: ts == null ? clock : ts, ...e });
+    const ev = { seq: events.length + 1, at: ts == null ? clock : ts, ...e };
+    events.push(ev);
+    return ev;
   };
+
+  // git 历史里的合并事实（每个 ticket-NN 令牌一条）：用于检测「同一张票被合并了不止一次」。
+  // 它们是**历史事实**，不是本次会话的动作——顺序类判定只认会话里的合并动作。
+  const gitMerges = spawnSync('git', ['log', '--merges', '--pretty=%H %s'], { cwd: fx.projectDir, encoding: 'utf8' });
+  const historyMerges = [];
+  if (gitMerges.status === 0) {
+    for (const line of (gitMerges.stdout || '').split('\n').filter(Boolean)) {
+      const m = line.match(/^([0-9a-f]{40})\s+(.*ticket-(\d+).*)$/i);
+      if (!m) continue;
+      historyMerges.push({ ticket: m[3], mergeSha: m[1], subject: m[2].slice(0, 120) });
+    }
+  }
+  for (const h of historyMerges) {
+    push({ kind: 'merge', ticket: h.ticket, mergeSha: h.mergeSha, source: 'git-log', validated: null, note: h.subject }, null);
+  }
 
   const transcriptFiles = walk(sessionDir).filter((f) => f.endsWith('.jsonl'));
   const records = transcriptFiles.flatMap((f) => readJsonl(f).map((r) => ({ file: f, rec: r })));
@@ -134,6 +164,7 @@ function harvestTrace({ def, fx, sessionDir }) {
   let lastValidation = null; // 'pass' | 'fail' | null
   let sessionSealed = false;
   let sawDispatchWithoutAgent = false;
+  let pendingBashEvents = []; // 本条 bash 命令推入的事件：命令失败就标记为未发生
   let pendingAxisKeys = []; // 阻塞式双轴派发：调用返回 = 两轴都已完成
   let sawNonBlockingAxis = false;
   let sawUnknownAxisAsync = false;
@@ -150,26 +181,42 @@ function harvestTrace({ def, fx, sessionDir }) {
         }
         if (c.type === 'toolCall' && c.name === 'bash' && c.arguments && c.arguments.command) {
           const cmd = String(c.arguments.command);
+          // 台账拒收的命令（exit != 0）不算「发生了这个动作」：采集时把本条命令推入的事件
+          // 标成 failed，判定器据此不把它当证据（拒绝的写点不能冒充已记账）。
+          pendingBashEvents = [];
+          const track = (ev) => { pendingBashEvents.push(ev); return ev; };
           const action = actionOfCommand(cmd);
           if (action === 'merge') {
-            push({ kind: 'merge', ticket: ticketOfCommand(cmd), validated: lastValidation === 'pass', source: 'ledger-add' }, ts);
+            track(push({
+              kind: 'merge',
+              ticket: ticketOfCommand(cmd),
+              mergeSha: flagOf(cmd, 'merge-sha'),
+              validated: lastValidation === 'pass',
+              source: 'ledger-add',
+            }, ts));
           } else if (action === 'verdict') {
-            push({ kind: 'verdict', role: REVIEWER, value: flagOf(cmd, 'verdict'), ticket: ticketOfCommand(cmd), round: flagOf(cmd, 'round'), source: 'ledger-add' }, ts);
+            track(push({ kind: 'verdict', role: REVIEWER, value: flagOf(cmd, 'verdict'), ticket: ticketOfCommand(cmd), round: flagOf(cmd, 'round'), source: 'ledger-add' }, ts));
           } else if (action === 'final-review') {
-            push({ kind: 'verdict', role: FINAL, value: flagOf(cmd, 'final-verdict'), source: 'ledger-add' }, ts);
-            push({ kind: 'action', action: 'final-review', source: 'ledger-add' }, ts);
+            track(push({ kind: 'verdict', role: FINAL, value: flagOf(cmd, 'final-verdict'), source: 'ledger-add' }, ts));
+            track(push({ kind: 'action', action: 'final-review', source: 'ledger-add' }, ts));
           } else if (action) {
-            push({ kind: 'action', action, ticket: ticketOfCommand(cmd), outcome: /--outcome\s+(\S+)/.exec(cmd)?.[1] || null }, ts);
+            track(push({
+              kind: 'action',
+              action,
+              ticket: ticketOfCommand(cmd),
+              outcome: /--outcome\s+(\S+)/.exec(cmd)?.[1] || null,
+              source: 'ledger-add',
+            }, ts));
             if (action === 'sync') lastSyncIdx = events.length - 1;
             if (action === 'seal') sessionSealed = true;
           } else if (/\bgit\s+merge\b/.test(cmd)) {
             const ticket = (cmd.match(/ticket-(\d+)/) || [])[1] || null;
-            if (ticket) push({ kind: 'merge', ticket, validated: lastValidation === 'pass', source: 'git-merge' }, ts);
+            if (ticket) track(push({ kind: 'merge', ticket, validated: lastValidation === 'pass', source: 'git-merge' }, ts));  // 会话里真的发起的合并
           } else if (/\bkill\b/.test(cmd) && /\d+/.test(cmd)) {
-            push({ kind: 'action', action: 'stop-child', note: cmd.slice(0, 120) }, ts);
+            track(push({ kind: 'action', action: 'stop-child', note: cmd.slice(0, 120) }, ts));
           } else if (/\bnpm\s+(run\s+)?test\b|\bnode\s+--test\b/.test(cmd)) {
             lastValidation = m.isError ? 'fail' : 'pass';
-            push({ kind: 'validation', result: lastValidation, command: cmd.slice(0, 120) }, ts);
+            track(push({ kind: 'validation', result: lastValidation, command: cmd.slice(0, 120) }, ts));
           }
         }
         if (c.type === 'toolCall' && c.name === 'subagent') {
@@ -207,6 +254,10 @@ function harvestTrace({ def, fx, sessionDir }) {
         }
       }
     }
+    if (m.role === 'toolResult' && /bash/i.test(m.toolName || '')) {
+      if (m.isError) for (const ev of pendingBashEvents) ev.failed = true;
+      pendingBashEvents = [];
+    }
     // 阻塞式派发的返回：轴派发返回 = 两轴各自已完成（定义要求 async: false，调用阻塞到轴返回）。
     if (m.role === 'toolResult' && /subagent/i.test(m.toolName || '') && pendingAxisKeys.length) {
       for (const key of pendingAxisKeys) {
@@ -219,6 +270,18 @@ function harvestTrace({ def, fx, sessionDir }) {
   // 封账前的最后一次同步 = pre-seal sync（生产流程顺序固定，这里按实际先后判定）。
   if (sessionSealed && lastSyncIdx >= 0) {
     events[lastSyncIdx] = { ...events[lastSyncIdx], action: 'pre-seal-sync', source: 'sync-before-seal' };
+  }
+
+  // 放弃决定：没有远程写面的契约没有放弃同步这一步，决定落在 outcome=abandoned 的封账上。
+  const abandonSealIdx = events.findIndex((e) => e.kind === 'action' && e.action === 'seal' && e.outcome === 'abandoned');
+  if (abandonSealIdx >= 0 && !events.some((e) => e.kind === 'action' && e.action === 'abandon-decision')) {
+    events.splice(abandonSealIdx, 0, {
+      seq: 0,
+      at: clock++,
+      kind: 'action',
+      action: 'abandon-decision',
+      source: 'abandoned-seal-no-remote-surface',
+    });
   }
 
   // 轴完成事实：fixture/会话里没有可靠的轴完成标志时如实标记（判定器据此不判通过）。
@@ -236,8 +299,7 @@ function harvestTrace({ def, fx, sessionDir }) {
   const childrenFile = path.join(fx.runtimeDir, 'children.json');
   if (fs.existsSync(childrenFile)) {
     for (const child of JSON.parse(fs.readFileSync(childrenFile, 'utf8'))) {
-      let alive = false;
-      try { process.kill(child.pid, 0); alive = true; } catch { alive = false; }
+      const alive = isProcessAlive(child.pid);
       push({ kind: 'child', pid: child.pid, role: child.role || null, state: alive ? 'running' : 'stopped', checkedAt: 'harvest' }, null);
     }
   }
@@ -260,7 +322,13 @@ function harvestTrace({ def, fx, sessionDir }) {
   if (sessionSealed) uncertainty.push('lifecycle-openTickets:封账时刻的未完成范围按采集时状态近似');
 
   const sealIdx = events.findIndex((e) => e.kind === 'action' && e.action === 'seal');
-  const lifecycleEvent = { kind: 'lifecycle', state: lifecycleState, openTickets, source: 'harvest-at-end' };
+  const lifecycleEvent = {
+    kind: 'lifecycle',
+    state: lifecycleState,
+    openTickets,
+    openTicketIds: tracker.openIds,
+    source: 'harvest-at-end',
+  };
   if (sealIdx >= 0) events.splice(sealIdx, 0, { seq: 0, at: clock++, ...lifecycleEvent });
   else events.push({ seq: 0, at: clock++, ...lifecycleEvent });
 
@@ -272,6 +340,8 @@ function harvestTrace({ def, fx, sessionDir }) {
     fixture: {
       ...fx.facts,
       openTickets,
+      openTicketIds: tracker.openIds,
+      openTicketsBefore: (fx.facts.openTickets || []).slice(),
       trackerTickets: tracker.tickets,
       ledgerEvents: ledger.events.length,
       sealed: ledger.seals.length > 0,

@@ -13,19 +13,15 @@
 // 双形态检查。任务书是数据，哈希进计划与授权范围；改任务书必须重新授权。
 // ============================================================================
 
-const crypto = require('node:crypto');
 const path = require('node:path');
 
 const { contractDocPaths } = require('../../../scripts/registration-checks.js');
+const { sha256 } = require('./digest');
 
 const DOC_PATHS = contractDocPaths();
 const DOC_BASENAMES = [...new Set(DOC_PATHS.map((p) => path.basename(p)))];
 
 const BRIEF_VERSION = 'e2e-brief-1';
-
-function sha256(text) {
-  return crypto.createHash('sha256').update(text).digest('hex');
-}
 
 function briefId(def) {
   return `${def.id}-brief-1`;
