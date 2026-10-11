@@ -110,6 +110,11 @@ Comparison is **behavioural**: scenario results, action-before-load facts, branc
 boundaries. It is not a comparison of wording, token counts, or identical tool sequences, and each
 candidate is approved as its own batch.
 
+The stage references are the ones the spec records: the source baseline and the verbatim-migration
+stage. A baseline batch has to be run from a checkout of that commit — this worktree's own working copy
+is not the baseline, and the plan says so if you label it that way (five `run/*.md` documents do not
+exist at the baseline at all).
+
 One caveat the plan prints as an unfixed condition: this entry installs nothing. What the model
 actually loads is the copy of the package registered with your platform, so install the candidate you
 intend to test before you approve the batch; the named ref and the working copy are compared and
@@ -204,7 +209,12 @@ collected claims) and from the fixture (event stream, ticket copies, git history
 attempts). The judge then checks:
 
 - each required document was loaded **before** the action that needs it (a missing load is fatal, a
-  load that happens after the action is fatal too — both are definitive failures);
+  load that happens after the action is fatal too — both are definitive failures). The scenario data
+  expresses these as contract ids from `scripts/registration-checks.js`, so relocating an instruction
+  document only means updating that registry: a scenario that references an id which no longer exists is
+  reported as a harness failure rather than passing quietly. When the shared review protocol moves into
+  a document of its own (the reviewer role scenarios currently name the registered agent definitions and
+  the run-timeout settings contract), update those ids in `test/e2e/flow-scenarios.js`;
 - branch selection: required dispatches happened, forbidden ones did not, and continuation does not
   re-dispatch or re-merge work that is already delivered;
 - safety boundaries: no merge before a passing validation, no real remote tracker write, no seal with
