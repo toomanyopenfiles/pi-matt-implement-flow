@@ -11,6 +11,13 @@ const path = require('node:path');
 const {
   AGENT_NAMES,
   PKG_ROOT,
+  TRUNK_DOC,
+  CONTRACT_DOCUMENTS,
+  resolveContractText,
+  resolveContractCorpus,
+  checkContractDocLocations,
+  checkTrunkSkillRegistration,
+  checkContractDocsPackaged,
   readPackageJson,
   readText,
   isFileAt,
@@ -47,18 +54,32 @@ const {
   checkDispatchScriptFiles,
   checkPartialDeliveryContinuation,
 } = require('../scripts/registration-checks.js');
+const { relocationRoot, contractRow } = require('./fixtures/contract-docs.js');
+
+// agent 定义按注册面读：目录来自 package.json pi.subagents.agents（frontmatter 是注册事实，
+// 必须在注册文件里），不在测试里写死目录。
+function agentsDir() {
+  const declared = manifest?.pi?.subagents?.agents ?? [];
+  return String(declared[0] ?? 'agents').replace(/^\.\//, '');
+}
 
 function readAgentFrontmatter() {
   const frontmatter = {};
   for (const agentName of AGENT_NAMES) {
-    frontmatter[agentName] = parseFrontmatter(readText(PKG_ROOT, `agents/${agentName}.md`));
+    frontmatter[agentName] = parseFrontmatter(readText(PKG_ROOT, `${agentsDir()}/${agentName}.md`));
   }
   return frontmatter;
 }
 
 const manifest = readPackageJson(PKG_ROOT);
 const packageName = manifest.name;
-const skillFrontmatter = parseFrontmatter(readText(PKG_ROOT, 'SKILL.md'));
+// 指令文本一律按契约 id 取（权威位置见 scripts/registration-checks.js 的 CONTRACT_DOCUMENTS）：
+// 检查器只吃文本，搬迁时改登记表，测试与断言原样跟随，测试里不再写文件路径。
+const contractText = (id) => resolveContractText(PKG_ROOT, id);
+// 指令语料（登记表全部权威文档按序拼接）：只供全局扫描（禁用词、派发交付形态）使用；
+// 导航不靠它裁定——规则所在位置与披露入口另有 checkContractDocLocations。
+const instructionCorpus = resolveContractCorpus(PKG_ROOT);
+const skillFrontmatter = parseFrontmatter(readText(PKG_ROOT, TRUNK_DOC));
 
 // --- 真实包树上的注册不变量（每条一个独立测试用例） ---
 
@@ -132,13 +153,11 @@ test('every agent declares its name in package-full-name form (name + package fi
 });
 
 test('coder brief carries the worktree-reality contract (block in, notes pointer out, soft fence verbatim)', () => {
-  const skillText = readText(PKG_ROOT, 'SKILL.md');
-  assert.deepEqual(checkCoderBriefWorktreeReality(skillText), []);
+  assert.deepEqual(checkCoderBriefWorktreeReality(contractText('coder-brief-worktree-reality')), []);
 });
 
 test('Round 0 carries the environment-survey step (survey is prose, destination is the 环境事实 notes section)', () => {
-  const skillText = readText(PKG_ROOT, 'SKILL.md');
-  assert.deepEqual(checkRound0EnvSurvey(skillText), []);
+  assert.deepEqual(checkRound0EnvSurvey(contractText('round0')), []);
 });
 
 test('pi.extensions declares the flow-config extension and the path exists', () => {
@@ -154,8 +173,7 @@ test('all three agents declare timeoutMs: 14400000 (4h run deadline, issue #26)'
 });
 
 test('every new dispatch carries the freshly resolved run deadline; the retained resume carries none (issue #26)', () => {
-  const skillText = readText(PKG_ROOT, 'SKILL.md');
-  assert.deepEqual(checkDispatchRunDeadlines(skillText), []);
+  assert.deepEqual(checkDispatchRunDeadlines(contractText('run-deadlines')), []);
 });
 
 // --- 模拟破坏：假想 fixture，绝不改动真实文件。每条恰好对应一条真实不变量。 ---
@@ -211,7 +229,7 @@ test('breakage simulation: an agent losing its timeoutMs is flagged', () => {
 });
 
 test('breakage simulation: a dispatch template that drops the run deadline is flagged (issue #26)', () => {
-  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const skillText = contractText('run-deadlines');
   const broken = skillText.replace('    timeoutMs: RUN_TIMEOUT_MS,\n    task: `<reviewer brief', '    task: `<reviewer brief');
   assert.notEqual(broken, skillText);
   const problems = checkDispatchRunDeadlines(broken);
@@ -220,7 +238,7 @@ test('breakage simulation: a dispatch template that drops the run deadline is fl
 });
 
 test('breakage simulation: a resume snippet that smuggles a run deadline is flagged (issue #26)', () => {
-  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const skillText = contractText('run-deadlines');
   const broken = skillText.replace(
     'const r = await runs.run("fix-01-<fixNo>", { resume: "<coderRunId>",',
     'const r = await runs.run("fix-01-<fixNo>", { timeoutMs: RUN_TIMEOUT_MS, resume: "<coderRunId>",',
@@ -232,7 +250,7 @@ test('breakage simulation: a resume snippet that smuggles a run deadline is flag
 });
 
 test('breakage simulation: losing the run-deadline section or its resolution pointer is flagged (issue #26)', () => {
-  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const skillText = contractText('run-deadlines');
   const noSection = skillText.replace('### Run deadline (per new dispatch)', '### Deadlines (retired)');
   assert.match(checkDispatchRunDeadlines(noSection)[0], /missing the "### Run deadline" section/);
   const noCli = skillText.replaceAll('flow-config-cli.js run-timeout', 'flow-config-cli.js nothing');
@@ -242,7 +260,7 @@ test('breakage simulation: losing the run-deadline section or its resolution poi
 });
 
 test('breakage simulation: the final gate dropping the final-reviewer deadline is flagged (issue #26)', () => {
-  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const skillText = contractText('run-deadlines');
   const broken = skillText.replace('acceptance: false`, `timeoutMs: RUN_TIMEOUT_MS` (the run deadline', 'acceptance: false` (the run deadline');
   assert.notEqual(broken, skillText);
   const problems = checkDispatchRunDeadlines(broken);
@@ -250,7 +268,7 @@ test('breakage simulation: the final gate dropping the final-reviewer deadline i
 });
 
 test('breakage simulation: the fix-loop fallback losing its deadline is flagged (issue #26)', () => {
-  const skillText = readText(PKG_ROOT, 'SKILL.md');
+  const skillText = contractText('run-deadlines');
   const broken = skillText.replace(
     'acceptance: false, timeoutMs: RUN_TIMEOUT_MS` (a fresh dispatch',
     'acceptance: false` (a fresh dispatch',
@@ -354,56 +372,57 @@ test('breakage simulation: the environment-survey step going missing is flagged'
 // --- 票 02 断锚：typed gate 派发形态（8 条）+ breakage simulation ---
 // 检查器吃 SKILL.md / agents/coder.md 文本；schema 副本与票 01 模块导出真源交叉比对。
 
-const skillText = readText(PKG_ROOT, 'SKILL.md');
-const coderAgentText = readText(PKG_ROOT, 'agents/coder.md');
+const coderAgentText = contractText('coder-agent-definition');
+// 简报契约的权威文本（破坏模拟从它做原句手术）。
+const briefsText = contractText('briefs');
 const { REPORT_CONTRACT } = require('../scripts/mechanical-report.js');
 
 test('anchor-1: coder dispatch carries a typed gate (command/output-json/schema/timeoutMs), no acceptance object or outputSchema', () => {
-  assert.deepEqual(checkCoderDispatchTypedGate(skillText), []);
+  assert.deepEqual(checkCoderDispatchTypedGate(contractText('coder-dispatch-typed-gate')), []);
 });
 
 test('anchor-2: dispatch schema copy is verbatim-identical to the ticket-01 source (module export cross-check)', () => {
   assert.deepEqual(
-    checkDispatchSchemaMatchesSource(skillText, REPORT_CONTRACT),
+    checkDispatchSchemaMatchesSource(contractText('dispatch-schema-copy'), REPORT_CONTRACT),
     []
   );
 });
 
 test('anchor-3: fix loop is a hand-run of the same script command (stdout is the report, exit code is the gate)', () => {
-  assert.deepEqual(checkFixLoopHandRun(skillText), []);
+  assert.deepEqual(checkFixLoopHandRun(contractText('fix-loop')), []);
 });
 
 test('anchor-4: no report bans anywhere — the report duty is single-sourced to the platform, load-bearing close-outs stay (issue #7 负空间裁定)', () => {
-  assert.deepEqual(checkNoReportBans(skillText, coderAgentText), []);
+  assert.deepEqual(checkNoReportBans(contractText('briefs'), coderAgentText), []);
 });
 
 test('anchor-5: every mechanical-report gate command carries --base and --test-command', () => {
-  assert.deepEqual(checkGateCommandFlags(skillText), []);
+  assert.deepEqual(checkGateCommandFlags(contractText('gate-commands')), []);
 });
 
 test('anchor-6: existing hard rules are retained (merge token, verdict values, ledger write authority)', () => {
-  assert.deepEqual(checkHardRulesRetained(skillText), []);
+  assert.deepEqual(checkHardRulesRetained(contractText('hard-rules')), []);
 });
 
 test('SKILL.md flow configuration and new init expose reviewer/concurrency without a fix quota', () => {
-  const config = skillText.match(/## Flow configuration\n([\s\S]*?)(?=\n## Ledger)/)?.[1] ?? '';
-  const round0 = skillText.match(/### Round 0[^\n]*\n([\s\S]*?)(?=\n### Each round)/)?.[1] ?? '';
+  const config = contractText('preconditions-flow-config').match(/## Flow configuration\n([\s\S]*?)(?=\n## Ledger)/)?.[1] ?? '';
+  const round0 = contractText('round0').match(/### Round 0[^\n]*\n([\s\S]*?)(?=\n### Each round)/)?.[1] ?? '';
   assert.doesNotMatch(config + round0, /maxFixRounds|--max-fix-rounds|per-ticket fix budget/);
   assert.match(config, /--reviewer on\|off --max-concurrent N/);
 });
 
 test('SKILL.md ticket repairs use repair decisions and sequential attempts without budget escalation', () => {
-  const ticket = skillText.match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
+  const ticket = contractText('ticket-round').match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
   assert.match(ticket, /Repair decisions/);
   assert.match(ticket, /fix-no.*attempt.*sequence/i);
   assert.doesNotMatch(ticket, /budget is consumed|rejects a third fix|two rounds are already dispatched|rejection is the escalation trigger/i);
-  assert.doesNotMatch(skillText, /Fix budget then escalate|maxFixRounds|--max-fix-rounds/);
+  assert.doesNotMatch(instructionCorpus, /Fix budget then escalate|maxFixRounds|--max-fix-rounds/);
   const quotaFreeRules = '## Hard rules\nticket-NN approved changes_requested blocked\nNever hand-write or edit the ledger or the event stream.\n';
   assert.deepEqual(checkHardRulesRetained(quotaFreeRules), []);
 });
 
 test('SKILL.md formal review rounds are independent, deduplicated, and require approval for the current candidate', () => {
-  const ticket = skillText.match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
+  const ticket = contractText('ticket-round').match(/### Verify each finished ticket\n([\s\S]*?)(?=\n### Merge)/)?.[1] ?? '';
   assert.match(ticket, /formal-review.*independent.*fix/i);
   assert.match(ticket, /same ticket.*same round.*duplicate/i);
   assert.match(ticket, /multiple repairs.*one review/i);
@@ -414,7 +433,7 @@ test('SKILL.md formal review rounds are independent, deduplicated, and require a
 });
 
 test('SKILL.md human handoff preserves escalation history without completing tickets or satisfying dependencies', () => {
-  const handoff = skillText.match(/### Human handoff[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  const handoff = contractText('human-handoff').match(/### Human handoff[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
   assert.match(handoff, /ticket-level.*escalate.*handoff.*history/i);
   assert.match(handoff, /not.*completion.*dependenc.*normal seal.*permanent/i);
   assert.match(handoff, /pending decisions.*user decisions.*pause stage.*recovery.*notes/i);
@@ -423,13 +442,13 @@ test('SKILL.md human handoff preserves escalation history without completing tic
   assert.match(handoff, /merged.*completed.*escalation history/i);
   assert.match(handoff, /unmerged.*facts.*notes.*current action/i);
   assert.match(handoff, /unmerged.*open.*downstream.*blocked/i);
-  const ledger = skillText.match(/## Ledger\n([\s\S]*?)(?=\n## The loop)/)?.[1] ?? '';
+  const ledger = contractText('ledger-discipline').match(/## Ledger\n([\s\S]*?)(?=\n## The loop)/)?.[1] ?? '';
   assert.doesNotMatch(ledger, /Every state transition is recorded/);
   assert.match(ledger, /structured facts.*recorded/i);
 });
 
 test('SKILL.md anomaly history retains facts while notes hold disposition evidence, not mechanical resolution', () => {
-  const history = skillText.match(/### Human handoff[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  const history = contractText('human-handoff').match(/### Human handoff[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
   assert.match(history, /anomaly.*refSeq.*immutable history/i);
   assert.match(history, /disposition.*evidence pointers.*notes/i);
   assert.match(history, /historical anomaly.*not.*closing.*unresolved/i);
@@ -440,7 +459,7 @@ test('SKILL.md anomaly history retains facts while notes hold disposition eviden
 });
 
 test('SKILL.md cold resume verifies user-provided conditions against notes and facts without replaying completed work', () => {
-  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  const resume = contractText('cold-resume').match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
   assert.match(resume, /skip init.*pull/i);
   assert.match(resume, /rebuild.*reconcile/i);
   assert.match(resume, /notes.*referenced evidence.*git/i);
@@ -453,7 +472,7 @@ test('SKILL.md cold resume verifies user-provided conditions against notes and f
 });
 
 test('SKILL.md cold resume explains retired quotas without rewriting old settings/events or reopening sealed runs', () => {
-  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  const resume = contractText('cold-resume').match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
   assert.match(resume, /historical.*budget.*no longer.*limit/i);
   assert.match(resume, /explain.*new repair rules/i);
   assert.match(resume, /settings.*init.*event.*unchanged/i);
@@ -461,7 +480,7 @@ test('SKILL.md cold resume explains retired quotas without rewriting old setting
 });
 
 test('SKILL.md repair decisions use evidence and approved scope to continue or request the user', () => {
-  const decisions = skillText.match(/### Repair decisions[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  const decisions = contractText('repair-decisions').match(/### Repair decisions[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
   assert.match(decisions, /approved scope/i);
   assert.match(decisions, /diagnostic evidence/i);
   assert.match(decisions, /continuous failures/i);
@@ -472,8 +491,8 @@ test('SKILL.md repair decisions use evidence and approved scope to continue or r
 });
 
 test('anchor-7: no-isolation fixers keep pure-verdict gates and use repair decisions rather than two-red stops', () => {
-  assert.deepEqual(checkPureVerdictGateAndRepair(skillText), []);
-  const stages = skillText.match(/### Merge[\s\S]*?(?=\n## Briefs)/)?.[0] ?? '';
+  assert.deepEqual(checkPureVerdictGateAndRepair(contractText('merge-close')), []);
+  const stages = contractText('merge-close').match(/### Merge[\s\S]*?(?=\n## Briefs)/)?.[0] ?? '';
   assert.doesNotMatch(stages, /two consecutive reds/i);
   for (const stage of stages.split('### Final gate')) {
     assert.match(stage, /Repair decisions/);
@@ -481,22 +500,22 @@ test('anchor-7: no-isolation fixers keep pure-verdict gates and use repair decis
 });
 
 test('SKILL.md reconciliation stops ordinary progress but permits explained integration recovery before merge accounting', () => {
-  const ledger = skillText.match(/## Ledger\n([\s\S]*?)(?=\n## The loop)/)?.[1] ?? '';
+  const ledger = contractText('ledger-discipline').match(/## Ledger\n([\s\S]*?)(?=\n## The loop)/)?.[1] ?? '';
   assert.match(ledger, /pause ordinary dispatches, new ticket merges, and closing/i);
   assert.match(ledger, /verify and explain.*differences/i);
   assert.match(ledger, /directly resolve.*differences/i);
   assert.match(ledger, /unknown differences/i);
   assert.match(ledger, /schema.*commit.*approval.*seal/i);
-  const resume = skillText.match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
+  const resume = contractText('cold-resume').match(/### Cold resume[^\n]*\n([\s\S]*?)(?=\n### Round 0)/)?.[1] ?? '';
   assert.match(resume, /unrecorded merge.*integration fixer/i);
   assert.match(resume, /unrelated tickets/i);
-  const merge = skillText.match(/### Merge[^\n]*\n([\s\S]*?)(?=\n### Final gate)/)?.[1] ?? '';
+  const merge = contractText('merge-close').match(/### Merge[^\n]*\n([\s\S]*?)(?=\n### Final gate)/)?.[1] ?? '';
   assert.match(merge, /Only after.*validation.*passes.*record `merge`/i);
   assert.match(merge, /premature.*merge.*ticket.*green/i);
 });
 
 test('SKILL.md pre-seal sync records failure but allows verified idempotent recovery with notes evidence', () => {
-  const sync = skillText.match(/\*\*Pre-seal sync\*\*([\s\S]*?)(?=\n5\. )/)?.[1] ?? '';
+  const sync = contractText('final-gate').match(/\*\*Pre-seal sync\*\*([\s\S]*?)(?=\n5\. )/)?.[1] ?? '';
   assert.match(sync, /failed sync must not seal/i);
   assert.match(sync, /record.*anomaly.*sync failed/i);
   assert.match(sync, /verify.*handle.*failure.*retry.*idempotent/i);
@@ -507,13 +526,13 @@ test('SKILL.md pre-seal sync records failure but allows verified idempotent reco
 });
 
 test('SKILL.md an empty frontier with unfinished tickets pauses instead of entering the normal Final gate', () => {
-  const loopEnd = skillText.match(/Recompute the frontier\.([^]*?)(?=\n### Final gate)/)?.[1] ?? '';
+  const loopEnd = contractText('merge-close').match(/Recompute the frontier\.([^]*?)(?=\n### Final gate)/)?.[1] ?? '';
   assert.match(loopEnd, /empty frontier.*unfinished.*not.*Final gate/i);
   assert.match(loopEnd, /user.*Partial delivery/i);
 });
 
 test('SKILL.md final repairs check each finding and record evidence-based re-review choices', () => {
-  const final = skillText.match(/### Final gate\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  const final = contractText('final-gate').match(/### Final gate\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
   assert.match(final, /each finding.*evidence/i);
   assert.match(final, /local.*explicit/i);
   assert.match(final, /requirements.*behavior.*broader impact.*insufficient evidence/i);
@@ -523,7 +542,7 @@ test('SKILL.md final repairs check each finding and record evidence-based re-rev
 });
 
 test('SKILL.md partial delivery checks the current candidate and requires explicit user acceptance with notes evidence', () => {
-  const partial = skillText.match(/### Partial delivery[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
+  const partial = contractText('partial-delivery').match(/### Partial delivery[^\n]*\n([\s\S]*?)(?=\n### )/)?.[1] ?? '';
   assert.match(partial, /verify.*current.*deliverab.*not.*past merge/i);
   assert.match(partial, /completed.*unfinished.*impact.*risk/i);
   assert.match(partial, /only after.*user explicitly accepts.*branch.*SHA.*validation/i);
@@ -532,7 +551,7 @@ test('SKILL.md partial delivery checks the current candidate and requires explic
 });
 
 test('SKILL.md partial delivery retains an unsealed run and recovery artifacts outside the final sync chain', () => {
-  assert.deepEqual(checkPartialDeliveryContinuation(skillText), []);
+  assert.deepEqual(checkPartialDeliveryContinuation(contractText('partial-delivery')), []);
 });
 
 test('breakage simulation: partial-delivery continuation anchors must stay in their section', () => {
@@ -546,7 +565,7 @@ test('breakage simulation: partial-delivery continuation anchors must stay in th
 });
 
 test('SKILL.md user abandonment stops children and preserves unfinished code/evidence before tracker actions', () => {
-  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  const abandon = contractText('user-abandonment').match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
   assert.match(abandon, /user explicitly.*abandon/i);
   assert.match(abandon, /stop.*child.*confirm/i);
   assert.match(abandon, /preserve.*code.*evidence/i);
@@ -557,7 +576,7 @@ test('SKILL.md user abandonment stops children and preserves unfinished code/evi
 });
 
 test('SKILL.md abandonment sync must succeed before explicit abandoned close and never declares ready', () => {
-  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  const abandon = contractText('user-abandonment').match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
   assert.match(abandon, /sync .*--mode abandon .*--claimant .*--reason/);
   assert.match(abandon, /fail.*open.*anomaly/i);
   assert.match(abandon, /retry.*missing.*actions/i);
@@ -570,13 +589,13 @@ test('SKILL.md abandonment sync must succeed before explicit abandoned close and
 });
 
 test('SKILL.md completed close rejects latest not_ready/escalation completion and preserves old close intent', () => {
-  const final = skillText.match(/### Final gate\n([\s\S]*?)(?=\n### User abandonment)/)?.[1] ?? '';
+  const final = contractText('final-gate').match(/### Final gate\n([\s\S]*?)(?=\n### User abandonment)/)?.[1] ?? '';
   assert.match(final, /--outcome completed.*omitt/i);
   assert.match(final, /latest.*not_ready.*reject.*normal/i);
   assert.match(final, /escalat.*not.*complet/i);
   assert.match(final, /User abandonment/);
   assert.doesNotMatch(final, /give-up through at warning level|record `close`.*as usual/i);
-  const abandon = skillText.match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
+  const abandon = contractText('user-abandonment').match(/### User abandonment[^\n]*\n([\s\S]*?)(?=\n## Briefs)/)?.[1] ?? '';
   assert.match(abandon, /valid input.*initialized.*unsealed/i);
   assert.match(abandon, /sealed.*reject.*all.*events.*anomaly/i);
   assert.match(abandon, /old.*close.*outcome.*readable.*infer.*intent.*rewrite/i);
@@ -588,12 +607,12 @@ test('agents/coder.md follows the brief workspace for isolated tickets and seria
   assert.match(coderAgentText, /sole writer/i);
   assert.match(coderAgentText, /actual actions.*validation.*evidence pointers/i);
   assert.doesNotMatch(coderAgentText, /Your cwd is a pi-managed worktree/);
-  const briefs = skillText.match(/### Integration fixer[\s\S]*?(?=\n## Hard rules)/)?.[0] ?? '';
+  const briefs = briefsText.match(/### Integration fixer[\s\S]*?(?=\n## Hard rules)/)?.[0] ?? '';
   assert.equal((briefs.match(/sole writer/g) ?? []).length, 2);
 });
 
 test('anchor-8: the fifth no-isolation brief exists with zero report duties', () => {
-  assert.deepEqual(checkNoIsolationBriefs(skillText), []);
+  assert.deepEqual(checkNoIsolationBriefs(briefsText), []);
 });
 
 test('breakage simulation: a dispatch block with unbalanced JS (stray timeoutMs/brace) is flagged (anchor-1)', () => {
@@ -636,7 +655,7 @@ test('breakage simulation: the old acceptance-object dispatch shape is flagged (
   assert.ok(problems.length >= 4, `expected the old shape to fail anchor-1 widely, got: ${JSON.stringify(problems)}`);
   assert.ok(problems.some((p) => p.includes('acceptance') || p.includes('outputSchema') || p.includes('old dispatch shape')));
   // 而真实派发不受影响（对照）。
-  assert.deepEqual(checkCoderDispatchTypedGate(skillText), []);
+  assert.deepEqual(checkCoderDispatchTypedGate(contractText('coder-dispatch-typed-gate')), []);
 });
 
 test('breakage simulation: a drifted schema copy is flagged (anchor-2)', () => {
@@ -672,7 +691,7 @@ test('breakage simulation: a returning ## Acceptance Contract brief section is f
 });
 
 test('breakage simulation: a coder agent re-adding SIBLING-keys wording is flagged (anchor-4)', () => {
-  const problems = checkNoReportBans(skillText, 'acceptanceReport is a SIBLING of value.\nNo handwritten reports.\n');
+  const problems = checkNoReportBans(briefsText, 'acceptanceReport is a SIBLING of value.\nNo handwritten reports.\n');
   assert.ok(problems.some((p) => p.includes('agents/coder.md')));
 });
 
@@ -729,15 +748,14 @@ test('breakage simulation: a missing fifth brief is flagged (anchor-8)', () => {
 // --- issue #6 回归护栏：双轴派发契约（阻塞调用 + 稳定 key + 不得提前收尾） ---
 
 test('reviewer and final-reviewer axis-spawn contract: blocking call with stable keys (issue #6)', () => {
-  for (const name of ['reviewer', 'final-reviewer']) {
-    const text = readText(PKG_ROOT, `agents/${name}.md`) || '';
-    assert.deepEqual(checkAxisSpawnContract(text), [], `agents/${name}.md violates the axis-spawn contract`);
+  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
+    assert.deepEqual(checkAxisSpawnContract(contractText(id)), [], `${id} violates the axis-spawn contract`);
   }
 });
 
 test('breakage simulation: reviewer axes losing fresh timeout args or main-repo settings paths are flagged (#26)', () => {
-  for (const name of ['reviewer', 'final-reviewer']) {
-    const text = readText(PKG_ROOT, `agents/${name}.md`);
+  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
+    const text = contractText(id);
     assert.ok(checkAxisSpawnContract(text.replace('timeoutMs: RUN_TIMEOUT_MS, ', '')).some((p) => p.includes('timeoutMs: RUN_TIMEOUT_MS')));
     assert.ok(checkAxisSpawnContract(text.replaceAll('Run timeout settings', 'Retired settings')).some((p) => p.includes('settings paths')));
     assert.ok(checkAxisSpawnContract(text.replaceAll('run-timeout-settings.md', 'retired.md')).some((p) => p.includes('resolution rules')));
@@ -758,12 +776,12 @@ test('breakage simulation: an async:true axis spawn without keys and without the
 // --- issue #9 回归护栏：派发交付形态（脚本写入文件 → 文件路径调用，围栏形态即红） ---
 
 test('dispatch delivery: SKILL.md and both reviewer agents dispatch workflows in script-file form (issue #9)', () => {
-  const skill = readText(PKG_ROOT, 'SKILL.md') || '';
+  const skill = contractText('dispatch-delivery');
   assert.deepEqual(checkWorkflowScriptDelivery(skill), [], 'SKILL.md violates the script-file dispatch form');
   assert.deepEqual(checkDispatchScriptFiles(skill), [], 'SKILL.md lost the dispatch-script file discipline');
-  for (const name of ['reviewer', 'final-reviewer']) {
-    const text = readText(PKG_ROOT, `agents/${name}.md`) || '';
-    assert.deepEqual(checkWorkflowScriptDelivery(text), [], `agents/${name}.md violates the script-file dispatch form`);
+  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
+    const text = contractText(id);
+    assert.deepEqual(checkWorkflowScriptDelivery(text), [], `${id} violates the script-file dispatch form`);
   }
 });
 
@@ -790,7 +808,7 @@ test('breakage simulation: the removed workflowScript API and a lost file discip
 // --- issue #7 回归护栏：修复轮 resume 与完整性兜底一律 acceptance: false（断锚 9）+ 断锚 4 负空间 ---
 
 test('anchor-9: fix-loop resume and the integrity fallback carry acceptance: false with no gate (issue #7)', () => {
-  assert.deepEqual(checkFixLoopAcceptanceDisabled(skillText), []);
+  assert.deepEqual(checkFixLoopAcceptanceDisabled(contractText('fix-loop')), []);
 });
 
 test('breakage simulation: a fix-loop resume without acceptance: false is flagged (issue #7, 旧派发形态回潮即红)', () => {
@@ -824,7 +842,7 @@ test('breakage simulation: a fallback fresh coder carrying a gate (or losing the
 
 test('breakage simulation: a report ban re-added to the coder agent is flagged (issue #7 负空间：禁令回流即红)', () => {
   const banned = `${coderAgentText}\nNo handwritten reports.\n`;
-  const problems = checkNoReportBans(skillText, banned);
+  const problems = checkNoReportBans(briefsText, banned);
   assert.ok(
     problems.some((p) => p.includes('agents/coder.md') && p.includes('report ban')),
     `expected the re-added ban to be flagged, got: ${JSON.stringify(problems)}`
@@ -832,11 +850,11 @@ test('breakage simulation: a report ban re-added to the coder agent is flagged (
 });
 
 test('breakage simulation: a report ban re-added to a brief is flagged (issue #7 负空间：双指令冲突回潮即红)', () => {
-  const bannedBrief = skillText.replace(
+  const bannedBrief = briefsText.replace(
     'return the structured verdict.',
     'return the structured verdict. No work reports.'
   );
-  assert.notEqual(bannedBrief, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.notEqual(bannedBrief, briefsText, 'fixture surgery found no anchor — update the fixture to the current wording');
   const problems = checkNoReportBans(bannedBrief, coderAgentText);
   assert.ok(
     problems.some((p) => p.includes('SKILL.md') && p.includes('report ban')),
@@ -845,11 +863,11 @@ test('breakage simulation: a report ban re-added to a brief is flagged (issue #7
 });
 
 test('breakage simulation: the fix brief losing its verdict-source sentence is flagged (issue #7 边界护栏)', () => {
-  const noVerdictSource = skillText.replace(
+  const noVerdictSource = briefsText.replace(
     'hand-runs the gate for this round',
     'leaves the judging to nobody'
   );
-  assert.notEqual(noVerdictSource, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.notEqual(noVerdictSource, briefsText, 'fixture surgery found no anchor — update the fixture to the current wording');
   const problems = checkNoReportBans(noVerdictSource, coderAgentText);
   assert.ok(
     problems.some((p) => p.includes('verdict-source')),
@@ -860,7 +878,7 @@ test('breakage simulation: the fix brief losing its verdict-source sentence is f
 test('breakage simulation: dropping a load-bearing close-out sentence is flagged (issue #7 边界护栏)', () => {
   const noPointer = coderAgentText.replaceAll('by context pointer', 'in the final message');
   assert.notEqual(noPointer, coderAgentText, 'fixture surgery found no anchor — update the fixture to the current wording');
-  const problems = checkNoReportBans(skillText, noPointer);
+  const problems = checkNoReportBans(briefsText, noPointer);
   assert.ok(
     problems.some((p) => p.includes('load-bearing')),
     `expected the lost load-bearing sentence to be flagged, got: ${JSON.stringify(problems)}`
@@ -868,11 +886,11 @@ test('breakage simulation: dropping a load-bearing close-out sentence is flagged
 });
 
 test('breakage simulation: re-adding "No report duties" to the fix brief is flagged (issue #7 负空间：最可能回潮的原句)', () => {
-  const banned = skillText.replace(
+  const banned = briefsText.replace(
     'The orchestrator hand-runs the gate for this round (see Fix loop).',
     'No report duties — the orchestrator hand-runs the gate for this round (see Fix loop).'
   );
-  assert.notEqual(banned, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.notEqual(banned, briefsText, 'fixture surgery found no anchor — update the fixture to the current wording');
   const problems = checkNoReportBans(banned, coderAgentText);
   assert.ok(
     problems.some((p) => p.includes('report ban') && p.includes('"no report duties"')),
@@ -881,11 +899,11 @@ test('breakage simulation: re-adding "No report duties" to the fix brief is flag
 });
 
 test('breakage simulation: dropping the dirty-tree close-out sentence is flagged (issue #7 边界护栏)', () => {
-  const noDirtyRule = skillText.replaceAll(
+  const noDirtyRule = briefsText.replaceAll(
     'a dirty tree or an empty diff fails the gate',
     'no particular close-out rule'
   );
-  assert.notEqual(noDirtyRule, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.notEqual(noDirtyRule, briefsText, 'fixture surgery found no anchor — update the fixture to the current wording');
   const problems = checkNoReportBans(noDirtyRule, coderAgentText);
   assert.ok(
     problems.some((p) => p.includes('load-bearing') && p.includes('dirty tree')),
@@ -894,11 +912,11 @@ test('breakage simulation: dropping the dirty-tree close-out sentence is flagged
 });
 
 test('breakage simulation: a single brief losing its SHA report is flagged (issue #7 逐简报钉死)', () => {
-  const oneBriefLosesIt = skillText.replace(
+  const oneBriefLosesIt = briefsText.replace(
     'report the headSha and branch by context pointer.',
     'report the headSha and branch in the final message.'
   );
-  assert.notEqual(oneBriefLosesIt, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.notEqual(oneBriefLosesIt, briefsText, 'fixture surgery found no anchor — update the fixture to the current wording');
   const problems = checkNoReportBans(oneBriefLosesIt, coderAgentText);
   assert.ok(
     problems.some((p) => p.includes('Coder brief') && p.includes('SHA report')),
@@ -907,11 +925,11 @@ test('breakage simulation: a single brief losing its SHA report is flagged (issu
 });
 
 test('breakage simulation: a brief re-stating the platform form duty is flagged (issue #7 复述即漂移源)', () => {
-  const restated = skillText.replace(
+  const restated = briefsText.replace(
     'return the structured verdict.',
     'return the structured verdict. If the platform requires a form, that duty comes first.'
   );
-  assert.notEqual(restated, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.notEqual(restated, briefsText, 'fixture surgery found no anchor — update the fixture to the current wording');
   const problems = checkNoReportBans(restated, coderAgentText);
   assert.ok(
     problems.some((p) => p.includes('form duty')),
@@ -920,13 +938,206 @@ test('breakage simulation: a brief re-stating the platform form duty is flagged 
 });
 
 test('breakage simulation: a dropped brief template is flagged (issue #7 模板在位)', () => {
-  const droppedHeading = skillText.replaceAll('### Reviewer brief', '### Peer review brief');
-  assert.notEqual(droppedHeading, skillText, 'fixture surgery found no anchor — update the fixture to the current wording');
+  const droppedHeading = briefsText.replaceAll('### Reviewer brief', '### Peer review brief');
+  assert.notEqual(droppedHeading, briefsText, 'fixture surgery found no anchor — update the fixture to the current wording');
   const problems = checkNoReportBans(droppedHeading, coderAgentText);
   assert.ok(
     problems.some((p) => p.includes('is missing the "### Reviewer brief" brief')),
     `expected the dropped brief template to be flagged, got: ${JSON.stringify(problems)}`
   );
+});
+
+// --- ticket 33 回归护栏：承重契约的权威位置与披露入口（让检查跟随指令搬迁） ---
+// 位置由 scripts/registration-checks.js 的 CONTRACT_DOCUMENTS 登记表决定；测试按契约 id
+// 取文本，不再在测试里写死文件路径。搬迁装置一律用假想根（临时目录 + 假想登记表），
+// 绝不改动真实文件；负例的破坏必须真的让对应检查变红。
+
+function sectionOf(text, start, end) {
+  const s = text.indexOf(start);
+  assert.notEqual(s, -1, `fixture surgery found no anchor: ${start}`);
+  const e = text.indexOf(end, s + start.length);
+  return e === -1 ? text.slice(s) : text.slice(s, e);
+}
+
+test('contract registry: 每份登记的权威文档存在，非主干文档由主干以触发条件 + 动作前读取披露', () => {
+  assert.deepEqual(checkContractDocLocations(PKG_ROOT), []);
+});
+
+test('contract registry: 主干就是 pi.skills 注册的技能文件（披露入口自身有注册面）', () => {
+  assert.deepEqual(checkTrunkSkillRegistration(manifest), []);
+});
+
+test('contract registry: 每个契约 id 都能取到权威文本（登记表与检查器同源）', () => {
+  for (const { id } of CONTRACT_DOCUMENTS) {
+    assert.ok(resolveContractText(PKG_ROOT, id).length > 0, `contract id 取不到文本: ${id}`);
+  }
+});
+
+test('relocation fixture: 契约搬到登记文档后检查器跟随新位置，承重规则丢失仍红', (t) => {
+  const fixLoop = sectionOf(resolveContractCorpus(PKG_ROOT), '### Fix loop', '### Merge');
+  assert.ok(fixLoop.includes('mechanical-report.js'), 'fixture 取自真实修复轮文本');
+  const root = relocationRoot(t, { 'run/loop.md': fixLoop });
+  const registry = [contractRow('fix-loop', ['run/loop.md'])];
+  const text = resolveContractText(root, 'fix-loop', { registry });
+  // 同一份断言，新位置照样全绿。
+  assert.deepEqual(checkFixLoopHandRun(text), []);
+  assert.deepEqual(checkFixLoopAcceptanceDisabled(text), []);
+  // 承重规则丢失：手跑门禁锚点消失 → 红。
+  const lostHandRun = text.replaceAll('mechanical-report.js', 'some-other-script.js');
+  assert.notEqual(lostHandRun, text);
+  assert.ok(
+    checkFixLoopHandRun(lostHandRun).some((p) => p.includes('hand-run anchor')),
+    `承重规则丢失必须红，实得: ${JSON.stringify(checkFixLoopHandRun(lostHandRun))}`
+  );
+  // 派发字段错误：修复轮 resume 的 acceptance 合同被改回 → 红。
+  const lostResumeContract = text.replaceAll('acceptance: false', 'acceptance: true');
+  assert.ok(
+    checkFixLoopAcceptanceDisabled(lostResumeContract).some((p) => p.includes('acceptance: false')),
+    '派发字段错误必须红'
+  );
+});
+
+test('breakage simulation: 入口缺失 / 入口缺动作前读取语义 / 错误目标 / 权威位置缺失各自红', (t) => {
+  const doc = { 'run/loop.md': '# Loop rules\n' };
+  // 1) 入口缺失：主干没有任何指向登记文档的披露。
+  const noEntry = relocationRoot(t, { ...doc, [TRUNK_DOC]: '# Implement, orchestrated\nNo pointers here.\n' });
+  const entryProblems = checkContractDocLocations(noEntry, { registry: [contractRow('fix-loop', ['run/loop.md'])] });
+  assert.ok(
+    entryProblems.some((p) => p.includes('run/loop.md') && p.includes('does not disclose')),
+    `入口缺失必须红，实得: ${JSON.stringify(entryProblems)}`
+  );
+  // 2) 入口在场但缺「动作前读取」语义：提到路径不等于动作前加载。
+  const weakEntry = relocationRoot(t, {
+    ...doc,
+    [TRUNK_DOC]: '# Implement, orchestrated\n`run/loop.md` holds the loop rules.\n',
+  });
+  const weakProblems = checkContractDocLocations(weakEntry, { registry: [contractRow('fix-loop', ['run/loop.md'])] });
+  assert.ok(
+    weakProblems.some((p) => p.includes('pre-action read')),
+    `缺动作前读取语义必须红，实得: ${JSON.stringify(weakProblems)}`
+  );
+  // 3) 错误目标：权威位置已搬走，主干仍指向旧路径。
+  const stale = relocationRoot(t, {
+    'run/ticket-loop.md': '# Loop rules\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before dispatching each round.\n',
+  });
+  const staleProblems = checkContractDocLocations(stale, {
+    registry: [contractRow('fix-loop', ['run/ticket-loop.md'], { previous: ['run/loop.md'] })],
+  });
+  assert.ok(
+    staleProblems.some((p) => p.includes('superseded')),
+    `错误目标必须红，实得: ${JSON.stringify(staleProblems)}`
+  );
+  // 4) 权威位置缺失：登记了位置但文件没落地。
+  const missing = relocationRoot(t, {
+    [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before dispatching each round.\n',
+  });
+  const missingProblems = checkContractDocLocations(missing, { registry: [contractRow('fix-loop', ['run/loop.md'])] });
+  assert.ok(
+    missingProblems.some((p) => p.includes('run/loop.md') && p.includes('missing')),
+    `权威位置缺失必须红，实得: ${JSON.stringify(missingProblems)}`
+  );
+});
+
+test('relocation fixture: 派发模板搬到登记文档后，模板字段检查跟随新位置（字段错误仍红）', (t) => {
+  const templates = resolveContractText(PKG_ROOT, 'dispatch-templates');
+  assert.ok(/agent:\s*"pi-matt-implement-flow\./.test(templates), 'fixture 取自真实派发模板');
+  const root = relocationRoot(t, { 'run/dispatch.md': templates });
+  const registry = [contractRow('dispatch-templates', ['run/dispatch.md'])];
+  const relocated = resolveContractText(root, 'dispatch-templates', { registry });
+  assert.equal(relocated, templates, '登记位置决定取哪份文本');
+  // 字段错误：新派发把新解析的时限换成写死值（丢字段）→ 同一套断言红。
+  const hardcoded = relocated.replaceAll('timeoutMs: RUN_TIMEOUT_MS', 'timeoutMs: 14400000');
+  assert.notEqual(hardcoded, relocated);
+  const problems = checkDispatchRunDeadlines(hardcoded);
+  assert.ok(
+    problems.some((p) => /fresh-dispatch template is missing/.test(p)),
+    `派发字段错误必须红，实得: ${JSON.stringify(problems)}`
+  );
+  assert.ok(problems.some((p) => /is missing the run deadline/.test(p)), JSON.stringify(problems));
+});
+
+test('contract registry: 每行都记录原位置、权威位置、触发入口与对应测试（对照数据完整且指针落地）', () => {
+  for (const row of CONTRACT_DOCUMENTS) {
+    assert.ok(row.contract && row.contract.length > 0, `缺契约摘要: ${row.id}`);
+    assert.ok(row.docs.length > 0, `缺权威位置: ${row.id}`);
+    assert.ok(row.previous.length > 0, `缺原位置: ${row.id}`);
+    assert.ok(row.entry?.carriers?.length > 0, `缺触发入口所在文档: ${row.id}`);
+    assert.ok(typeof row.entry.trigger === 'string' && row.entry.trigger.length > 0, `缺触发条件: ${row.id}`);
+    assert.ok(row.tests.length > 0, `缺对应测试: ${row.id}`);
+    for (const pointer of row.tests) {
+      const file = pointer.split(' · ')[0];
+      assert.ok(isFileAt(PKG_ROOT, file), `对照测试指针不存在: ${pointer}（契约 ${row.id}）`);
+    }
+    for (const carrier of [...row.docs, ...row.entry.carriers]) {
+      assert.ok(isFileAt(PKG_ROOT, carrier), `登记/入口文档不存在: ${carrier}（契约 ${row.id}）`);
+    }
+  }
+});
+
+test('breakage simulation: 披露段缺触发条件锚点即红（触发入口不是只记录不执行）', (t) => {
+  const trigger = 'before dispatching the next round';
+  const registry = [contractRow('fix-loop', ['run/loop.md'], { trigger })];
+  const withTrigger = relocationRoot(t, {
+    'run/loop.md': '# Loop rules\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before dispatching the next round.\n',
+  });
+  assert.deepEqual(checkContractDocLocations(withTrigger, { registry }), []);
+  const withoutTrigger = relocationRoot(t, {
+    'run/loop.md': '# Loop rules\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before acting.\n',
+  });
+  const problems = checkContractDocLocations(withoutTrigger, { registry });
+  assert.ok(
+    problems.some((p) => p.includes('trigger')),
+    `缺触发条件锚点必须红，实得: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: 入口所在文档（carrier）缺失即红', (t) => {
+  const root = relocationRoot(t, {
+    'run/loop.md': '# Loop rules\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before dispatching the next round.\n',
+  });
+  const registry = [
+    contractRow('fix-loop', ['run/loop.md'], { carriers: ['run/missing-trunk.md'] }),
+  ];
+  const problems = checkContractDocLocations(root, { registry });
+  assert.ok(
+    problems.some((p) => p.includes('run/missing-trunk.md') && p.includes('missing')),
+    `入口文档缺失必须红，实得: ${JSON.stringify(problems)}`
+  );
+});
+
+test('relocation fixture: 派发交付契约搬到登记文档后，护栏跟随新位置（承重纪律丢失仍红）', (t) => {
+  const delivery = contractText('dispatch-delivery');
+  const root = relocationRoot(t, { 'run/dispatch.md': delivery });
+  const registry = [contractRow('dispatch-delivery', ['run/dispatch.md'])];
+  const relocated = resolveContractText(root, 'dispatch-delivery', { registry });
+  assert.equal(relocated, delivery, '登记位置决定取哪份文本');
+  // 同一份断言，新位置照样全绿。
+  assert.deepEqual(checkWorkflowScriptDelivery(relocated), []);
+  assert.deepEqual(checkDispatchScriptFiles(relocated), []);
+  // 承重纪律丢失：落盘目录约定消失 → 红。
+  const lostWfDir = relocated.replaceAll('/wf/', '/elsewhere/');
+  assert.notEqual(lostWfDir, relocated);
+  assert.ok(
+    checkDispatchScriptFiles(lostWfDir).some((p) => p.includes('/wf/')),
+    '落盘纪律丢失必须红'
+  );
+  // 围栏形态回潮（workflow: true）→ 红。
+  const fenced = relocated.replace('workflow: "./.pi/matt-implement/<slug>/wf/', 'workflow: true, // ');
+  assert.notEqual(fenced, relocated, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.ok(
+    checkWorkflowScriptDelivery(fenced).some((p) => p.includes('reply-fenced')),
+    '围栏形态回潮必须红'
+  );
+});
+
+test('breakage simulation: 主干没被 pi.skills 注册即红（披露入口自身的注册面）', () => {
+  assert.deepEqual(checkTrunkSkillRegistration({ pi: { skills: ['./SOMETHING-ELSE.md'] } }), [
+    `package.json: pi.skills does not register the trunk instruction doc (${TRUNK_DOC}) — 主干是披露入口的入口，未注册即整套指令不可达`,
+  ]);
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

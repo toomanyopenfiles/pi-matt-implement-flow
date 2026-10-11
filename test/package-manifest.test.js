@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { loadPackage, cleanupPackage, REPO_ROOT } = require('./fixtures/package-harness');
+const { TRUNK_DOC, contractDocPaths, checkContractDocsPackaged } = require('../scripts/registration-checks.js');
 
 after(cleanupPackage);
 
@@ -29,18 +30,41 @@ function walk(root, rel = '') {
 
 // 运行时目录：随包发布的生产代码与文档面。测试/文档草稿不在其中。
 const RUNTIME_DIRS = ['agents', 'extensions', 'scripts', 'audit-report'];
-const RUNTIME_FILES = ['SKILL.md'];
+// 运行文档根文件来自承重契约登记表（scripts/registration-checks.js 的 CONTRACT_DOCUMENTS）：
+// 指令搬迁时改登记表，打包闭包与契约可达检查原样跟随，不在这里再列一遍路径。
+const RUNTIME_FILES = [...new Set([TRUNK_DOC, ...contractDocPaths()])];
 // npm 恒随包附带的文件 + files 白名单根文件。
 const ALWAYS_INCLUDED = ['package.json', 'LICENSE', 'README.md', 'README.zh-CN.md', 'CHANGELOG.md'];
 
 test('tarball 清单闭包：运行时目录逐文件在场，无多无少——必需运行文件不只存在于源码 checkout', () => {
   const pkg = loadPackage();
   const expected = [
-    ...ALWAYS_INCLUDED,
-    ...RUNTIME_FILES,
-    ...RUNTIME_DIRS.flatMap((d) => walk(REPO_ROOT, d)),
+    ...new Set([
+      ...ALWAYS_INCLUDED,
+      ...RUNTIME_FILES,
+      ...RUNTIME_DIRS.flatMap((d) => walk(REPO_ROOT, d)),
+    ]),
   ].sort();
   assert.deepEqual(pkg.files, expected, 'tarball 文件集 = 恒附带文件 + 运行时目录闭包');
+});
+
+test('tarball 清单：承重契约的权威文档全部入包（登记表 → 安装后可达）', () => {
+  const pkg = loadPackage();
+  assert.deepEqual(checkContractDocsPackaged(pkg.files), []);
+});
+
+test('breakage simulation: 契约文档搬到未打包目录即红（遗漏打包负例）', () => {
+  const pkg = loadPackage();
+  const relocated = [
+    { id: 'fix-loop', contract: 'fixture row', docs: ['docs/run/loop.md'], previous: [TRUNK_DOC], tests: [] },
+  ];
+  const problems = checkContractDocsPackaged(pkg.files, { registry: relocated });
+  assert.ok(
+    problems.some((p) => p.includes('docs/run/loop.md') && p.includes('not in the tarball')),
+    `遗漏打包必须红，实得: ${JSON.stringify(problems)}`
+  );
+  // 对照：同一 checker 对真实登记表在真实 tarball 上全绿。
+  assert.deepEqual(checkContractDocsPackaged(pkg.files), []);
 });
 
 test('tarball 清单：私有区与开发草稿不入包（.pi/.scratch/test/docs/CI 配置/归档/凭证）', () => {

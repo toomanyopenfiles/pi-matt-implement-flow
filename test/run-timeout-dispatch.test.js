@@ -9,9 +9,15 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+const { resolveContractText } = require('../scripts/registration-checks.js');
+const { relocationRoot, contractRow } = require('./fixtures/contract-docs.js');
+
 const ROOT = path.resolve(__dirname, '..');
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const axisScript = fs.readFileSync(path.join(ROOT, 'scripts/axis-axes.js'), 'utf8');
+// 派发模板按契约 id 取（权威位置见 scripts/registration-checks.js 的 CONTRACT_DOCUMENTS）：
+// 模板搬迁时改登记表，本边界测试与断言原样跟随，不在这里写死文件路径。
+const dispatchTemplates = () => resolveContractText(ROOT, 'dispatch-templates');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'timeout-dispatch-'));
@@ -56,7 +62,7 @@ function dispatchBoundary() {
 
 test('all fresh top-level workflow templates send the latest A → B value to the dispatch boundary', async (t) => {
   const f = fixture(t);
-  const skill = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf8');
+  const skill = dispatchTemplates();
   const blocks = [...skill.matchAll(/```js\n([\s\S]*?)\n```/g)].map((m) => m[1]);
   const fresh = blocks.filter((block) => /agent:\s*"pi-matt-implement-flow\./.test(block));
   assert.equal(fresh.length, 4, 'ticket coder/reviewer, integration fixer, final fixer');
@@ -93,7 +99,7 @@ test('the actual retained-resume template sends no timeout override after a sett
   const f = fixture(t);
   setTimeoutValue(f, 28800000);
   assert.equal(resolve(f).timeoutMs, 28800000);
-  const skill = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf8');
+  const skill = dispatchTemplates();
   const resume = [...skill.matchAll(/```js\n([\s\S]*?)\n```/g)].map((m) => m[1]).find((block) => block.includes('resume:'));
   assert.ok(resume);
   const boundary = dispatchBoundary();
@@ -102,6 +108,25 @@ test('the actual retained-resume template sends no timeout override after a sett
   assert.equal(boundary.items[0].resume, '<coderRunId>');
   assert.equal(Object.hasOwn(boundary.items[0], 'timeoutMs'), false);
   assert.equal(Object.hasOwn(boundary.items[0], 'maxRuntimeMs'), false);
+});
+
+test('relocation fixture: 模板搬到登记文档后，派发边界仍执行同一份脚本（字段错误在边界现形）', async (t) => {
+  const templates = dispatchTemplates();
+  const root = relocationRoot(t, { 'run/dispatch.md': templates });
+  const registry = [contractRow('dispatch-templates', ['run/dispatch.md'])];
+  const relocated = resolveContractText(root, 'dispatch-templates', { registry });
+  assert.equal(relocated, templates, '登记位置决定取哪份模板文本');
+  const script = [...relocated.matchAll(/```js\n([\s\S]*?)\n```/g)]
+    .map((m) => m[1])
+    .find((block) => /agent:\s*"pi-matt-implement-flow\./.test(block));
+  assert.ok(script, '模板围栏仍在');
+  const boundary = dispatchBoundary();
+  await new AsyncFunction('runs', script)(boundary.runs);
+  assert.deepEqual(boundary.items.map((item) => item.timeoutMs), [14400000], '模板里的值照常送达派发边界');
+  // 字段错误：派发字段被拿掉 → 边界收到缺失值（同一套断言在搬迁后仍有牙齿）。
+  const broken = dispatchBoundary();
+  await new AsyncFunction('runs', script.replace('timeoutMs: RUN_TIMEOUT_MS,', ''))(broken.runs);
+  assert.equal(Object.hasOwn(broken.items[0], 'timeoutMs'), false, '字段错误在派发边界可见');
 });
 
 test('axis script refuses missing or invalid deadlines before launching either child', async () => {
