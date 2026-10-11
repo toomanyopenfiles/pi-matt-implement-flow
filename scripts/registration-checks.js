@@ -57,8 +57,318 @@ function parseFrontmatter(text) {
   return frontmatter;
 }
 
-// --- 注册不变量：每条返回问题数组，空数组 = 通过 ---
+// ====================================================================
+// 承重契约 → 权威文档位置登记表（ticket 33：回归护栏支持指令搬迁）
+//
+// 静态合同的检查器只吃文本、不认文件名；测试经 resolveContractText / resolveContractCorpus
+// 按契约 id 取文本。指令搬迁 = 改本表的 docs（原位置记进 previous）：检查器、断言与派发
+// 边界测试原样跟随，测试里不再出现文件路径。
+//
+// 字段：
+// - id       契约名（检查器与测试按它取值）
+// - contract 契约一句话（对照/复核用；规则权威仍在文档，这里不是规则副本）
+// - docs     当前权威位置（包内相对路径；跨文档的契约按阅读顺序列出，文本按序拼接）
+// - previous 搬迁前的原位置（对照列；已搬走却仍留在主干的旧路径 = 悬空指针，检查即红）
+// - tests    对应测试（对照列，不参与执行）
+//
+// 披露入口纪律：docs 里非主干（SKILL.md）的文档必须由主干在某段以「触发条件 + 动作前
+// 读取」披露 —— 该段要含路径、且带 read/before 语义；入口缺失、只提名不要求动作前读取、
+// 目标过期、登记文档没落地，各自报红。只钉承重的路径与动作前读取语义，不锁标题措辞、
+// 行数或目录数量，也不以「拼接全部文档搜关键词」代替入口检查。
+// 边界：散文解释与「继续条件」措辞不定型，不做逐字断言；跨文档的小节断言随实际拆分
+// 调整检查对象与入口（检查器问题串里的 SKILL.md 是当前权威位置的名字），但不删断言、
+// 不删破坏模拟。
+// ====================================================================
+const TRUNK_DOC = 'SKILL.md';
 
+const CONTRACT_DOCUMENTS = [
+  {
+    id: 'coder-brief-worktree-reality',
+    contract: 'coder 简报的 Worktree reality 块、退役编排笔记指针、用户裁定的软围栏原句',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · coder brief carries the worktree-reality contract'],
+  },
+  {
+    id: 'preconditions-flow-config',
+    contract: '前置条件与流程形态冻结（reviewer/concurrency，无修复配额）',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · SKILL.md flow configuration and new init expose reviewer/concurrency'],
+  },
+  {
+    id: 'run-deadlines',
+    contract: '每次新派发携带新解析的运行时限、retained resume 零时限、门禁超时独立',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: [
+      'test/self-check.test.js · every new dispatch carries the freshly resolved run deadline',
+      'test/run-timeout-dispatch.test.js · all fresh top-level workflow templates send the latest A → B value',
+    ],
+  },
+  {
+    id: 'dispatch-templates',
+    contract: '六种派发形态的模板围栏与散文形态（派发边界执行检查的被测面）',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/run-timeout-dispatch.test.js · fresh templates / retained-resume template'],
+  },
+  {
+    id: 'coder-dispatch-typed-gate',
+    contract: '票据 coder 派发 = typed gate（gate 在场、无 acceptance 对象 / outputSchema）',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · anchor-1'],
+  },
+  {
+    id: 'dispatch-schema-copy',
+    contract: '派发 schema 副本与 mechanical-report 真源逐字一致',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · anchor-2'],
+  },
+  {
+    id: 'gate-commands',
+    contract: '每条机械报告门禁命令带 --base 与 --test-command',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · anchor-5'],
+  },
+  {
+    id: 'ledger-discipline',
+    contract: '台账/事件流/编排笔记三层写权、对账纪律、封账前同步',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · ledger / reconciliation / pre-seal sync 合同'],
+  },
+  {
+    id: 'round0',
+    contract: 'Round 0：图、分支、基线、环境勘测（勘测结论归编排笔记环境事实节）',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · Round 0 carries the environment-survey step'],
+  },
+  {
+    id: 'ticket-round',
+    contract: '认领、派发、结算、正式评审轮次独立与批准门看当前候选',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · formal review rounds are independent / ticket repairs'],
+  },
+  {
+    id: 'fix-loop',
+    contract: '修复轮 resume（acceptance: false、无 gate）与编排者手跑同一门禁命令',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · anchor-3、anchor-9'],
+  },
+  {
+    id: 'repair-decisions',
+    contract: '修复决策原则：证据与批准范围决定继续或请求用户，无次数停线',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · SKILL.md repair decisions use evidence and approved scope'],
+  },
+  {
+    id: 'human-handoff',
+    contract: '票级升级历史与异常处置证据归编排笔记，升级不是完成',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · human handoff / anomaly history 合同'],
+  },
+  {
+    id: 'cold-resume',
+    contract: '续跑：跳过 init 与拉取、再生对账、核验条件、恢复中断阶段',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · SKILL.md cold resume 合同'],
+  },
+  {
+    id: 'merge-close',
+    contract: '串行合并、集成修复纯判定 gate、验证通过后才合并记账与票完成',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · anchor-7、reconciliation before merge accounting'],
+  },
+  {
+    id: 'final-gate',
+    contract: '终审裁决、修复与重审、not_ready 拒正常封账、pre-seal sync',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · SKILL.md final repairs / pre-seal sync 合同'],
+  },
+  {
+    id: 'partial-delivery',
+    contract: '阶段性交付：保持未封账与续跑证据，只续剩余范围',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · SKILL.md partial delivery 合同'],
+  },
+  {
+    id: 'user-abandonment',
+    contract: '用户放弃：停子代理、保存成果、abandon 同步成功后封账',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · SKILL.md user abandonment 合同'],
+  },
+  {
+    id: 'briefs',
+    contract: '五套简报模板、零报告职责、承重收尾句（SHA 报告与提交纪律）',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · anchor-4、anchor-8'],
+  },
+  {
+    id: 'hard-rules',
+    contract: '硬规则：不写 feature code、合并 token、裁决值、单写者、封账不可逆',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · anchor-6'],
+  },
+  {
+    id: 'dispatch-delivery',
+    contract: '派发交付形态：脚本先落盘新文件、再以文件路径调用',
+    docs: ['SKILL.md'],
+    previous: ['SKILL.md'],
+    tests: ['test/self-check.test.js · dispatch delivery（issue #9）'],
+  },
+  {
+    id: 'axis-run-timeout-settings',
+    contract: '双轴派发前的运行时限解析规则（reviewer 只读面，主干披露入口）',
+    docs: ['scripts/run-timeout-settings.md'],
+    previous: ['scripts/run-timeout-settings.md'],
+    tests: [
+      'test/self-check.test.js · reviewer and final-reviewer axis-spawn contract',
+      'test/package-manifest.test.js · tarball 清单闭包',
+    ],
+  },
+];
+
+function contractEntry(id, registry = CONTRACT_DOCUMENTS) {
+  const entry = registry.find((e) => e.id === id);
+  if (!entry) {
+    throw new Error(`unknown contract id: ${id} — 先在 CONTRACT_DOCUMENTS 登记契约与其权威位置`);
+  }
+  return entry;
+}
+
+// 登记表里的全部权威文档路径（按登记顺序去重）：语料拼接与打包面共用同一份清单。
+function contractDocPaths(registry = CONTRACT_DOCUMENTS) {
+  const paths = [];
+  for (const entry of registry) {
+    for (const doc of entry.docs) {
+      if (!paths.includes(doc)) paths.push(doc);
+    }
+  }
+  return paths;
+}
+
+// 按契约 id 取权威文本：位置由登记表决定，检查器与测试都不认文件名。
+function resolveContractText(root, id, { registry = CONTRACT_DOCUMENTS, readText: read = readText } = {}) {
+  return contractEntry(id, registry)
+    .docs.map((doc) => read(root, doc))
+    .join('\n');
+}
+
+// 全部登记文档按登记顺序拼接的语料：供全局散文/禁用词扫描使用。
+// 导航不靠它裁定——位置与入口另有 checkContractDocLocations。
+function resolveContractCorpus(root, { registry = CONTRACT_DOCUMENTS, readText: read = readText } = {}) {
+  return contractDocPaths(registry)
+    .map((doc) => read(root, doc))
+    .join('\n');
+}
+
+// 入口语义（启发式，只钉承重点）：同一段里出现路径，且带「读」与「动作前」两个词。
+// 释义与「继续条件」的措辞不定型，不做逐字断言；标题、行数、目录数量一概不锁。
+const ENTRY_READ_CUE = /\b(read|reads|re-reads|rereads|load|loads|consult|consults|follow|follows)\b/i;
+const ENTRY_BEFORE_CUE = /\bbefore\b/i;
+
+function paragraphNaming(text, doc) {
+  return text.split(/\n\s*\n/).find((block) => block.includes(doc)) ?? null;
+}
+
+// 契约位置与披露入口：登记文档必须存在；非主干文档必须由主干在某段以「触发条件 +
+// 动作前读取」披露；主干不得仍指向已搬迁的旧路径。
+function checkContractDocLocations(root, {
+  registry = CONTRACT_DOCUMENTS,
+  isFile = isFileAt,
+  readText: read = readText,
+} = {}) {
+  const problems = [];
+  for (const entry of registry) {
+    for (const doc of entry.docs) {
+      if (!isFile(root, doc)) {
+        problems.push(
+          `registered contract doc is missing: ${doc} (contract ${entry.id}) — 权威位置不存在，搬迁没落地`
+        );
+      }
+    }
+  }
+  let trunk;
+  try {
+    trunk = read(root, TRUNK_DOC);
+  } catch (e) {
+    return [...problems, `trunk doc is unreadable: ${TRUNK_DOC} (${e.message}) — 披露入口的入口缺失`];
+  }
+  const disclosed = new Set();
+  for (const entry of registry) {
+    for (const doc of entry.docs) {
+      if (doc === TRUNK_DOC || disclosed.has(doc)) continue;
+      const block = paragraphNaming(trunk, doc);
+      if (block === null) {
+        problems.push(
+          `${TRUNK_DOC} does not disclose ${doc} before the action (contract ${entry.id}) — 非主干权威文档必须由主干在动作前披露：触发条件 + 读取入口`
+        );
+        continue;
+      }
+      if (!ENTRY_READ_CUE.test(block) || !ENTRY_BEFORE_CUE.test(block)) {
+        problems.push(
+          `${TRUNK_DOC} entry for ${doc} names the path but not the pre-action read (contract ${entry.id}) — 入口要说明何时读、动作前读，提名不等于披露`
+        );
+        continue;
+      }
+      disclosed.add(doc);
+    }
+    for (const old of entry.previous ?? []) {
+      if (entry.docs.includes(old)) continue;
+      if (trunk.includes(old)) {
+        problems.push(
+          `${TRUNK_DOC} still points at the superseded location ${old} (contract ${entry.id}) — 入口目标错误：权威位置是 ${entry.docs.join(', ')}`
+        );
+      }
+    }
+  }
+  return problems;
+}
+
+// 主干就是 pi.skills 注册的技能文件：披露入口自身必须有注册面，否则整套指令不可达。
+function checkTrunkSkillRegistration(manifest, { trunk = TRUNK_DOC } = {}) {
+  const declared = manifest?.pi?.skills ?? [];
+  const registered = Array.isArray(declared)
+    ? declared.map((entry) => String(entry).replace(/^\.\//, ''))
+    : [];
+  return registered.includes(trunk)
+    ? []
+    : [
+        `package.json: pi.skills does not register the trunk instruction doc (${trunk}) — 主干是披露入口的入口，未注册即整套指令不可达`,
+      ];
+}
+
+// 打包面：登记表的每份权威文档都必须在真实 tarball 清单里（安装后可达），
+// 不只存在于源码 checkout。
+function checkContractDocsPackaged(packedFiles, { registry = CONTRACT_DOCUMENTS } = {}) {
+  const problems = [];
+  for (const doc of contractDocPaths(registry)) {
+    if (packedFiles.includes(doc)) continue;
+    const owners = registry.filter((e) => e.docs.includes(doc)).map((e) => e.id).join(', ');
+    problems.push(
+      `contract doc is not in the tarball: ${doc} (contract ${owners}) — 安装后不可达：files 白名单或目录需覆盖它`
+    );
+  }
+  return problems;
+}
+
+// --- 注册不变量：每条返回问题数组，空数组 = 通过 ---
 // 不变量 1：pi.skills 声明的每个字面路径都指向真实存在的文件。
 function checkSkillFileRegistration(manifest, { isFile = isFileAt } = {}) {
   const problems = [];
@@ -286,6 +596,14 @@ function checkAgentTimeouts(agentFrontmatter) {
 module.exports = {
   PKG_ROOT,
   AGENT_NAMES,
+  TRUNK_DOC,
+  CONTRACT_DOCUMENTS,
+  contractDocPaths,
+  resolveContractText,
+  resolveContractCorpus,
+  checkContractDocLocations,
+  checkTrunkSkillRegistration,
+  checkContractDocsPackaged,
   readPackageJson,
   readText,
   isFileAt,

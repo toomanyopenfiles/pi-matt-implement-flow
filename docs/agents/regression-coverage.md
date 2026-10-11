@@ -17,6 +17,7 @@
 基线（2026-10-08，`113df1ea`）：`npm test` = 483/483 通过（macOS x86_64，Node v24.19.0，
 约 205 秒）。阶段 B 补齐后：495/495（含 2 条产品缺陷回归 + 10 条包级测试）。
 issue #26（运行时限）补齐后：514/514；补齐 axis 时限透传与派发参数测试后：520/520。
+ticket 33 前基线（`289981f1`）：520/520 通过（186 秒）；指令搬迁护栏落地后：530/530。
 `test/repro-reviewer-axes.js`（真实模型探针）不在 `npm test` 与 CI 内。
 
 ## 主体功能矩阵
@@ -32,6 +33,7 @@ issue #26（运行时限）补齐后：514/514；补齐 axis 时限透传与派�
 | 词表映射 | label→canonical 五角色、closed→Status、type 来源按契约词表 | `tracker-sync-core.test.js` · "状态映射矩阵"、"类型映射" 系列 | 单元 | 改名词表参数化同口径；大小写不敏感；词表违约报错含文件+行+列+期望 | — |
 | 阻塞边与快照 | 正文行与 native 边合并；快照转写逐字节确定 | `tracker-sync-core.test.js` · "阻塞映射"、"转写确定性"；`snapshot-core.test.js` · "planSnapshot" 系列；`snapshot-cli.test.js` · 13 用例 | 单元 + CLI 黑盒 | 三层定界（sub-issues→Parent 反查→init 清单）；拉取失败 best-effort 警告 | 真实 GitHub/GitLab API 形态（桩替代） |
 | 工作树隔离与派发合同 | coder/reviewer/final-reviewer 派发形态、typed gate、双轴稳定 key | `self-check.test.js` · anchor-1/2/7/8、issue #6/#9 合同 + breakage 系列 | 静态合同 | 断言逐字锚点与派发块结构；破坏模拟即红 | **非行为证据**：不证明平台接受派发或子代理遵守 |
+| 指令权威位置与披露入口（ticket 33） | 承重契约的权威文档位置、主干披露入口（触发条件 + 动作前读取）、打包可达；指令搬迁时护栏跟随新位置 | `self-check.test.js` · contract registry 3 用例、relocation fixture 2 用例、入口/目标/位置 breakage；`package-manifest.test.js` · 清单闭包 + 契约入包 + 遗漏打包负例；`run-timeout-dispatch.test.js` · 模板边界（含搬迁 fixture） | 静态合同 + 包级系统 + workflow 派发边界 | 位置取自 `scripts/registration-checks.js` 的 `CONTRACT_DOCUMENTS`（检查器与测试不写文件路径）；入口缺失 / 只提名不要求动作前读取 / 错误目标 / 权威位置缺失 / 承重规则丢失 / 派发字段错误 / 遗漏打包各自红 | **非行为证据**：不证明模型会在动作前读取或按入口导航；只钉路径与动作前读取语义，不锁标题、行数、目录数量；释义与继续条件措辞不定型 |
 | 串行合并事实核验 | merge 前 git 交叉核对（存在/祖先/令牌/headSha） | `ledger-cli.test.js` · "merge git 交叉核对"、"merge 门" | CLI 黑盒 | 四类矛盾全拒绝；历史不变 | — |
 | reviewer on/off 与批准门 | on 时无 approved 不可合并；off 语义保留 | `ledger-cli.test.js` · "reviewer=off"、"merge 门"、"最新正式裁决才是批准门" | CLI 黑盒 | 旧 approved/notes/anomaly 不覆盖后续阻塞裁决 | 真实 reviewer 裁决质量 |
 | 修复编号与独立评审轮次 | fixNo 顺序尝试、评审轮次独立、同票同轮去重 | `ledger-cli.test.js` · "fix 尝试无默认配额"、"结算被拒（坏 SHA）不归零 fixNo"、"无新增 fix 可正式重评…" | CLI 黑盒 | 不以 fix 数推导轮次；非法正数拒绝 | — |
@@ -45,6 +47,16 @@ issue #26（运行时限）补齐后：514/514；补齐 axis 时限透传与派�
 | 历史兼容 | 旧预算/旧 close 无 outcome/旧信封只读可读 | `ledger-cli.test.js` · "旧封账 run 的预算…"、"旧账兼容" 3 用例；`audit-report.test.js` · "旧 close 缺 outcome 不猜历史意图" | CLI 黑盒 + 单元 | 不覆写旧设置/事件；不补造历史意图 | — |
 | 审计报告 | 双语、证据缺失降级、历史与当前状态分离 | `audit-report.test.js` · 34 用例（i18n 键集奇偶、lang=en、风险分级） | 单元 | 死 runRef 不衍生风险；降级不崩溃 | 平台证据探测（契约能力缺失恒 unknown） |
 | 打包文件清单与包内入口 | tarball 含必需文件、不含私有/开发文件、包内引用可达 | `package-manifest.test.js` · 清单闭包/私有区排除/pi 注册面/模块图/入口烟测 5 用例；`package-system.test.js` · 5 场景 | 包级系统 | 闭包=恒附带文件+运行时目录逐文件；CJS/ESM/函数体三重加载边界各过各的检查 | 真实平台派发不受影响（与行为层边界相同） |
+
+## 指令契约登记表（ticket 33 的行为契约对照）
+
+承重契约 → 权威位置的对照是**代码里的单一来源**：`scripts/registration-checks.js` 的
+`CONTRACT_DOCUMENTS`（`id` / `contract` / `docs` 当前权威位置 / `previous` 原位置 / `tests` 对应测试）。
+检查器与测试经 `resolveContractText`、`resolveContractCorpus` 按契约 id 取文本，测试里不再写文件路径；
+本文件不复制这张表（对照是本次重构的验收证据，不是第二份运行协议）。当前布局：指令仍在主干
+`SKILL.md`，只有双轴运行时限设置文档（`scripts/run-timeout-settings.md`）是非主干权威文档，
+由主干在动作前披露。搬迁时改登记表并把原位置记进 `previous`；跨文档的小节断言随拆分调整
+检查对象与入口，但不删断言、不删破坏模拟。
 
 ## 本轮揭示并修复的产品缺陷（包级回归逼出）
 
