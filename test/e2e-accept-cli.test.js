@@ -514,15 +514,43 @@ test('探针自带边界与绕过说明：声明局部探针性质，直跑时�
 // 披露指针读它；闭包真的缺契约仍判明确失败——集中化不放松断言。全部用桩平台，零模型调用。
 // ====================================================================
 
+// 探针的运行依赖闭包：探针自身 + 它在包内相对 require 的模块（票 35 起结果聚合单源在
+// test/e2e/lib/result.js）。合成包树要按相对位置整份摆全：少摆一份，探针在模块加载阶段
+// 就崩，判定器连定义闭包事实都看不到（那不是「缺契约」的明确失败，是装置自伤）。
+function copyProbeClosure(dstRoot) {
+  const stack = [PROBE];
+  const copied = new Set();
+  while (stack.length > 0) {
+    const src = stack.pop();
+    const rel = path.relative(REPO_ROOT, src);
+    if (copied.has(rel)) continue;
+    assert.ok(!rel.startsWith('..'), `探针依赖逃出仓库：${rel}`);
+    copied.add(rel);
+    const dest = path.join(dstRoot, rel);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(src, dest);
+    for (const m of fs.readFileSync(src, 'utf8').matchAll(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g)) {
+      stack.push(resolveModuleFile(path.resolve(path.dirname(src), m[1])));
+    }
+  }
+  return copied;
+}
+
+// 相对 require 的常见解析口径（原样 / .js / index.js）；找不到即装置故障，不静默跳过。
+function resolveModuleFile(base) {
+  for (const c of [base, `${base}.js`, path.join(base, 'index.js')]) {
+    if (fs.existsSync(c)) return c;
+  }
+  assert.fail(`合成包树找不到探针依赖模块：${base}`);
+}
+
 // 合成包树：探针按自身位置解析包根（__dirname/../../..），于是被测「定义 + 披露文档」
 // 可以逐例给。平台二进制仍用桩（调用边界桩，记不记录都不影响本组断言）。
 function probeTree({ entry, protocol }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-closure-'));
-  const probeDir = path.join(root, 'test', 'e2e', 'probes');
-  fs.mkdirSync(probeDir, { recursive: true });
   fs.mkdirSync(path.join(root, 'agents'));
   fs.mkdirSync(path.join(root, 'scripts'));
-  fs.copyFileSync(PROBE, path.join(probeDir, 'repro-reviewer-axes.js'));
+  copyProbeClosure(root);
   fs.writeFileSync(path.join(root, 'agents', 'reviewer.md'), entry);
   if (protocol != null) fs.writeFileSync(path.join(root, 'scripts', 'review-protocol.md'), protocol);
   const tmp = path.join(root, 'tmp');
@@ -530,7 +558,7 @@ function probeTree({ entry, protocol }) {
   const piBin = path.join(tmp, 'pi');
   fs.copyFileSync(STUB_PI, piBin);
   fs.chmodSync(piBin, 0o755);
-  return { root, probe: path.join(probeDir, 'repro-reviewer-axes.js'), tmp, piBin };
+  return { root, probe: path.join(root, 'test', 'e2e', 'probes', 'repro-reviewer-axes.js'), tmp, piBin };
 }
 
 function runProbe(tree) {
