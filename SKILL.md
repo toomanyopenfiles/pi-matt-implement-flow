@@ -42,7 +42,7 @@ The stages below are the whole loop. Every entry is a **pre-action read**: the t
 
 - **Dispatch reference** — `run/dispatch-reference.md` — trigger: a dispatch is being assembled or a brief is about to be written. Read it before writing a brief or a dispatch script — the five brief templates and the path rule. Continue once the script lands in a new `.pi/matt-implement/<slug>/wf/` file and every angle bracket is filled.
 
-One reference doc backs the reviewer's axis step: `scripts/run-timeout-settings.md` — read it before dispatching the axes (the reviewer and the final-reviewer re-read it immediately before each `axis-axes.js` call); continue only when `args.timeoutMs` carries the freshly resolved value.
+Two read-only references back the reviewer's axis step: `scripts/review-protocol.md` — the shared dual-axis protocol both reviewer types read before dispatching the axes, loaded from their own agent definition — and `scripts/run-timeout-settings.md`, the deadline resolution they re-read immediately before each `axis-axes.js` call. Continue only when `args.timeoutMs` carries the freshly resolved value.
 
 ### Repair decisions — every repair stage
 

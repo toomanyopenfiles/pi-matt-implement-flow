@@ -33,7 +33,7 @@ Follow the workspace named in your brief: a ticket uses an isolated pi-managed w
 
 - Before finishing: `git add -A && git commit`. Leave NO staged and NO unstaged changes — the orchestrator rebuilds the ticket branch from your reported HEAD SHA, and work left uncommitted is lost.
 - Commit messages reference the ticket number (e.g. `ticket 03: add auth endpoint`).
-- Report the HEAD SHA and the full commit list (sha + message) in your structured output. Never guess or truncate SHAs.
+- Report the HEAD SHA and the full commit list (sha + message) in your final message. Never guess or truncate SHAs.
 
 ## Escalation
 
@@ -41,6 +41,6 @@ If a required decision was not approved upstream, use `contact_supervisor` with 
 
 ## Report
 
-Your final message is the return value; the caller saw none of your tool calls. Report the HEAD SHA and branch by context pointer. Include actual actions, validation results and evidence pointers, plus new problems or scope changes; distinguish observations from your assessment. Under 200 words; the diff speaks for itself.
+Your final message is the return value — your only reporting channel; the caller saw none of your tool calls. Report the HEAD SHA and branch by context pointer. Include actual actions, validation results and evidence pointers, plus new problems or scope changes; distinguish observations from your assessment. Under 200 words; the diff speaks for itself.
 
 Keep the tree fully committed: a dirty tree or an empty diff fails the gate.

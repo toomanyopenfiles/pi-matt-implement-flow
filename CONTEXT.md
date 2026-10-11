@@ -224,6 +224,18 @@ ticket 36 把编排指令拆成两层：**主干** `SKILL.md` 常驻（角色、
 `<this-package>/` 前缀，安装后可达（源码树里可达不算）。搬迁与精简分阶段提交：原样搬迁
 （ticket 36）与措辞精简（ticket 38）各自可回退；拆分本身不改变生产编排语义。
 
+### 共享评审协议（shared review protocol）
+
+ticket 37 把两类 reviewer——逐票 `pi-matt-implement-flow.reviewer` 与整支
+`pi-matt-implement-flow.final-reviewer`——共有的部分集中到一份**只读运行文档**
+`scripts/review-protocol.md`（随包发货，与 `axis-axes.js` 同目录；**普通运行文档，不是 skill**）：
+传输件路径形态、阻塞双轴派发（一次顶层调用、稳定轴标识 `standards`/`spec`、脚本文件路径交付）、
+两轴都返回后才能裁决、最新运行时限与主仓库配置指针（指向 `scripts/run-timeout-settings.md`）、
+证据过滤与严重度纪律、不跨轴合并排名、升级边界。**角色范围仍住在各自的 agent 定义里**：
+逐票裁决（approved / changes_requested）与整支裁决（ready / ready_with_fixes / not_ready）、
+跨票检查与延期 findings 处置、标准来源定位责任、只读面与加载入口——共享协议不复述这些。
+入口是两份 agent 定义自身（平台按注册名加载时读到「读它」的段落），主干只披露「两轴前读它」这一层。
+
 ### 承重契约登记表（contract registry）
 
 `scripts/registration-checks.js` 的 `CONTRACT_DOCUMENTS`：承重契约 → 权威文档位置的单一来源
@@ -233,6 +245,8 @@ ticket 36 把编排指令拆成两层：**主干** `SKILL.md` 常驻（角色、
 改这张表**：检查器、断言与打包闭包原样跟随；表里只有位置、入口与测试指针，不承载规则副本。
 注册事实（agent frontmatter）与可执行派发脚本按各自的注册面/包布局读，不在本表内。
 拆分布局下（ticket 36）多数契约的权威位置是 `run/` 阶段操作文档，主干在动作前披露；
+ticket 37 起共同评审协议住在 `scripts/review-protocol.md`，入口是两份 reviewer agent 定义
+（登记行的 `previous` 记下它原来就住在这两份定义里）。
 检查器问题串里的 `SKILL.md` 是「被检查的指令文本」的稳定标签，位置一律以本表为准。
 
 ### 披露入口（disclosure entry）
@@ -240,8 +254,8 @@ ticket 36 把编排指令拆成两层：**主干** `SKILL.md` 常驻（角色、
 把权威文档与动作前加载面接起来的一段：`entry.carriers` 是动作前加载的文档（主干 / agent 定义
 等加载面），`entry.trigger` 是触发条件。登记文档只要不在 carriers 内，carriers 就必须有一处披露段
 同时说明路径、触发条件（含 trigger 锚点）与「动作前读取」（段内有读与动作前的语义）；入口缺失、
-只提名不要求动作前读取、缺触发条件、入口文档没落地、主干仍指向已搬迁的旧路径，都算契约失守
-（旧路径检查只扫入口文档——主干与 agent 定义；搬迁后的文档正文可以正常点名主干）。
+只提名不要求动作前读取、缺触发条件、入口文档没落地、入口文档仍指向已搬迁的旧路径，都算契约失守
+（旧路径检查逐份扫登记行的 carriers——主干与 agent 定义都在内；搬迁后的文档正文可以正常点名主干）。
 检查只钉路径、触发条件与动作前读取语义，不锁标题措辞、行数或目录数量，也不用「拼接全部文档
 搜关键词」代替入口裁定（释义与继续条件的措辞不定型，不做逐字断言）。
 

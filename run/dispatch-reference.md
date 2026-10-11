@@ -31,8 +31,9 @@ You are in your own pi-managed worktree on your own branch based at that commit;
 ```
 Ticket 07 (ticket file: <absolute main-repo path>). Spec: <absolute main-repo path>.
 Review bundle: <absolute main-repo path>/.pi/matt-implement/<slug>/reviews/07-r1.diff (three-dot diff + commit list against base <sha>).
-Implementer's report: the typed-gate report (`headSha` <sha>, `testResult` <one-line summary>) — mechanical gate evidence.
+Gate evidence: the typed-gate report (`headSha` <sha>, `testResult` <one-line summary>) — mechanical gate evidence.
 Axis script: <absolute path to this package>/scripts/axis-axes.js (read-only) — you spawn both axes through it.
+Shared protocol: <absolute path to this package>/scripts/review-protocol.md (read-only) — read it before dispatching the axes; both reviewer types follow it.
 Run timeout settings: user: <absolute user settings path>; project: <absolute main-repo project settings path or null> (read-only; from run-timeout --settings-paths). Read these again immediately before spawning the axes.
 Your worktree is checked out at refs/heads/ticket-07 — the post-change tree. Read the changed files there; review-bundle and findings paths are main-repo paths (read-only).
 
