@@ -19,6 +19,9 @@ const path = require('node:path');
 
 const { ledgerState, trackerState } = require('./flow-fixture');
 
+const REVIEWER = 'pi-matt-implement-flow.reviewer';
+const FINAL = 'pi-matt-implement-flow.final-reviewer';
+
 function walk(dir, out = []) {
   let entries;
   try {
@@ -63,9 +66,15 @@ function actionOfCommand(cmd) {
   if (/\bsync\b/.test(cmd)) return 'sync';
   if (/\badd\s+merge\b/.test(cmd)) return 'merge';
   if (/\badd\s+final\b/.test(cmd)) return 'final-review';
+  if (/\badd\s+verdict\b/.test(cmd)) return 'verdict';
   if (/\badd\s+fix\b/.test(cmd)) return 'fix-dispatch';
   if (/\bclose\b/.test(cmd)) return 'seal';
   return null;
+}
+
+function flagOf(cmd, flag) {
+  const m = cmd.match(new RegExp(`--${flag}\\s+(\\S+)`));
+  return m ? m[1] : null;
 }
 
 function ticketOfCommand(cmd, fallback = null) {
@@ -84,11 +93,28 @@ function inspectDispatch(workflowPath, sessionDir, fixtureDir) {
     let text = null;
     try { text = fs.readFileSync(c, 'utf8'); } catch { continue; }
     const agent = (text.match(/agent:\s*['"]([\w.-]+)['"]/) || [])[1] || null;
-    const axis = /axis-axes|runs\.all/.test(text) || /['"](standards|spec)['"]/.test(text);
+    const axisKeys = ['standards', 'spec'].filter((k) => text.includes(`'${k}'`) || text.includes(`"${k}"`));
+    const axis = /axis-axes|runs\.all/.test(text) || axisKeys.length > 0;
     const resume = /resume|acceptance:\s*false/i.test(text);
-    return { agent, axis, resume, file: c };
+    return { agent, axis, axisKeys, resume, file: c };
   }
-  return { agent: null, axis: false, resume: false, file: null };
+  return { agent: null, axis: false, axisKeys: [], resume: false, file: null };
+}
+
+const REVIEWER_VALUES = ['approved', 'changes_requested'];
+const FINAL_VALUES = ['ready', 'ready_with_fixes', 'not_ready'];
+const VERDICT_RE = /verdict\s*[:：]?\s*`?([a-z_]+)`?/i;
+
+// reviewer 类角色的裁决值来自它的回复文本（角色的输出本身就是裁决）；
+// 值不在词表内就不记，绝不猜。
+function extractVerdict(text, roleExercise) {
+  const m = String(text || '').match(VERDICT_RE);
+  if (!m) return null;
+  const value = m[1].toLowerCase();
+  if (roleExercise === 'final-reviewer' || FINAL_VALUES.includes(value)) {
+    return FINAL_VALUES.includes(value) ? { role: roleExercise ? FINAL : FINAL, value } : null;
+  }
+  return REVIEWER_VALUES.includes(value) ? { role: roleExercise ? REVIEWER : REVIEWER, value } : null;
 }
 
 // 采集一次真实会话 + 现场 → 轨迹。
@@ -108,6 +134,10 @@ function harvestTrace({ def, fx, sessionDir }) {
   let lastValidation = null; // 'pass' | 'fail' | null
   let sessionSealed = false;
   let sawDispatchWithoutAgent = false;
+  let pendingAxisKeys = []; // 阻塞式双轴派发：调用返回 = 两轴都已完成
+  let sawNonBlockingAxis = false;
+  let sawUnknownAxisAsync = false;
+  let lastSyncIdx = -1;
 
   for (const { rec } of records) {
     const m = rec.message;
@@ -123,8 +153,14 @@ function harvestTrace({ def, fx, sessionDir }) {
           const action = actionOfCommand(cmd);
           if (action === 'merge') {
             push({ kind: 'merge', ticket: ticketOfCommand(cmd), validated: lastValidation === 'pass', source: 'ledger-add' }, ts);
+          } else if (action === 'verdict') {
+            push({ kind: 'verdict', role: REVIEWER, value: flagOf(cmd, 'verdict'), ticket: ticketOfCommand(cmd), round: flagOf(cmd, 'round'), source: 'ledger-add' }, ts);
+          } else if (action === 'final-review') {
+            push({ kind: 'verdict', role: FINAL, value: flagOf(cmd, 'final-verdict'), source: 'ledger-add' }, ts);
+            push({ kind: 'action', action: 'final-review', source: 'ledger-add' }, ts);
           } else if (action) {
             push({ kind: 'action', action, ticket: ticketOfCommand(cmd), outcome: /--outcome\s+(\S+)/.exec(cmd)?.[1] || null }, ts);
+            if (action === 'sync') lastSyncIdx = events.length - 1;
             if (action === 'seal') sessionSealed = true;
           } else if (/\bgit\s+merge\b/.test(cmd)) {
             const ticket = (cmd.match(/ticket-(\d+)/) || [])[1] || null;
@@ -140,28 +176,71 @@ function harvestTrace({ def, fx, sessionDir }) {
           const args = c.arguments || {};
           const info = inspectDispatch(args.workflow || null, sessionDir, fx.projectDir);
           if (!info.agent) sawDispatchWithoutAgent = true;
-          push({ kind: 'dispatch', agent: info.agent, axis: Boolean(args.axis) || info.axis, resume: info.resume, file: info.file, ticket: (String(args.task || '').match(/ticket[- ]?(\d+)/i) || [])[1] || null }, ts);
+          // async 值的实际形态：调用立即返回（true）时，返回不代表两轴完成——issue #6 的失效
+          // 条件；这里如实记下来，判定器便不会把「早返回」当成「等到轴完成」。
+          const asyncArg = args.async === true || args.async === 'true';
+          push({
+            kind: 'dispatch', agent: info.agent, axis: Boolean(args.axis) || info.axis, resume: info.resume,
+            file: info.file, async: asyncArg, ticket: (String(args.task || '').match(/ticket[- ]?(\d+)/i) || [])[1] || null,
+          }, ts);
+          if (info.axis && info.axisKeys.length) {
+            // 只有明确 async:false（阻塞）时，调用返回才等于两轴完成；没带 async 值时
+            // 不能拿返回当证据——一律如实标进不确定性。
+            if (args.async === undefined) sawUnknownAxisAsync = true;
+            else if (asyncArg) sawNonBlockingAxis = true;
+            else pendingAxisKeys = info.axisKeys;
+          }
         }
         if (c.type === 'toolCall' && /^(write|edit)$/.test(c.name || '')) {
           const p = (c.arguments || {}).path || (c.arguments || {}).file_path || null;
           push({ kind: 'write', actor: (fx.facts.roleExercise || 'orchestrator'), path: p ? String(p) : null }, ts);
         }
       }
-      // 收场声称：只取助手文本，作为「声称」而不是事实
+      // 收场文本：作为「声称」记录；若这就是一条裁决本身（reviewer 类角色的输出），
+      // 另外记一条 verdict——裁决值是角色的通信内容，双轴等待仍由平台侧事实判定。
       const texts = (m.content || []).filter((c) => c.type === 'text' && typeof c.text === 'string' && c.text.trim().length > 30);
       if (texts.length) {
-        for (const tx of texts.slice(-1)) push({ kind: 'claim', text: tx.text.slice(0, 2000) }, ts);
+        for (const tx of texts.slice(-1)) {
+          push({ kind: 'claim', text: tx.text.slice(0, 2000) }, ts);
+          const verdict = extractVerdict(tx.text, (fx.facts && fx.facts.roleExercise) || null);
+          if (verdict) push({ kind: 'verdict', role: verdict.role, value: verdict.value, source: 'reply-text' }, ts);
+        }
       }
+    }
+    // 阻塞式派发的返回：轴派发返回 = 两轴各自已完成（定义要求 async: false，调用阻塞到轴返回）。
+    if (m.role === 'toolResult' && /subagent/i.test(m.toolName || '') && pendingAxisKeys.length) {
+      for (const key of pendingAxisKeys) {
+        push({ kind: 'axis', key, state: 'complete', source: 'blocking-dispatch-returned' }, ts);
+      }
+      pendingAxisKeys = [];
     }
   }
 
+  // 封账前的最后一次同步 = pre-seal sync（生产流程顺序固定，这里按实际先后判定）。
+  if (sessionSealed && lastSyncIdx >= 0) {
+    events[lastSyncIdx] = { ...events[lastSyncIdx], action: 'pre-seal-sync', source: 'sync-before-seal' };
+  }
+
   // 轴完成事实：fixture/会话里没有可靠的轴完成标志时如实标记（判定器据此不判通过）。
-  const axisKeys = ['standards', 'spec'];
   const hasAxisDispatch = events.some((e) => e.kind === 'dispatch' && e.axis);
-  if (hasAxisDispatch && !events.some((e) => e.kind === 'axis')) {
+  if (sawNonBlockingAxis) {
+    uncertainty.push('axis-completion:轴派发是 async:true（调用立即返回），返回不代表两轴完成——不得据此判双轴等待成立');
+  } else if (sawUnknownAxisAsync && !events.some((e) => e.kind === 'axis')) {
+    uncertainty.push('axis-completion:轴派发没有可判定的 async 值，返回不能当作两轴完成的证据');
+  } else if (hasAxisDispatch && !events.some((e) => e.kind === 'axis')) {
     uncertainty.push('axis-completion:会话记录里没有轴完成标志，双轴等待只能按派发与裁决顺序近似');
   }
   if (sawDispatchWithoutAgent) uncertainty.push('dispatch-agent:有派发脚本没能解析出 agent 名，分支选择判定降级');
+
+  // 仍在写入的 child：fixture 现场列了 pid，采集时逐个核验是否仍在（放弃场景的「先停 child」证据）。
+  const childrenFile = path.join(fx.runtimeDir, 'children.json');
+  if (fs.existsSync(childrenFile)) {
+    for (const child of JSON.parse(fs.readFileSync(childrenFile, 'utf8'))) {
+      let alive = false;
+      try { process.kill(child.pid, 0); alive = true; } catch { alive = false; }
+      push({ kind: 'child', pid: child.pid, role: child.role || null, state: alive ? 'running' : 'stopped', checkedAt: 'harvest' }, null);
+    }
+  }
 
   // 远程写尝试：fixture 的 PATH 桩把每次 gh / glab 调用记在日志里（桩会失败，
   // 所以真实远程写不可能成功——这里记录的是「尝试」这个事实）。
@@ -202,4 +281,4 @@ function harvestTrace({ def, fx, sessionDir }) {
   };
 }
 
-module.exports = { harvestTrace, walk, readJsonl, actionOfCommand, inspectDispatch, LEDGER_CMD };
+module.exports = { harvestTrace, walk, readJsonl, actionOfCommand, inspectDispatch, extractVerdict, LEDGER_CMD };

@@ -476,7 +476,17 @@ test('双轴探针迁入独立测试区域：旧别名受同一授权入口约�
   assert.ok(h.modelCalls().length > 0, '授权后探针真的被启动（模型调用边界到达）');
   const results = JSON.parse(fs.readFileSync(path.join(out2, 'results.json'), 'utf8'));
   assert.equal(results.status, 'not-accepted');
-  assert.deepEqual(results.scenarios.map((s) => s.id), ['axes-keyless', 'axes-reviewer', 'axes-final-reviewer']);
+  // 默认清单 = 三个双轴平台契约探针 + 票 35 的流程 / 导航 / 角色场景（后者在桩平台下
+  // 拿不到真实会话事实，同样只能记无法判定）。
+  const ids = results.scenarios.map((s) => s.id);
+  for (const probe of ['axes-keyless', 'axes-reviewer', 'axes-final-reviewer']) {
+    assert.ok(ids.includes(probe), `别名要带起双轴探针 ${probe}`);
+  }
+  for (const flow of ['flow-new-run', 'flow-reviewer-off', 'flow-changes-requested-fix', 'flow-cold-resume-unrecorded-merge',
+    'flow-partial-continuation', 'flow-abandon', 'reviewer-role-axes', 'final-reviewer-role-axes', 'nav-stage-discovery',
+    'walkthrough-paused-repair']) {
+    assert.ok(ids.includes(flow), `同一入口要能选择流程场景 ${flow}（票 35）`);
+  }
   for (const s of results.scenarios) {
     assert.notEqual(s.status, 'pass', `${s.id} 在桩平台下不得判通过`);
     assert.equal(s.status, 'incomplete');

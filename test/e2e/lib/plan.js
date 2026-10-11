@@ -215,6 +215,30 @@ function buildPlan(opts) {
       artifacts: '证据目录 + 每次尝试的日志（仓库内被 git 忽略的运行目录，或 --out 指定目录）；不进源码提交面、不进 npm 包',
     },
     harness: { scenariosFile: displayPath(scenariosFile), node: process.version },
+    // 对照条件：记录并尽量固定模型、thinking、平台、任务书、fixture、权限与环境；
+    // 固定不了的（provider 侧实际模型版本、平台子会话与网络出口）如实列出。
+    pinned: {
+      model,
+      thinking,
+      platformBinary: platform.binary,
+      platformVersion: platform.version,
+      scenariosFile: displayPath(scenariosFile),
+      node: process.version,
+      os: `${process.platform}-${process.arch}`,
+      taskBrief: entries.every((s) => s.brief)
+        ? '每场景任务书内容固定并哈希进计划（不指路）'
+        : '场景自带探针输入（无导航任务书）',
+      fixture: entries.some((s) => s.fixture)
+        ? '每场景独立临时项目，fixed 初始状态与清单哈希进计划'
+        : '无场景装置',
+      permissions: 'fixture 在临时目录，PATH 上的 gh / glab 是记录桩；不授予额外权限，会话按其自身权限运行',
+      environment: '调用方环境随批次传递；候选、fixture 与任务书标识进授权哈希',
+      notFrozen: [
+        'provider 侧模型的实际版本与路由（入口只能按标识记录）',
+        '平台子会话的内部形态与网络出口',
+        '宿主时钟与并发调度（影响耗时，不影响判定口径）',
+      ],
+    },
   };
 
   return { plan, approvalHash: approvalHashOf(plan) };
@@ -252,6 +276,12 @@ function renderPlan({ plan, approvalHash, artifactsDir, invocation, state }) {
   }
   lines.push(`调用上限   ${plan.counts.callCap}（计划内 ${plan.counts.plannedCalls}；计划尝试上限 ${plan.counts.plannedAttempts} 次，并发 ${plan.counts.concurrency}）`);
   lines.push(`计费单位   ${plan.counts.callsUnitNote}`);
+  if (plan.pinned) {
+    lines.push(`对照条件   模型 ${plan.pinned.model}（thinking ${plan.pinned.thinking}）；平台 ${plan.pinned.platformBinary} ${plan.pinned.platformVersion}；Node ${plan.pinned.node}；平台面 ${plan.pinned.os}`);
+    lines.push(`           ${plan.pinned.taskBrief}；${plan.pinned.fixture}`);
+    lines.push(`           权限与环境 ${plan.pinned.permissions}；${plan.pinned.environment}`);
+    lines.push(`           未固定：${plan.pinned.notFrozen.join('；')}`);
+  }
   if (plan.feasibility.partial) lines.push(`额度提示   ${plan.feasibility.note}`);
   lines.push(`重试额度   ${plan.counts.retryBudget} 次/重复（重试计入调用上限；只用于无法判定的尝试）`);
   lines.push(`执行策略   ${plan.policy.note}`);

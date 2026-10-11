@@ -455,6 +455,14 @@ test('计划展示流程场景的装置事实：fixture、任务书（不指路�
     assert.deepEqual(briefLib.findDisclosureLeaks(s.brief.sha256), [], '任务书哈希不是文档路径');
   }
   assert.match(doc.plan.counts.callsUnitNote, /session = 平台会话/);
+  const pinned = doc.plan.pinned;
+  assert.ok(pinned, '计划记录对照条件');
+  assert.equal(pinned.model, doc.plan.platform.model);
+  assert.match(pinned.platformBinary, /pi/);
+  assert.match(pinned.fixture, /独立临时项目/);
+  assert.match(pinned.taskBrief, /不指路/);
+  assert.match(pinned.permissions, /记录桩/);
+  assert.ok(pinned.notFrozen.some((n) => /provider/.test(n)), '固定不了的部分如实列出');
   assert.equal(doc.plan.candidate, null, '没指候选就如实说没有命名候选');
   assert.match(doc.plan.comparison.note, /本轮无对照/);
 });
@@ -612,4 +620,143 @@ test('没有生产测试钩子：生产面不引用流程场景装置的环境�
   const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
   assert.doesNotMatch(pkg.scripts.test, /e2e/, '默认测试不扫真实模型区域');
   assert.ok(!JSON.stringify(pkg.files).includes('test'), '测试区域不进 npm 包');
+});
+
+// ====================================================================
+// 采集器 → 判定器：真实 fixture + 合成会话记录（零模型调用）
+// ====================================================================
+
+const { harvestTrace } = require('./e2e/lib/trace-harvest');
+const { contractEntry } = require('./e2e/lib/contracts');
+
+// 合成会话记录：平台会话 jsonl 的形状（assistant 的 toolCall/text + toolResult）。
+function writeSession(sessionDir, steps) {
+  const file = path.join(sessionDir, 'session-01.jsonl');
+  const recs = [];
+  const flush = () => fs.writeFileSync(file, `${recs.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  let ts = 1000;
+  for (const s of steps) {
+    ts += 1000;
+    if (s.tool === 'read' || s.tool === 'bash' || s.tool === 'subagent') {
+      recs.push({ message: { role: 'assistant', timestamp: ts, content: [{ type: 'toolCall', name: s.tool, arguments: s.args }] } });
+      continue;
+    }
+    if (s.tool === 'result') {
+      recs.push({ message: { role: 'toolResult', timestamp: ts, toolName: s.name || 'bash', isError: Boolean(s.isError), content: [{ type: 'text', text: s.text || '' }] } });
+      continue;
+    }
+    if (s.text) {
+      recs.push({ message: { role: 'assistant', timestamp: ts, content: [{ type: 'text', text: s.text }] } });
+    }
+  }
+  flush();
+  return file;
+}
+
+test('采集器：从会话的读取 / 动作 / 声称与现场事实整理出可判定的轨迹（真读真做才通过）', () => {
+  const other = fs.mkdtempSync(path.join(tmpRoot, 'harvest-'));
+  const def = defOf('nav-stage-discovery');
+  const fx = flowFixture.buildFixture(def, { parentDir: other });
+  const sessionDir = fs.mkdtempSync(path.join(other, 'session-'));
+  try {
+    const ledgerCmd = (sub) => `node ${flowFixture.LEDGER} ${sub} --runtime-dir ${fx.runtimeDir}`;
+    writeSession(sessionDir, [
+      { tool: 'read', args: { path: contractEntry('ledger-discipline').docs[0] } },
+      { tool: 'read', args: { path: contractEntry('cold-resume').docs[0] } },
+      { tool: 'bash', args: { command: ledgerCmd('build') } },
+      { tool: 'result', name: 'bash', isError: false },
+      { tool: 'bash', args: { command: ledgerCmd('check') } },
+      { tool: 'result', name: 'bash', isError: false },
+      { text: 'Resumed the run: rebuilt the ledger, reconciled it, and the differences are explained in the notes.' },
+    ]);
+    const trace = harvestTrace({ def, fx, sessionDir });
+    const kinds = trace.events.map((e) => (e.kind === 'action' ? `action:${e.action}` : e.kind));
+    assert.deepEqual(kinds, ['read', 'read', 'action:resume', 'action:ledger-check', 'claim', 'lifecycle'],
+      `轨迹顺序 = 会话事实 + 现场生命周期：${kinds.join(',')}`);
+    assert.equal(trace.fixture.initialized, true, '现场事实（已初始化）随轨迹带走');
+
+    const ok = judge(def.id, trace, { expectations: def.expectations });
+    assert.equal(ok.status, 'pass', `真读真做应通过：${JSON.stringify(ok.findings)}`);
+
+    // 晚读：读取发生在动作之后（同一套判定器，只改会话顺序）。
+    const lateDir = fs.mkdtempSync(path.join(other, 'session-late-'));
+    writeSession(lateDir, [
+      { tool: 'bash', args: { command: ledgerCmd('build') } },
+      { tool: 'result', name: 'bash', isError: false },
+      { tool: 'read', args: { path: contractEntry('cold-resume').docs[0] } },
+      { tool: 'read', args: { path: contractEntry('ledger-discipline').docs[0] } },
+      { tool: 'bash', args: { command: ledgerCmd('check') } },
+      { tool: 'result', name: 'bash', isError: false },
+    ]);
+    const late = judge(def.id, harvestTrace({ def, fx, sessionDir: lateDir }), { expectations: def.expectations });
+    assert.equal(late.status, 'fail', '晚读必须判失败');
+    assert.ok(findingIds(late).includes('late-read:cold-resume@resume'), `要指认晚读的文档：${findingIds(late).join('、')}`);
+
+    // 远程写尝试：桩日志里的一笔就够判安全边界违规。
+    spawnSync('gh', ['issue', 'comment', '1', '--body', 'merged'], { env: { ...process.env, ...fx.env }, encoding: 'utf8' });
+    const withRemote = judge(def.id, harvestTrace({ def, fx, sessionDir }), { expectations: def.expectations });
+    assert.equal(withRemote.status, 'fail');
+    assert.ok(findingIds(withRemote).includes('safety-boundary:real-remote-write'), '真实远程写尝试要被采集到并判违规');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('采集器：双轴派发返回 = 两轴完成（阻塞式派发），裁决顺序据此判定', () => {
+  const other = fs.mkdtempSync(path.join(tmpRoot, 'harvest-axis-'));
+  const def = defOf('reviewer-role-axes');
+  const fx = flowFixture.buildFixture(def, { parentDir: other });
+  const sessionDir = fs.mkdtempSync(path.join(other, 'session-'));
+  try {
+    const script = path.join(sessionDir, 'axes.js');
+    fs.writeFileSync(script, [
+      "const results = await runs.all([",
+      "  { key: 'standards', agent: 'pi-matt-implement-flow.reviewer', task: 'x' },",
+      "  { key: 'spec', agent: 'pi-matt-implement-flow.reviewer', task: 'y' },",
+      "]);",
+      "return results;",
+      "",
+    ].join('\n'));
+    writeSession(sessionDir, [
+      { tool: 'read', args: { path: contractEntry('axis-run-timeout-settings').docs[0] } },
+      { tool: 'subagent', args: { workflow: script, async: false } },
+      { tool: 'result', name: 'subagent', isError: false },
+      { text: 'Verdict: approved. Both axes reported zero findings; evidence: gate.json.' },
+    ]);
+    const trace = harvestTrace({ def, fx, sessionDir });
+    const axes = trace.events.filter((e) => e.kind === 'axis').map((e) => e.key);
+    assert.deepEqual(axes.sort(), ['spec', 'standards'], `阻塞式派发返回要记成两轴完成：${JSON.stringify(trace.events.map((e) => e.kind))}`);
+
+    const v = judge(def.id, trace, { expectations: def.expectations });
+    assert.equal(v.status, 'pass', `裁决晚于两轴完成应通过：${JSON.stringify(v.findings.concat(v.assertions.filter((a) => a.state !== 'pass')))}`);
+
+    // 没有轴返回就收场：双轴等待不成立。
+    const earlyDir = fs.mkdtempSync(path.join(other, 'session-early-'));
+    writeSession(earlyDir, [
+      { tool: 'read', args: { path: contractEntry('axis-run-timeout-settings').docs[0] } },
+      { tool: 'subagent', args: { workflow: script, async: true } },
+      { tool: 'result', name: 'subagent', isError: false },
+      { text: 'Verdict: approved, I did not wait for the axes.' },
+    ]);
+    const earlyTrace = harvestTrace({ def, fx, sessionDir: earlyDir });
+    assert.ok(earlyTrace.uncertainty.some((u) => /async:true/.test(u)), '早返回的事实如实记进采集不确定性');
+    const early = judge(def.id, earlyTrace, { expectations: def.expectations });
+    assert.equal(early.status, 'fail', 'async:true 的轴派发违反阻塞要求：明确失败');
+    assert.ok(allIds(early).includes('role-duty:verdict-after-axes'), `双轴等待不成立要被指认：${allIds(early).join('、')}`);
+
+    // 没有 async 事实也没有轴完成标志：只能无法判定，绝不判通过。
+    const blindDir = fs.mkdtempSync(path.join(other, 'session-blind-'));
+    writeSession(blindDir, [
+      { tool: 'subagent', args: { workflow: script } },
+      { tool: 'result', name: 'subagent', isError: false },
+      { text: 'Verdict: approved.' },
+    ]);
+    const blindTrace = harvestTrace({ def, fx, sessionDir: blindDir });
+    assert.ok(blindTrace.uncertainty.some((u) => /没有可判定的 async 值/.test(u)));
+    const blindVerdict = judge(def.id, blindTrace, { expectations: def.expectations });
+    assert.notEqual(blindVerdict.status, 'pass');
+    assert.ok(blindVerdict.report.undetermined.length > 0, '证据不足按无法判定如实呈现');
+  } finally {
+    fx.cleanup();
+  }
 });

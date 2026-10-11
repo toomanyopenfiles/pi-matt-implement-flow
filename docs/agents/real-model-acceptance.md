@@ -17,15 +17,39 @@ for repair/pause/continuation walkthroughs, and
 The single supported entry is `test/e2e/accept.js`. It runs a **batch** of scenarios, each of which
 is a real model call (or several). Two facts to hold on to:
 
-- The existing dual-axis probe (`test/e2e/probes/repro-reviewer-axes.js`) is a **platform-contract
-  probe**: it checks one platform contract fact on a real dispatch. It is **not** a full
-  `reviewer`/`final-reviewer` acceptance and **not** a full-flow E2E. Navigation acceptance (does the
-  model find the disclosure docs from the skill trunk on its own?) and full-flow scenarios are
-  separate batches with their own scenario definitions.
+- Every scenario declares its own **tier**, and the plan prints it: the dual-axis probe
+  (`test/e2e/probes/repro-reviewer-axes.js`) is a **platform-contract probe** — one platform contract
+  fact on a real dispatch, not a full `reviewer`/`final-reviewer` acceptance and not a flow E2E.
+  Navigation acceptance, full-flow scenarios, and controlled walkthroughs are separate entries in the
+  same catalog with their own definitions (see [Scenario tiers](#scenario-tiers)).
 - The gate is **mis-trigger prevention, not a permission boundary**. It stops an unauthorized batch
   from starting. It does not stop a process with the same shell rights from calling a model directly.
   It also cannot make cost exact: call counts and timeouts bound calls, so they are not a precise
   money cap (provider billing is outside this harness).
+
+## Scenario tiers
+
+| Tier | What it establishes | What it does not establish |
+| --- | --- | --- |
+| `platform-contract-probe` | One platform contract fact on a real dispatch (the dual-axis probe). | A whole `reviewer` / `final-reviewer` run, or a flow. |
+| `navigation-acceptance` | On a real session, the model finds the stage document from the trunk and loads it **before** the action, picks the right branch, and stays inside the safety boundaries. | Implementation quality; it does not judge the work that was produced. |
+| `full-execution` | The scenario runs to its own end condition on the real platform against an isolated scratch project — six flows plus both reviewer roles. | Any other scenario; a pass covers only the approved batch. |
+| `controlled-walkthrough` | Read-only: the model reads its evidence before recommending a next step and executes nothing. | Anything actually executed — the recommendation itself is read by a human. |
+
+The catalog (`test/e2e/scenarios.js`, seen through the plan; scenario data in
+`test/e2e/flow-scenarios.js`):
+
+- `flow-new-run` — normal new run, per-ticket review on.
+- `flow-reviewer-off` — per-ticket review off: no per-ticket reviewer dispatch, the final review still runs.
+- `flow-changes-requested-fix` — repair after `changes_requested`: retained resume, the same gate command run by hand.
+- `flow-cold-resume-unrecorded-merge` — cold continuation with a merge that is in git but not on the ledger.
+- `flow-partial-continuation` — continuation after an accepted partial delivery: remaining scope only.
+- `flow-abandon` — explicit abandonment: the writer child is stopped and verified first, then the abandonment exit.
+- `reviewer-role-axes` / `final-reviewer-role-axes` — the two reviewer roles on a real candidate: shared protocol discovery, both axes finishing before the verdict, each role's own duties (the final review additionally records its cross-ticket / deferred-findings check). These are **full agent runs**, not the local probe wearing a different name.
+- `nav-stage-discovery` — navigation acceptance; `walkthrough-paused-repair` — controlled walkthrough.
+
+`--scenario <id>[,<id>…]` selects them; the default is the whole catalog, so a real batch is normally
+approved with an explicit `--scenario` selection (plus a cap that matches the declared call units).
 
 ## Plan
 
@@ -55,8 +79,36 @@ authorization unit: any change to the scenario set, run counts, retries, call ca
 baseline, platform binary, or scenario module changes the hash, so an old approval can no longer be
 reused for a different batch.
 
+Per scenario the plan also records what will be judged and what the scenario runs in:
+`fixture` (its identifier, tracker stub, test command and a manifest hash), `brief` (the task-brief
+identifier and hash), and `judgement` (which documents must be loaded before which action, which
+safety boundaries and role duties are checked, and whether the scenario is read-only). All of it is
+inside the approval hash.
+
+Call counts are declared per scenario in their own unit (`counts.callsUnitNote`): `model-call` for
+probes, `session` for the flow scenarios — one platform session per run, whose internal subagent
+calls are not charged one by one against the guardrail budget. Neither unit is a precise money cap;
+the provider's bill is. An approved batch executes the declared number of sessions and records how
+many sessions each scenario actually started.
+
 Plan-only flags: `--scenario a,b`, `--runs n`, `--retries n`, `--call-cap n`, `--model id`,
-`--thinking level`, `--baseline ref`, `--out dir`.
+`--thinking level`, `--baseline ref`, `--candidate ref`, `--out dir`.
+
+## Candidate, baseline, and what the evidence binds to
+
+`--candidate <git-ref>` names the stage under test: the source baseline, the verbatim-migration stage,
+or the final candidate. The plan records the ref, its resolved commit, whether that commit's
+instruction content equals your working copy, and two content identifiers (a sha256 over the
+registered instruction documents — the working copy's and the named ref's). A mismatch is printed,
+not hidden: a run whose working copy differs from the named candidate must not claim to have validated
+that candidate, and evidence affected by such a change has to be re-evaluated. The registered stage
+references live in `test/e2e/flow-scenarios.js` (`KNOWN_STAGES`); an unlabelled candidate cannot use
+the baseline-defect classification below. `--baseline <ref>` stays what you compare *against*. Both are
+inside the approval hash — changing either means re-approving.
+
+Comparison is **behavioural**: scenario results, action-before-load facts, branch selection and safety
+boundaries. It is not a comparison of wording, token counts, or identical tool sequences, and each
+candidate is approved as its own batch.
 
 ## Authorize
 
@@ -118,6 +170,82 @@ remaining scenarios as not run. It also records that direct-child termination is
 background work stopped — a probe may have left platform sub-sessions or independent processes
 behind, so check the platform session state yourself after a cancel.
 
+## Scenario fixtures, sessions, and the task brief
+
+Every flow scenario runs in its own scratch project created under the system temp directory: a real
+git repository with a **fixed initial state** (fixed commit author/date and fixed content, so the same
+scenario builds the same SHAs), a `local` tracker stub, a small `npm test` suite, ticket files, and —
+where the scenario needs history — a real event stream written by `scripts/ledger.js` itself (the
+cold-resume fixture really does produce a non-zero reconciliation difference for its unrecorded
+merge). `gh` and `glab` are PATH stubs that log every attempt and fail: a real remote tracker write
+cannot succeed here, and an attempt is reported as a safety-boundary violation.
+
+The **task brief** is the only instruction the model gets on top of the project. It carries the inputs
+a run normally has (spec, ticket files, flow configuration, test command) and deliberately does **not**
+name any instruction document — the model has to find the stage document from the trunk on its own.
+That property is machine-checked against the contract registry `CONTRACT_DOCUMENTS` in
+`scripts/registration-checks.js`, so relocating instructions does not weaken it. The brief is hashed
+into the plan.
+
+Sessions are new and disposable; nothing here touches your real project or a real tracker. A scenario
+that cannot be executed (platform refused the invocation, no session artefacts) produces `undetermined`
+— reported as unresolved, never as a pass.
+
+## How a scenario verdict is decided
+
+A scenario is judged from its **trace**, never from the model's own summary. The trace is harvested
+from the session transcript (file reads, `subagent` dispatches, ledger/git commands, test runs,
+collected claims) and from the fixture (event stream, ticket copies, git history, remote-write
+attempts). The judge then checks:
+
+- each required document was loaded **before** the action that needs it (a missing load is fatal, a
+  load that happens after the action is fatal too — both are definitive failures);
+- branch selection: required dispatches happened, forbidden ones did not, and continuation does not
+  re-dispatch or re-merge work that is already delivered;
+- safety boundaries: no merge before a passing validation, no real remote tracker write, no seal with
+  open scope, and no abandonment before the still-running child is stopped and verified;
+- the closing claim matches the lifecycle: a claim of completion that the event stream or the ticket
+  copies contradict is reported as a misjudged completion;
+- role duties: a verdict never lands before both axes complete, read-only roles do not write, and the
+  final review records its cross-ticket / deferred-findings check.
+
+Two harvest rules are worth knowing, because they are what keeps the waiting claims honest:
+
+- **A blocking dispatch return is the only axis-completion evidence.** The definitions require
+  `async: false`, so the axes call returning means both axes finished. If the call carried
+  `async: true` the return proves nothing — that is recorded (`async: true` on the dispatch) and the
+  dual-axis-wait duty fails outright, which is the issue #6 signature. If no `async` value can be
+  observed at all, the check stays `inconclusive` rather than being assumed satisfied.
+- **A verdict is the role's own output; the waiting is a platform fact.** For the flow scenarios the
+  verdict value comes from the ledger record; for the reviewer role exercises it comes from the
+  reviewer's reply (`source: "reply-text"`). In both cases the axis timing that decides "grounded in
+  both axes" comes from the session trace, never from the reply.
+
+Evidence that could not be collected makes the corresponding check `inconclusive` (never a pass), and
+the trace records which facts were uncertain — for example a dispatch script whose agent name could not
+be resolved, an axis call with no visible `async` value, or the seal-time scope read at harvest time.
+Still-running writer children are re-checked at harvest time from the PIDs the fixture recorded, so an
+abandonment that never stopped its child is visible as a live PID, not as a claim.
+
+**Baseline defects are marked honestly.** When the batch carries a registered stage and the failure
+matches a declared known baseline defect (for example the pre-migration dual-axis definition from
+issue #6, whose early return let a verdict land before the axes finished), the verdict stays a failure
+but is classified `baseline-defect`: reported as failed, not counted as a regression of the candidate.
+An unlabelled candidate can never use that classification, and a failure that is not declared is a
+`product-regression`.
+
+## What the deterministic self-checks do and do not prove
+
+`npm test` includes `test/e2e-flow-scenarios.test.js`, which builds the same fixtures, replays
+**synthetic traces** through the same judge, and asserts that missed reads, late reads, wrong branches,
+safety-boundary violations, role-duty violations, and a completion claim the lifecycle contradicts are
+all caught — and that missing evidence is reported as missing rather than as a pass. The self-check
+channel also runs without the entry:
+`node test/e2e/probes/flow-scenarios.js --only <id> --replay <trace.json>` judges a trace file with zero
+model calls. None of this is model acceptance: it proves the instrument, not the model. Only an
+authorized batch on the real platform produces model-behaviour evidence, and a scenario that could not
+be executed or judged stays unproven.
+
 ## Results
 
 Every run writes into the evidence directory (`--out <dir>`, default
@@ -151,10 +279,19 @@ statement about model reliability in general, and undetermined scenarios stay un
   set, counts, model, cap, baseline, platform binary, scenario module). Look at the plan again and
   approve the new hash if the new scope is intended.
 - **A scenario stays `incomplete`** — look at the attempt's `kind`: `undetermined` means the model did
-  not behave as the scenario requires (e.g. it never made the instructed call); `infrastructure`
-  means the platform or provider failed, timed out, or the process died; `harness` means this
-  repository's own test gear failed (missing result file, contradictory exit code). Only
-  `product-regression` on a definitive `fail` says the code under test is wrong.
+  not behave as the scenario requires (e.g. it never made the instructed call), or no session
+  artefacts were produced at all; `infrastructure` means the platform or provider failed, timed out, or
+  the process died; `harness` means this repository's own test gear failed (missing result file,
+  contradictory exit code, fixture that could not be built). Only `product-regression` on a definitive
+  `fail` says the code under test is wrong; `baseline-defect` on a `fail` says the failure is a
+  declared, pre-existing baseline problem, not a regression of this candidate.
+- **A flow scenario fails on a missing or late document load** — the attempt result names the
+  contract (`missing-read:<contract>@<action>` / `late-read:…`). That is the navigation property the
+  scenario exists for: the model acted before loading the instructions for the stage. Do not re-run the
+  same batch to look for a green sample; a repetition is evidence too.
+- **A flow scenario's trace says facts were uncertain** — `trace.uncertainty` lists what the harvest
+  could not see. Those checks stay `inconclusive`; judge the case by hand (the session directory and the
+  fixture notes are kept in the attempt result) instead of promoting it to a pass.
 - **`budget-exhausted` / `not-run`** — the approved cap was reached, so the remaining repetitions or
   scenarios never ran. This is not a pass. Approve a larger cap (a new hash) if you want them
   executed.
@@ -197,8 +334,15 @@ declared model calls per run, timeout, verification level, boundary claim, and w
 scenarios inherit the same plan → authorize → execute gate and show up in the plan (and therefore in
 the hash).
 
-Two environment variables exist so the guardrail itself can be tested at the call boundary without
-paying for model calls: `PI_E2E_SCENARIOS` points at an alternative scenario module, and
-`PI_E2E_PI_BIN` at an alternative platform binary. Both are printed in the plan and covered by the
-approval hash. They replace the runner, not the gate: an unauthorized batch is still refused before
-anything starts.
+A scenario entry declares its probe, arguments, declared calls per run **and their unit**, timeout,
+tier, boundary claim, write scope, and — for flow scenarios — its fixture, its task brief, and the
+judgement contract that will be applied to the trace. Tiers are data, not prose: a scenario cannot
+claim more than its tier.
+
+The runner seams (`PI_E2E_SCENARIOS` for an alternative scenario module, `PI_E2E_PI_BIN` for an
+alternative platform binary, `PI_E2E_CANDIDATE` / `PI_E2E_CANDIDATE_SHA` / `PI_E2E_STAGE` for the
+candidate label passed down to the probes) exist so the guardrail itself can be tested at the call
+boundary without paying for model calls. The candidate label is covered by the approval hash; the
+others replace the runner, not the gate: an unauthorized batch is still refused before anything starts.
+No production script or instruction document reads any of them — the acceptance harness stays inside
+`test/e2e/`.
