@@ -297,7 +297,7 @@ const CONTRACT_DOCUMENTS = [
   },
   {
     id: 'reviewer-agent-definition',
-    contract: 'reviewer 定义的双轴派发、只读面与文件派发形态',
+    contract: 'reviewer 定义的角色范围（票据 + spec、只读面、批准/要求修改裁决）与共享协议加载入口',
     docs: ['agents/reviewer.md'],
     previous: ['agents/reviewer.md'],
     entry: {
@@ -305,13 +305,13 @@ const CONTRACT_DOCUMENTS = [
       trigger: '每次派发 pi-matt-implement-flow.reviewer（平台按注册名加载该定义）',
     },
     tests: [
-      'test/self-check.test.js · reviewer and final-reviewer axis-spawn contract',
-      'test/self-check.test.js · dispatch delivery（issue #9）',
+      'test/self-check.test.js · reviewer 输入对齐 brief 与机械 gate 证据',
+      'test/self-check.test.js · both reviewer definitions load the shared review protocol',
     ],
   },
   {
     id: 'final-reviewer-agent-definition',
-    contract: 'final-reviewer 定义的双轴派发、只读面与文件派发形态',
+    contract: 'final-reviewer 定义的整支范围（跨票检查、延期 findings 处置、三值裁决）与 reviewer=off 前提',
     docs: ['agents/final-reviewer.md'],
     previous: ['agents/final-reviewer.md'],
     entry: {
@@ -319,8 +319,23 @@ const CONTRACT_DOCUMENTS = [
       trigger: '每次派发 pi-matt-implement-flow.final-reviewer（平台按注册名加载该定义）',
     },
     tests: [
-      'test/self-check.test.js · reviewer and final-reviewer axis-spawn contract',
-      'test/self-check.test.js · dispatch delivery（issue #9）',
+      'test/self-check.test.js · final-reviewer 保留跨票检查与延期 findings 处置',
+      'test/self-check.test.js · both reviewer definitions load the shared review protocol',
+    ],
+  },
+  {
+    id: 'review-protocol',
+    contract:
+      '两类 reviewer 的共同只读双轴协议：路径形态、阻塞双轴派发与稳定轴标识、两轴后裁决、最新时限与主仓库配置指针、证据过滤、不跨轴合并排名、升级边界',
+    docs: ['scripts/review-protocol.md'],
+    previous: ['agents/reviewer.md', 'agents/final-reviewer.md'],
+    entry: {
+      carriers: ['SKILL.md', 'agents/reviewer.md', 'agents/final-reviewer.md'],
+      trigger: 'before dispatching the axes',
+    },
+    tests: [
+      'test/self-check.test.js · shared review protocol is the single axis-spawn contract',
+      'test/package-manifest.test.js · tarball 清单闭包',
     ],
   },
   {
@@ -333,7 +348,7 @@ const CONTRACT_DOCUMENTS = [
       trigger: 'before dispatching the axes',
     },
     tests: [
-      'test/self-check.test.js · reviewer and final-reviewer axis-spawn contract',
+      'test/self-check.test.js · shared review protocol is the single axis-spawn contract',
       'test/package-manifest.test.js · tarball 清单闭包',
     ],
   },
@@ -375,11 +390,17 @@ function resolveContractCorpus(root, { registry = CONTRACT_DOCUMENTS, readText: 
 
 // 入口语义（启发式，只钉承重点）：同一段里出现路径，且带「读」与「动作前」两个词。
 // 释义与「继续条件」的措辞不定型，不做逐字断言；标题、行数、目录数量一概不锁。
+// ticket 37：扫描某文档名的**每一段**而不只是第一段——入口之前对同一路径的随口提名
+// （例如列出输入指针的清单项）不得誤杀后面那段合格的披露（33-r2 P2 的假红面）。
 const ENTRY_READ_CUE = /\b(read|reads|re-reads|rereads|load|loads|consult|consults|follow|follows)\b/i;
 const ENTRY_BEFORE_CUE = /\bbefore\b/i;
 
-function paragraphNaming(text, doc) {
-  return text.split(/\n\s*\n/).find((block) => block.includes(doc)) ?? null;
+function paragraphsNaming(text, doc) {
+  return text.split(/\n\s*\n/).filter((block) => block.includes(doc));
+}
+
+function isDisclosureBlock(block, trigger) {
+  return ENTRY_READ_CUE.test(block) && ENTRY_BEFORE_CUE.test(block) && Boolean(trigger) && block.includes(trigger);
 }
 
 // 契约位置与披露入口：登记文档与入口文档必须存在；不在 carriers 内的文档必须由 carriers
@@ -419,26 +440,26 @@ function checkContractDocLocations(root, {
     for (const doc of entry.docs) {
       if (carriers.includes(doc) || disclosed.has(doc)) continue;
       const carrierText = carriers.map(readOrNull).filter((text) => text !== null).join('\n');
-      const block = paragraphNaming(carrierText, doc);
-      if (block === null) {
+      const blocks = paragraphsNaming(carrierText, doc);
+      if (blocks.length === 0) {
         problems.push(
           `${where} does not disclose ${doc} before the action (contract ${entry.id}) — 非主干权威文档必须由入口文档在动作前披露：触发条件 + 读取入口`
         );
         continue;
       }
-      if (!ENTRY_READ_CUE.test(block) || !ENTRY_BEFORE_CUE.test(block)) {
+      if (blocks.some((block) => isDisclosureBlock(block, trigger))) {
+        disclosed.add(doc);
+        continue;
+      }
+      if (!blocks.some((block) => ENTRY_READ_CUE.test(block) && ENTRY_BEFORE_CUE.test(block))) {
         problems.push(
           `${where} entry for ${doc} names the path but not the pre-action read (contract ${entry.id}) — 入口要说明何时读、动作前读，提名不等于披露`
         );
         continue;
       }
-      if (!trigger || !block.includes(trigger)) {
-        problems.push(
-          `${where} entry for ${doc} is missing the trigger condition (contract ${entry.id}): ${trigger || '(未登记)'} — 入口要说明何时读（触发锚点见 CONTRACT_DOCUMENTS.entry.trigger）`
-        );
-        continue;
-      }
-      disclosed.add(doc);
+      problems.push(
+        `${where} entry for ${doc} is missing the trigger condition (contract ${entry.id}): ${trigger || '(未登记)'} — 入口要说明何时读（触发锚点见 CONTRACT_DOCUMENTS.entry.trigger）`
+      );
     }
     // 入口目标错误：登记行的每份入口文档（主干 / agent 定义 / 运行参考）都不得仍指向
     // 已搬迁的旧路径。ticket 37 起共同评审协议住在共享运行文档里、入口在 agent 定义内——

@@ -748,21 +748,75 @@ test('breakage simulation: a missing fifth brief is flagged (anchor-8)', () => {
   assert.ok(problems.some((p) => p.includes('fifth brief')));
 });
 
-// --- issue #6 回归护栏：双轴派发契约（阻塞调用 + 稳定 key + 不得提前收尾） ---
+// --- issue #6 / ticket 37 回归护栏：共同双轴协议集中在共享运行文档，两类 reviewer 各自入场 ---
+// 协议文本的权威位置是 `scripts/review-protocol.md`（登记表 review-protocol 行）；
+// 两份 agent 定义只保留角色范围与加载入口，派发机制不再各存一份副本。
 
-test('reviewer and final-reviewer axis-spawn contract: blocking call with stable keys (issue #6)', () => {
-  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
-    assert.deepEqual(checkAxisSpawnContract(contractText(id)), [], `${id} violates the axis-spawn contract`);
+test('shared review protocol is the single axis-spawn contract (issue #6, ticket 37)', () => {
+  assert.deepEqual(checkAxisSpawnContract(contractText('review-protocol')), []);
+});
+
+test('both reviewer definitions load the shared review protocol from their own entry (ticket 37)', () => {
+  for (const carrier of ['agents/reviewer.md', 'agents/final-reviewer.md']) {
+    const registry = [
+      contractRow('review-protocol-entry', ['scripts/review-protocol.md'], {
+        previous: [],
+        carriers: [carrier],
+        trigger: 'before dispatching the axes',
+      }),
+    ];
+    assert.deepEqual(
+      checkContractDocLocations(PKG_ROOT, { registry }),
+      [],
+      `${carrier} 必须自己披露共享协议：路径 + 动作前读取 + 触发条件`
+    );
   }
 });
 
-test('breakage simulation: reviewer axes losing fresh timeout args or main-repo settings paths are flagged (#26)', () => {
-  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
-    const text = contractText(id);
-    assert.ok(checkAxisSpawnContract(text.replace('timeoutMs: RUN_TIMEOUT_MS, ', '')).some((p) => p.includes('timeoutMs: RUN_TIMEOUT_MS')));
-    assert.ok(checkAxisSpawnContract(text.replaceAll('Run timeout settings', 'Retired settings')).some((p) => p.includes('settings paths')));
-    assert.ok(checkAxisSpawnContract(text.replaceAll('run-timeout-settings.md', 'retired.md')).some((p) => p.includes('resolution rules')));
-  }
+test('ticket 37: 共享评审协议保留路径形态、两轴后裁决、最新时限指针、证据过滤与不跨轴合并', () => {
+  // 行折行不定型：断言前把空白归一，只钉语义锚点。
+  const protocol = contractText('review-protocol').replace(/\s+/g, ' ');
+  // 路径形态：传输件与主仓库绝对路径，不是内联内容。
+  assert.match(protocol, /three-dot diff/);
+  assert.match(protocol, /absolute main-repo paths, marked read-only/i);
+  // 两轴结束后才裁决 + 不跨轴合并排名 + 证据过滤。
+  assert.match(protocol, /never end your turn while an axis is still running/i);
+  assert.match(protocol, /## Standards. and .## Spec./i);
+  assert.match(protocol, /without merging or reranking findings/i);
+  assert.match(protocol, /never pick a single winner across axes/i);
+  assert.match(protocol, /filter by evidence, not severity/i);
+  assert.match(protocol, /No issues found\./);
+  // 最新时限 + 主仓库配置指针（轴派发前重读）。
+  assert.match(protocol, /run-timeout-settings\.md/);
+  assert.match(protocol, /Run timeout settings/);
+  assert.match(protocol, /timeoutMs: RUN_TIMEOUT_MS/);
+  // 普通运行文档，不新增 skill。
+  const entry = CONTRACT_DOCUMENTS.find((row) => row.id === 'review-protocol');
+  assert.deepEqual(entry.docs, ['scripts/review-protocol.md']);
+  assert.equal(
+    manifest.pi.skills.some((skill) => String(skill).includes('review-protocol')),
+    false,
+    '共享协议不是 skill 注册面'
+  );
+});
+
+test('breakage simulation: the shared protocol losing fresh timeout args or main-repo settings paths is flagged (#26, ticket 37)', () => {
+  const text = contractText('review-protocol');
+  const noDeadline = text.replaceAll('timeoutMs: RUN_TIMEOUT_MS', 'timeoutMs: 14400000');
+  assert.notEqual(noDeadline, text, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.ok(checkAxisSpawnContract(noDeadline).some((p) => p.includes('timeoutMs: RUN_TIMEOUT_MS')));
+  assert.notEqual(text.replaceAll('Run timeout settings', 'Retired settings'), text);
+  assert.ok(
+    checkAxisSpawnContract(text.replaceAll('Run timeout settings', 'Retired settings')).some((p) =>
+      p.includes('settings paths')
+    )
+  );
+  assert.notEqual(text.replaceAll('run-timeout-settings.md', 'retired.md'), text);
+  assert.ok(
+    checkAxisSpawnContract(text.replaceAll('run-timeout-settings.md', 'retired.md')).some((p) =>
+      p.includes('resolution rules')
+    )
+  );
 });
 
 test('breakage simulation: an async:true axis spawn without keys and without the turn rule is flagged (issue #6)', () => {
@@ -776,16 +830,47 @@ test('breakage simulation: an async:true axis spawn without keys and without the
   assert.ok(problems.some((p) => p.includes('never-end-your-turn')));
 });
 
+test('ticket 37: final-reviewer 保留跨票检查与延期 findings 处置，前提兼容 reviewer=off', () => {
+  const text = contractText('final-reviewer-agent-definition');
+  assert.match(text, /cross-file drift/);
+  assert.match(text, /contradictions between components/);
+  assert.match(text, /spec requirements with no implementing ticket/);
+  assert.match(text, /docs that no longer match the shipped code/);
+  assert.match(text, /minor finding deferred by per-ticket reviews/);
+  assert.match(text, /reviewer=off/);
+  assert.match(text, /runs either way/);
+  assert.doesNotMatch(text, /after every per-ticket review has passed/);
+  assert.match(text, /ready_with_fixes/);
+  assert.match(text, /not_ready/);
+});
+
+test('ticket 37: reviewer 输入对齐 brief 与机械 gate 证据，标准来源定位责任明确', () => {
+  const text = contractText('reviewer-agent-definition');
+  assert.match(text, /typed report \(`headSha`, `testResult`\)/);
+  assert.match(text, /no model-written implementer report/i);
+  assert.match(text, /locating the repo's standards sources/i);
+  assert.doesNotMatch(text, /already done for you/);
+  assert.match(text, /approved/);
+  assert.match(text, /changes_requested/);
+  const brief = sectionOf(contractText('briefs'), '### Reviewer brief', '### Fix follow-up');
+  assert.match(brief, /Gate evidence: the typed-gate report/);
+  assert.doesNotMatch(brief, /Implementer's report/);
+  assert.match(brief, /Axis script: .*axis-axes\.js/);
+  assert.match(brief, /Shared protocol: .*review-protocol\.md/);
+  assert.match(brief, /Run timeout settings: user: /);
+});
+
 // --- issue #9 回归护栏：派发交付形态（脚本写入文件 → 文件路径调用，围栏形态即红） ---
 
-test('dispatch delivery: the ticket-loop and closing documents plus both reviewer agents dispatch workflows in script-file form (issue #9)', () => {
+test('dispatch delivery: the ticket-loop and closing documents plus the shared review protocol dispatch workflows in script-file form (issue #9)', () => {
   const skill = contractText('dispatch-delivery');
   assert.deepEqual(checkWorkflowScriptDelivery(skill), [], 'SKILL.md violates the script-file dispatch form');
   assert.deepEqual(checkDispatchScriptFiles(skill), [], 'SKILL.md lost the dispatch-script file discipline');
-  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
-    const text = contractText(id);
-    assert.deepEqual(checkWorkflowScriptDelivery(text), [], `${id} violates the script-file dispatch form`);
-  }
+  assert.deepEqual(
+    checkWorkflowScriptDelivery(contractText('review-protocol')),
+    [],
+    'shared review protocol violates the script-file dispatch form'
+  );
 });
 
 test('breakage simulation: a reply-fenced dispatch (workflow: true + same-reply block) is flagged (issue #9)', () => {
@@ -1068,6 +1153,33 @@ test('breakage simulation: 入口文档（agent 定义）仍指向已搬迁的�
   assert.ok(
     problems.some((p) => p.includes('agents/old-protocol.md') && p.includes('superseded')),
     `入口文档里的旧路径必须红，实得: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: 入口段多段扫描——先前的随口提名不误杀后来的有效披露（ticket 37）', (t) => {
+  const registry = [
+    contractRow('fix-loop', ['run/loop.md'], { trigger: 'before dispatching the next round' }),
+  ];
+  const casualFirst = relocationRoot(t, {
+    'run/loop.md': '# Loop rules\n',
+    [TRUNK_DOC]:
+      '# Implement, orchestrated\nThe docs under `run/loop.md` are context worth knowing.\n\n' +
+      'Read `run/loop.md` before dispatching the next round.\n',
+  });
+  assert.deepEqual(
+    checkContractDocLocations(casualFirst, { registry }),
+    [],
+    '后面已有合格披露段时，先前的随口提名不得誤报'
+  );
+  // 对照：只有随口提名（无动作前读取）仍然緂。
+  const casualOnly = relocationRoot(t, {
+    'run/loop.md': '# Loop rules\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\nThe docs under `run/loop.md` are context worth knowing.\n',
+  });
+  const problems = checkContractDocLocations(casualOnly, { registry });
+  assert.ok(
+    problems.some((p) => p.includes('pre-action read')),
+    `只有提名没有动作前读取必须緂，实得: ${JSON.stringify(problems)}`
   );
 });
 
