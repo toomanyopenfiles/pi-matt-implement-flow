@@ -12,6 +12,12 @@ implementation history live in [`docs/adr/`](./docs/adr/).
 
 ### Changed
 
+- Running the real-model acceptance probe (`npm run repro`) no longer starts model calls on its own.
+  It first prints the batch plan (scenarios, model, call budget, timeouts, write scope) and runs only
+  that exact plan after you approve its hash; it stops at the approved call budget, keeps every
+  attempt, and never reports an undetermined or unfinished repetition as passed. `npm test` and CI
+  still make no model calls. (#34)
+
 - Subagent runs get a 4-hour run deadline by default instead of 1 hour (`coder`, `reviewer`, and
   `final-reviewer`). Long tickets are cut off far less often. (#26)
   (Design: [ADR-0010](./docs/adr/0010-configurable-subagent-run-deadline.md).)

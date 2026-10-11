@@ -64,7 +64,7 @@
 | 包级系统回归 | 实际 tarball、隔离解包目录、包内 CLI、真实 git、tracker 桩 | 发现漏打包、引用错误和跨入口失配 |
 | 真实模型/服务 E2E | Pi、子代理、模型、真实 tracker | 后续独立项目，不在本轮 CI 中运行 |
 
-现有 `npm test` 已混合前三层，不应把全部测试重命名为单元测试。`test/repro-reviewer-axes.js` 涉及真实模型，继续留在默认 CI 之外。
+现有 `npm test` 已混合前三层，不应把全部测试重命名为单元测试。`test/e2e/`（真实模型验收入口，含双轴探针 `test/e2e/probes/repro-reviewer-axes.js`）涉及真实模型，继续留在默认 CI 之外。
 
 ### Runner 与运行时
 

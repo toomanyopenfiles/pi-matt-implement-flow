@@ -297,6 +297,7 @@ flowchart TD
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md)——开发流程（`npm test`，无构建步骤）、issue 生命周期标签、PR 检查清单
 - 验证修复、暂停、阶段性交付或放弃行为时，请看[场景验收](./docs/agents/prompt-driven-scenario-acceptance.md)——可复查步骤，以及已有原生执行、受控推演与 CLI 证据的边界
+- 准备跑任何真实模型调用（付费、需人工授权）前，请看[真实模型验收入口](./docs/agents/real-model-acceptance.md)——`node test/e2e/accept.js`（`npm run repro` 走同一入口）的计划、授权、结果与清理
 - 用 issue 表单提交 [Bug 报告](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=bug.yml) 或 [功能请求](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=feature.yml)
 - 安全漏洞请按 [SECURITY.md](./SECURITY.md) 私密上报——永远不要开公开 issue
 

@@ -43,7 +43,7 @@ jobs:
 
       # 无依赖安装：仓库无 lockfile、无构建步骤；测试自带 fixture，包级测试自带 npm pack。
       # 一套入口覆盖四层：单元/集成、CLI 黑盒、静态合同、包级系统（tarball 解包回归）。
-      # 真实模型探针（test/repro-*.js）不在 npm test 内，也不在 CI 内。
+      # 真实模型验收入口（test/e2e/，含双轴探针）不在 npm test 内，也不在 CI 内。
       - name: Run full test suite
         run: npm test
 
