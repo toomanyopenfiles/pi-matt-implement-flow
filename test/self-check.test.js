@@ -51,6 +51,7 @@ const {
   checkNoIsolationBriefs,
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
+  checkRetiredDispatchForms,
   checkDispatchScriptFiles,
   checkPartialDeliveryContinuation,
 } = require('../scripts/registration-checks.js');
@@ -830,6 +831,18 @@ test('breakage simulation: an async:true axis spawn without keys and without the
   assert.ok(problems.some((p) => p.includes('never-end-your-turn')));
 });
 
+test('ticket 37: coder 定义把报告落在普通最终消息上（机械报告由平台门禁产，不归 coder）', () => {
+  assert.match(coderAgentText, /in your final message/);
+  assert.doesNotMatch(coderAgentText, /structured output/i);
+  // 保留面：批准范围 / workspace / test-first / 提交 / 升级 / 事实报告。
+  assert.match(coderAgentText, /approved scope/i);
+  assert.match(coderAgentText, /test-first/);
+  assert.match(coderAgentText, /contact_supervisor/);
+  assert.match(coderAgentText, /observations from your assessment/);
+  // 禁令面/表单复述面仍由 anchor-4 钉死（此处只钉职责修正面）。
+  assert.deepEqual(checkNoReportBans(contractText('briefs'), coderAgentText), []);
+});
+
 test('ticket 37: final-reviewer 保留跨票检查与延期 findings 处置，前提兼容 reviewer=off', () => {
   const text = contractText('final-reviewer-agent-definition');
   assert.match(text, /cross-file drift/);
@@ -871,6 +884,10 @@ test('dispatch delivery: the ticket-loop and closing documents plus the shared r
     [],
     'shared review protocol violates the script-file dispatch form'
   );
+  // 派发已搬出 agent 定义（ticket 37）：两份定义不再自带宽派发，但也不得回带退役形态。
+  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
+    assert.deepEqual(checkRetiredDispatchForms(contractText(id)), [], `${id} 回带了退役派发形态`);
+  }
 });
 
 test('breakage simulation: a reply-fenced dispatch (workflow: true + same-reply block) is flagged (issue #9)', () => {
@@ -881,6 +898,9 @@ test('breakage simulation: a reply-fenced dispatch (workflow: true + same-reply 
   const problems = checkWorkflowScriptDelivery(fenced);
   assert.ok(problems.some((p) => p.includes('reply-fenced')));
   assert.ok(problems.some((p) => p.includes('script-file')));
+  // 同一退役形态扫描也单独适用于 agent 定义（ticket 37：派发搬出定义后仍不得回流）。
+  assert.ok(checkRetiredDispatchForms('subagent({ workflow: true })').some((p) => p.includes('workflow: true')));
+  assert.ok(checkRetiredDispatchForms('use the removed workflowScript API').some((p) => p.includes('workflowScript')));
 });
 
 test('breakage simulation: the removed workflowScript API and a lost file discipline are flagged (issue #9)', () => {

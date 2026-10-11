@@ -815,6 +815,7 @@ module.exports = {
   checkNoIsolationBriefs,
   checkAxisSpawnContract,
   checkWorkflowScriptDelivery,
+  checkRetiredDispatchForms,
   checkDispatchScriptFiles,
   checkPartialDeliveryContinuation,
 };
@@ -1377,13 +1378,18 @@ const RETIRED_DISPATCH_TOKENS = [
   { re: /\bworkflowScriptPath\b/, name: 'the removed `workflowScriptPath` API' },
 ];
 
-function checkWorkflowScriptDelivery(text) {
+function checkRetiredDispatchForms(text) {
   const problems = [];
   for (const { re, name } of RETIRED_DISPATCH_TOKENS) {
     if (re.test(text)) {
       problems.push(`dispatch wording still carries ${name} — deliver workflow scripts as files (workflow: "<path>.js")`);
     }
   }
+  return problems;
+}
+
+function checkWorkflowScriptDelivery(text) {
+  const problems = checkRetiredDispatchForms(text);
   if (!SCRIPT_FILE_FORM.test(text)) {
     problems.push('no script-file dispatch form found (workflow: "<path>.js") — every workflow dispatch must call a script file');
   }
