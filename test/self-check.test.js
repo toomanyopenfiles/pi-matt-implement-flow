@@ -7,8 +7,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
-const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const {
   AGENT_NAMES,
@@ -56,11 +54,19 @@ const {
   checkDispatchScriptFiles,
   checkPartialDeliveryContinuation,
 } = require('../scripts/registration-checks.js');
+const { relocationRoot, contractRow } = require('./fixtures/contract-docs.js');
+
+// agent 定义按注册面读：目录来自 package.json pi.subagents.agents（frontmatter 是注册事实，
+// 必须在注册文件里），不在测试里写死目录。
+function agentsDir() {
+  const declared = manifest?.pi?.subagents?.agents ?? [];
+  return String(declared[0] ?? 'agents').replace(/^\.\//, '');
+}
 
 function readAgentFrontmatter() {
   const frontmatter = {};
   for (const agentName of AGENT_NAMES) {
-    frontmatter[agentName] = parseFrontmatter(readText(PKG_ROOT, `agents/${agentName}.md`));
+    frontmatter[agentName] = parseFrontmatter(readText(PKG_ROOT, `${agentsDir()}/${agentName}.md`));
   }
   return frontmatter;
 }
@@ -366,7 +372,7 @@ test('breakage simulation: the environment-survey step going missing is flagged'
 // --- 票 02 断锚：typed gate 派发形态（8 条）+ breakage simulation ---
 // 检查器吃 SKILL.md / agents/coder.md 文本；schema 副本与票 01 模块导出真源交叉比对。
 
-const coderAgentText = readText(PKG_ROOT, 'agents/coder.md');
+const coderAgentText = contractText('coder-agent-definition');
 // 简报契约的权威文本（破坏模拟从它做原句手术）。
 const briefsText = contractText('briefs');
 const { REPORT_CONTRACT } = require('../scripts/mechanical-report.js');
@@ -742,15 +748,14 @@ test('breakage simulation: a missing fifth brief is flagged (anchor-8)', () => {
 // --- issue #6 回归护栏：双轴派发契约（阻塞调用 + 稳定 key + 不得提前收尾） ---
 
 test('reviewer and final-reviewer axis-spawn contract: blocking call with stable keys (issue #6)', () => {
-  for (const name of ['reviewer', 'final-reviewer']) {
-    const text = readText(PKG_ROOT, `agents/${name}.md`) || '';
-    assert.deepEqual(checkAxisSpawnContract(text), [], `agents/${name}.md violates the axis-spawn contract`);
+  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
+    assert.deepEqual(checkAxisSpawnContract(contractText(id)), [], `${id} violates the axis-spawn contract`);
   }
 });
 
 test('breakage simulation: reviewer axes losing fresh timeout args or main-repo settings paths are flagged (#26)', () => {
-  for (const name of ['reviewer', 'final-reviewer']) {
-    const text = readText(PKG_ROOT, `agents/${name}.md`);
+  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
+    const text = contractText(id);
     assert.ok(checkAxisSpawnContract(text.replace('timeoutMs: RUN_TIMEOUT_MS, ', '')).some((p) => p.includes('timeoutMs: RUN_TIMEOUT_MS')));
     assert.ok(checkAxisSpawnContract(text.replaceAll('Run timeout settings', 'Retired settings')).some((p) => p.includes('settings paths')));
     assert.ok(checkAxisSpawnContract(text.replaceAll('run-timeout-settings.md', 'retired.md')).some((p) => p.includes('resolution rules')));
@@ -771,12 +776,12 @@ test('breakage simulation: an async:true axis spawn without keys and without the
 // --- issue #9 回归护栏：派发交付形态（脚本写入文件 → 文件路径调用，围栏形态即红） ---
 
 test('dispatch delivery: SKILL.md and both reviewer agents dispatch workflows in script-file form (issue #9)', () => {
-  const skill = readText(PKG_ROOT, 'SKILL.md') || '';
+  const skill = contractText('dispatch-delivery');
   assert.deepEqual(checkWorkflowScriptDelivery(skill), [], 'SKILL.md violates the script-file dispatch form');
   assert.deepEqual(checkDispatchScriptFiles(skill), [], 'SKILL.md lost the dispatch-script file discipline');
-  for (const name of ['reviewer', 'final-reviewer']) {
-    const text = readText(PKG_ROOT, `agents/${name}.md`) || '';
-    assert.deepEqual(checkWorkflowScriptDelivery(text), [], `agents/${name}.md violates the script-file dispatch form`);
+  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
+    const text = contractText(id);
+    assert.deepEqual(checkWorkflowScriptDelivery(text), [], `${id} violates the script-file dispatch form`);
   }
 });
 
@@ -947,20 +952,6 @@ test('breakage simulation: a dropped brief template is flagged (issue #7 模板�
 // 取文本，不再在测试里写死文件路径。搬迁装置一律用假想根（临时目录 + 假想登记表），
 // 绝不改动真实文件；负例的破坏必须真的让对应检查变红。
 
-function relocationRoot(t, files) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'contract-docs-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  for (const [rel, text] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-    fs.writeFileSync(path.join(root, rel), text);
-  }
-  return root;
-}
-
-function contractRow(id, docs, previous = [TRUNK_DOC]) {
-  return { id, contract: 'fixture row', docs, previous, tests: [] };
-}
-
 function sectionOf(text, start, end) {
   const s = text.indexOf(start);
   assert.notEqual(s, -1, `fixture surgery found no anchor: ${start}`);
@@ -1031,7 +1022,7 @@ test('breakage simulation: 入口缺失 / 入口缺动作前读取语义 / 错�
     [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before dispatching each round.\n',
   });
   const staleProblems = checkContractDocLocations(stale, {
-    registry: [contractRow('fix-loop', ['run/ticket-loop.md'], ['run/loop.md'])],
+    registry: [contractRow('fix-loop', ['run/ticket-loop.md'], { previous: ['run/loop.md'] })],
   });
   assert.ok(
     staleProblems.some((p) => p.includes('superseded')),
@@ -1064,6 +1055,83 @@ test('relocation fixture: 派发模板搬到登记文档后，模板字段检查
     `派发字段错误必须红，实得: ${JSON.stringify(problems)}`
   );
   assert.ok(problems.some((p) => /is missing the run deadline/.test(p)), JSON.stringify(problems));
+});
+
+test('contract registry: 每行都记录原位置、权威位置、触发入口与对应测试（对照数据完整且指针落地）', () => {
+  for (const row of CONTRACT_DOCUMENTS) {
+    assert.ok(row.contract && row.contract.length > 0, `缺契约摘要: ${row.id}`);
+    assert.ok(row.docs.length > 0, `缺权威位置: ${row.id}`);
+    assert.ok(row.previous.length > 0, `缺原位置: ${row.id}`);
+    assert.ok(row.entry?.carriers?.length > 0, `缺触发入口所在文档: ${row.id}`);
+    assert.ok(typeof row.entry.trigger === 'string' && row.entry.trigger.length > 0, `缺触发条件: ${row.id}`);
+    assert.ok(row.tests.length > 0, `缺对应测试: ${row.id}`);
+    for (const pointer of row.tests) {
+      const file = pointer.split(' · ')[0];
+      assert.ok(isFileAt(PKG_ROOT, file), `对照测试指针不存在: ${pointer}（契约 ${row.id}）`);
+    }
+    for (const carrier of [...row.docs, ...row.entry.carriers]) {
+      assert.ok(isFileAt(PKG_ROOT, carrier), `登记/入口文档不存在: ${carrier}（契约 ${row.id}）`);
+    }
+  }
+});
+
+test('breakage simulation: 披露段缺触发条件锚点即红（触发入口不是只记录不执行）', (t) => {
+  const trigger = 'before dispatching the next round';
+  const registry = [contractRow('fix-loop', ['run/loop.md'], { trigger })];
+  const withTrigger = relocationRoot(t, {
+    'run/loop.md': '# Loop rules\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before dispatching the next round.\n',
+  });
+  assert.deepEqual(checkContractDocLocations(withTrigger, { registry }), []);
+  const withoutTrigger = relocationRoot(t, {
+    'run/loop.md': '# Loop rules\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before acting.\n',
+  });
+  const problems = checkContractDocLocations(withoutTrigger, { registry });
+  assert.ok(
+    problems.some((p) => p.includes('trigger')),
+    `缺触发条件锚点必须红，实得: ${JSON.stringify(problems)}`
+  );
+});
+
+test('breakage simulation: 入口所在文档（carrier）缺失即红', (t) => {
+  const root = relocationRoot(t, {
+    'run/loop.md': '# Loop rules\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\nRead `run/loop.md` before dispatching the next round.\n',
+  });
+  const registry = [
+    contractRow('fix-loop', ['run/loop.md'], { carriers: ['run/missing-trunk.md'] }),
+  ];
+  const problems = checkContractDocLocations(root, { registry });
+  assert.ok(
+    problems.some((p) => p.includes('run/missing-trunk.md') && p.includes('missing')),
+    `入口文档缺失必须红，实得: ${JSON.stringify(problems)}`
+  );
+});
+
+test('relocation fixture: 派发交付契约搬到登记文档后，护栏跟随新位置（承重纪律丢失仍红）', (t) => {
+  const delivery = contractText('dispatch-delivery');
+  const root = relocationRoot(t, { 'run/dispatch.md': delivery });
+  const registry = [contractRow('dispatch-delivery', ['run/dispatch.md'])];
+  const relocated = resolveContractText(root, 'dispatch-delivery', { registry });
+  assert.equal(relocated, delivery, '登记位置决定取哪份文本');
+  // 同一份断言，新位置照样全绿。
+  assert.deepEqual(checkWorkflowScriptDelivery(relocated), []);
+  assert.deepEqual(checkDispatchScriptFiles(relocated), []);
+  // 承重纪律丢失：落盘目录约定消失 → 红。
+  const lostWfDir = relocated.replaceAll('/wf/', '/elsewhere/');
+  assert.notEqual(lostWfDir, relocated);
+  assert.ok(
+    checkDispatchScriptFiles(lostWfDir).some((p) => p.includes('/wf/')),
+    '落盘纪律丢失必须红'
+  );
+  // 围栏形态回潮（workflow: true）→ 红。
+  const fenced = relocated.replace('workflow: "./.pi/matt-implement/<slug>/wf/', 'workflow: true, // ');
+  assert.notEqual(fenced, relocated, 'fixture surgery found no anchor — update the fixture to the current wording');
+  assert.ok(
+    checkWorkflowScriptDelivery(fenced).some((p) => p.includes('reply-fenced')),
+    '围栏形态回潮必须红'
+  );
 });
 
 test('breakage simulation: 主干没被 pi.skills 注册即红（披露入口自身的注册面）', () => {

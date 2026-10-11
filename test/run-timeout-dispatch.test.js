@@ -10,6 +10,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { resolveContractText } = require('../scripts/registration-checks.js');
+const { relocationRoot, contractRow } = require('./fixtures/contract-docs.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -110,14 +111,9 @@ test('the actual retained-resume template sends no timeout override after a sett
 });
 
 test('relocation fixture: 模板搬到登记文档后，派发边界仍执行同一份脚本（字段错误在边界现形）', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-docs-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const templates = dispatchTemplates();
-  fs.mkdirSync(path.join(root, 'run'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'run', 'dispatch.md'), templates);
-  const registry = [
-    { id: 'dispatch-templates', contract: 'fixture row', docs: ['run/dispatch.md'], previous: ['SKILL.md'], tests: [] },
-  ];
+  const root = relocationRoot(t, { 'run/dispatch.md': templates });
+  const registry = [contractRow('dispatch-templates', ['run/dispatch.md'])];
   const relocated = resolveContractText(root, 'dispatch-templates', { registry });
   assert.equal(relocated, templates, '登记位置决定取哪份模板文本');
   const script = [...relocated.matchAll(/```js\n([\s\S]*?)\n```/g)]
