@@ -140,8 +140,11 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
 
   const anchorIdx = (name) => (ANCHORS[name] ? firstIndexWhere(events, ANCHORS[name]) : -1);
   const anchorSeen = (name) => anchorIdx(name) >= 0;
-  // 空轨迹 = 盲判：一切「没读到 / 没做到」都只是没有证据，不是模型没做。
-  const blind = events.length === 0;
+  // 盲判：轨迹里没有任何会话事实（读取 / 动作 / 派发 / 验证 / 声称）时，一切「没读到 /
+  // 没做到」都只是没有证据，不是模型没做——平台没起来、会话记录没采到都属于这一类。
+  const SESSION_FACT_KINDS = ['read', 'action', 'dispatch', 'merge', 'validation', 'write', 'role-check', 'claim'];
+  const hasSessionFacts = events.some((e) => SESSION_FACT_KINDS.includes(e.kind));
+  const blind = !hasSessionFacts;
 
   // ---- 判定契约自检：锚点与契约 id 必须存在（装置故障先于一切，不得当成模型问题）----
   const readEntries = [
@@ -159,8 +162,14 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
   for (const name of [...(expectations.requiredActions || []), ...((expectations.forbiddenActions || []).map((f) => f.action))]) {
     if (!ANCHORS[name]) engine.push({ id: 'judgement-contract', state: 'harness', note: `未知锚点: ${name}（动作名必须是已登记的动作点）` });
   }
-  if (events.length === 0) {
-    engine.push({ id: 'evidence-present', state: 'inconclusive', note: '轨迹为空：没有任何读取 / 动作 / 生命周期事实可判，证据不足' });
+  if (blind) {
+    engine.push({
+      id: 'evidence-present',
+      state: 'inconclusive',
+      note: events.length === 0
+        ? '轨迹为空：没有任何读取 / 动作 / 生命周期事实可判，证据不足'
+        : '轨迹里没有会话事实（读取 / 动作 / 派发 / 验证 / 声称）：无法判定模型做了什么，证据不足',
+    });
   }
 
   // ---- 1. 关键文档在动作前加载 ----
@@ -380,7 +389,7 @@ function judgeTrace({ scenario, expectations = {}, trace, stage = null }) {
       failed: decorated.filter((f) => f.kind === 'product-regression' && !f.baselineDefect).map((f) => f.id),
       undetermined: all.filter((a) => a.state === 'inconclusive').map((a) => a.id),
       baselineDefects: decorated.filter((f) => f.baselineDefect).map((f) => f.id),
-      notRun: events.length === 0 ? ['no-evidence'] : [],
+      notRun: blind ? ['no-evidence'] : [],
       passed: all.filter((a) => a.state === 'pass').map((a) => a.id),
     },
   };

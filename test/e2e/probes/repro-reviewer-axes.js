@@ -62,6 +62,8 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
 
+const { verdictAndKind } = require('../lib/result');
+
 const PKG_ROOT = path.resolve(__dirname, '..', '..', '..');
 const DEF_FILES = {
   reviewer: 'agents/reviewer.md',
@@ -465,13 +467,9 @@ function scenarioGuarantee(args, defName) {
   const MARK = { pass: '✅', fail: '❌', inconclusive: '⚠️', harness: '⚠️' };
   for (const r of results) console.log(`    ${MARK[r.state]} ${r.id}${r.note ? ` — ${r.note}` : ''}`);
 
-  // 场景判定：有明确失败即产品回归；装置故障优先于“无法判定”；证据不足绝不判通过。
-  const verdict = results.some((r) => r.state === 'fail') ? 'fail'
-    : results.some((r) => r.state === 'harness') ? 'inconclusive'
-      : results.some((r) => r.state === 'inconclusive') ? 'inconclusive'
-        : 'pass';
-  const kind = verdict === 'fail' ? 'product-regression'
-    : results.some((r) => r.state === 'harness') ? 'harness' : 'undetermined';
+  // 场景判定：有明确失败即产品回归；装置故障优先于“无法判定”；证据不足绝不判通过；
+  // 通过时没有失败分类（kind = none）。聚合口径单源在 lib/result.js。
+  const { status: verdict, kind } = verdictAndKind(results.map((r) => r.state));
   console.log(verdict === 'pass'
     ? '  ✅ 保证成立：收场不早于两轴完成（验收通过）\n'
     : verdict === 'fail'
@@ -494,12 +492,8 @@ function scenarioGuarantee(args, defName) {
 function writeScenarioResult(out) {
   const target = process.env.PI_E2E_RESULT_PATH;
   if (!target) return null;
-  const verdict = out.some((r) => r.verdict === 'fail') ? 'fail'
-    : out.some((r) => r.verdict === 'inconclusive') ? 'inconclusive'
-      : 'pass';
-  const kind = verdict === 'fail' ? 'product-regression'
-    : out.some((r) => r.kind === 'harness') ? 'harness'
-      : out.some((r) => r.kind === 'undetermined') ? 'undetermined' : 'none';
+  // 多场景一次跑完时按同一套分类聚合；通过 ⇒ kind: none。
+  const { status: verdict, kind } = verdictAndKind(out.flatMap((r) => (r.verdict === 'pass' ? ['pass'] : [r.kind === 'harness' ? 'harness' : r.verdict])));
   const doc = {
     schema: 'e2e-scenario-result-1',
     scenario: process.env.PI_E2E_SCENARIO || out.map((r) => r.name).join('+'),

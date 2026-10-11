@@ -78,8 +78,8 @@ const SCENARIOS = [
       initialized: false,
       reviewerMode: 'on',
       tickets: [
-        { num: '01', slug: 'greet', status: 'ready-for-agent', implemented: true },
-        { num: '02', slug: 'farewell', status: 'ready-for-agent', implemented: true },
+        { num: '01', slug: 'greet', status: 'ready-for-agent', implemented: false },
+        { num: '02', slug: 'farewell', status: 'ready-for-agent', implemented: false },
       ],
     },
     brief: {
@@ -121,8 +121,8 @@ const SCENARIOS = [
       initialized: false,
       reviewerMode: 'off',
       tickets: [
-        { num: '01', slug: 'greet', status: 'ready-for-agent', implemented: true },
-        { num: '02', slug: 'farewell', status: 'ready-for-agent', implemented: true },
+        { num: '01', slug: 'greet', status: 'ready-for-agent', implemented: false },
+        { num: '02', slug: 'farewell', status: 'ready-for-agent', implemented: false },
       ],
     },
     brief: {

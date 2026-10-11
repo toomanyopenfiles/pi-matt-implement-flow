@@ -396,3 +396,220 @@ test('批次汇总：通过 / 缺失 / 失败 / 无法判定 / 未执行 / 基�
   assert.deepEqual(baselineEntry.report.failed, [], '基线既有缺陷不进候选回归分组');
   assert.ok(summary.missing[0].ids.every((id) => id.startsWith('missing-read:')), '缺失分组只列漏读类');
 });
+
+// ====================================================================
+// 装置与入口：fixture 现场、候选选择、未授权拒绝与桩平台执行
+// ====================================================================
+
+const { spawnSync } = require('node:child_process');
+const ENTRY = path.join(REPO_ROOT, 'test', 'e2e', 'accept.js');
+const PROBE = path.join(REPO_ROOT, 'test', 'e2e', 'probes', 'flow-scenarios.js');
+const STUB_PI = path.join(REPO_ROOT, 'test', 'fixtures', 'e2e-stub-pi.js');
+const flowFixture = require('./e2e/lib/flow-fixture');
+const fixtureSpec = require('./e2e/lib/fixture-spec');
+
+// 调用边界装置：桩平台二进制 + 独立 TMPDIR + 桩调用日志（零模型调用）。
+function entryHarness() {
+  const dir = fs.mkdtempSync(path.join(tmpRoot, 'entry-'));
+  const tmpdir = path.join(dir, 'tmp');
+  fs.mkdirSync(tmpdir);
+  const piBin = path.join(dir, 'pi');
+  fs.copyFileSync(STUB_PI, piBin);
+  fs.chmodSync(piBin, 0o755);
+  const piLog = path.join(dir, 'pi.jsonl');
+  const env = { ...process.env, PI_E2E_PI_BIN: piBin, STUB_PI_LOG: piLog, TMPDIR: tmpdir };
+  return {
+    dir,
+    tmpdir,
+    piLog,
+    env,
+    piCalls: () => (fs.existsSync(piLog) ? fs.readFileSync(piLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []),
+    modelCalls() { return this.piCalls().filter((c) => !c.argv.includes('--version')); },
+  };
+}
+
+const runEntry = (h, args, { env = {}, input = '', timeout = 240000 } = {}) => spawnSync(process.execPath, [ENTRY, ...args], {
+  cwd: REPO_ROOT, env: { ...h.env, ...env }, input, encoding: 'utf8', timeout,
+});
+
+test('计划展示流程场景的装置事实：fixture、任务书（不指路）、判定契约与计费单位', () => {
+  const h = entryHarness();
+  const out = path.join(h.dir, 'out');
+  const r = runEntry(h, ['--scenario', 'flow-new-run,flow-abandon,walkthrough-paused-repair', '--out', out, '--json']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const doc = JSON.parse(r.stdout);
+  assert.equal(doc.plan.scenarios.length, 3);
+
+  const created = fs.readdirSync(h.tmpdir);
+  assert.deepEqual(created, [], '计划模式不建 fixture、不建会话目录');
+  assert.equal(h.modelCalls().length, 0, '计划模式零模型调用');
+  assert.equal(fs.existsSync(out), false, '计划模式不创建证据目录');
+
+  for (const s of doc.plan.scenarios) {
+    assert.ok(s.fixture && /^[0-9a-f]{64}$/.test(s.fixture.sha256), `${s.id} 的 fixture 有清单哈希`);
+    assert.equal(s.fixture.trackerStub, 'local', `${s.id} 用 local tracker 桩（无远程写面）`);
+    assert.match(s.fixture.testCommand, /npm test/);
+    assert.ok(s.brief && /^[0-9a-f]{64}$/.test(s.brief.sha256), `${s.id} 的任务书有哈希`);
+    assert.equal(s.callsUnit, 'session');
+    assert.ok(s.judgement.requiredReadsBefore.length > 0, `${s.id} 计划里能看到判定了什么`);
+    assert.deepEqual(briefLib.findDisclosureLeaks(s.brief.sha256), [], '任务书哈希不是文档路径');
+  }
+  assert.match(doc.plan.counts.callsUnitNote, /session = 平台会话/);
+  assert.equal(doc.plan.candidate, null, '没指候选就如实说没有命名候选');
+  assert.match(doc.plan.comparison.note, /本轮无对照/);
+});
+
+test('阶段候选：--candidate 进计划与授权哈希，未登记阶段不得声称；未知 ref 是用法错误', () => {
+  const h = entryHarness();
+  const plan = (args) => {
+    const r = runEntry(h, [...args, '--json']);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  const head = plan(['--scenario', 'flow-new-run']);
+  const withHead = plan(['--scenario', 'flow-new-run', '--candidate', 'HEAD']);
+  assert.equal(withHead.plan.candidate.ref, 'HEAD');
+  assert.equal(withHead.plan.candidate.match, true, 'HEAD 与工作区一致');
+  assert.equal(withHead.plan.candidate.stage, 'unlabeled', 'HEAD 不是已登记阶段');
+  assert.match(withHead.plan.candidate.note, /不得声称检验了已知阶段/);
+  assert.notEqual(withHead.approvalHash, head.approvalHash, '换候选必须重新授权');
+  assert.match(withHead.plan.comparison.note, /不比较逐字输出/);
+  assert.match(withHead.plan.comparison.note, /各自单独授权/);
+
+  const baseline = flowScenarios.KNOWN_STAGES.find((s) => s.stage === 'baseline');
+  const withBaseline = plan(['--scenario', 'flow-new-run', '--candidate', baseline.ref]);
+  assert.equal(withBaseline.plan.candidate.stage, 'baseline');
+  assert.equal(withBaseline.plan.candidate.match, false, '基线内容与工作区不同：如实标注不一致');
+  assert.match(withBaseline.plan.candidate.note, /不得据此宣称检验了该候选|重新评估/);
+
+  const bad = runEntry(h, ['--candidate', 'no-such-ref', '--json']);
+  assert.equal(bad.status, 2, `未知候选 ref 应为用法错误：${bad.stdout}${bad.stderr}`);
+  assert.match(bad.stderr, /未知候选/);
+  assert.equal(h.modelCalls().length, 0);
+});
+
+test('流程场景仍受授权门约束：未授权不建 fixture、不启动平台；桩平台下绝不判通过', () => {
+  const h = entryHarness();
+  const denied = runEntry(h, ['--scenario', 'nav-stage-discovery', '--run', '--out', path.join(h.dir, 'denied')], { input: '' });
+  assert.equal(denied.status, 1, denied.stdout + denied.stderr);
+  assert.match(denied.stderr, /模型调用授权/);
+  assert.deepEqual(fs.readdirSync(h.tmpdir), [], '未授权不建 fixture、不建会话目录');
+  assert.equal(h.modelCalls().length, 0, '未授权不启动平台');
+
+  const planRes = runEntry(h, ['--scenario', 'nav-stage-discovery', '--json']);
+  const hash = JSON.parse(planRes.stdout).approvalHash;
+  const out = path.join(h.dir, 'run');
+  const approved = runEntry(h, ['--scenario', 'nav-stage-discovery', '--approve', hash, '--out', out, '--json']);
+  assert.equal(approved.status, 3, `桩平台下不得判通过：${approved.stdout}${approved.stderr}`);
+  const results = JSON.parse(fs.readFileSync(path.join(out, 'results.json'), 'utf8'));
+  assert.equal(results.status, 'not-accepted');
+  const s = results.scenarios[0];
+  assert.notEqual(s.status, 'pass', '桩平台没有真实会话事实，绝不判通过');
+  assert.equal(s.status, 'incomplete');
+  assert.ok(['undetermined', 'harness'].includes(s.classification), `分类如实：${s.classification}`);
+  // 装置真的跑过：会话目录留下、探针结果里带着独立临时项目与平台调用事实。
+  const attemptResult = JSON.parse(fs.readFileSync(
+    path.join(out, 'attempts', 'nav-stage-discovery-run-1-attempt-1.result.json'), 'utf8',
+  ));
+  assert.ok(attemptResult.fixture && attemptResult.fixture.projectDir.startsWith(h.tmpdir), '独立临时项目建在隔离 TMPDIR 里');
+  assert.equal(attemptResult.fixture.trackerStub, 'local');
+  assert.equal(attemptResult.trace.platform.status, 0, '桩平台被真的调用了（平台边界到达）');
+  assert.equal(attemptResult.trace.events, 1, '桩平台没有会话事实，只剩现场生命周期一条');
+  assert.ok(fs.readdirSync(h.tmpdir).some((n) => n.startsWith('flow-session-')), '会话目录留存为证据');
+});
+
+test('自检通道 --replay：合成轨迹走同一判定并写结果（零模型调用，不是模型验收）', () => {
+  const h = entryHarness();
+  const traceFile = path.join(h.dir, 'green.json');
+  fs.writeFileSync(traceFile, JSON.stringify(traces.referenceTrace('flow-new-run')));
+  const resultFile = path.join(h.dir, 'result.json');
+  const r = spawnSync(process.execPath, [PROBE, '--only', 'flow-new-run', '--replay', traceFile, '--json'], {
+    cwd: REPO_ROOT, env: { ...h.env, PI_E2E_RESULT_PATH: resultFile }, encoding: 'utf8', timeout: 120000,
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const doc = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+  assert.equal(doc.status, 'pass');
+  assert.equal(doc.kind, 'none', '通过时没有失败分类（票 34 轮 2 发现的自相矛盾已修）');
+  assert.equal(doc.calls, 0, '自检通道不产生任何调用');
+  assert.equal(h.modelCalls().length, 0);
+  assert.match(doc.trace.source, /synthetic/);
+});
+
+test('fixture 装置：独立临时项目、tracker 桩、固定初始状态，未入账合并现场能逼出对账差异', () => {
+  const other = fs.mkdtempSync(path.join(tmpRoot, 'fixtures-'));
+  const unrecorded = flowFixture.buildFixture(defOf('flow-cold-resume-unrecorded-merge'), { parentDir: other });
+  const partial = flowFixture.buildFixture(defOf('flow-partial-continuation'), { parentDir: other });
+  try {
+    for (const fx of [unrecorded, partial]) {
+      assert.ok(fx.projectDir.startsWith(other), 'fixture 建在临时目录里');
+      assert.ok(!fx.projectDir.startsWith(REPO_ROOT), 'fixture 不落在仓库工作区');
+      const dirty = flowFixture.git(fx.projectDir, ['status', '--porcelain']).stdout;
+      assert.equal(dirty, '', 'fixture 工作区干净（生产流程要求）');
+      const contract = fs.readFileSync(path.join(fx.projectDir, 'docs/agents/issue-tracker.md'), 'utf8');
+      assert.match(contract, /local/i, 'tracker 桩是 local 范本（无远程写面）');
+    }
+    const check = (fx) => spawnSync(process.execPath, [flowFixture.LEDGER, 'check', '--runtime-dir', fx.runtimeDir], { cwd: fx.projectDir, encoding: 'utf8', env: { ...process.env, ...fx.env } });
+    const unrecordedCheck = check(unrecorded);
+    assert.equal(unrecordedCheck.status, 1, '未入账合并真的产生账实差异');
+    assert.match(unrecordedCheck.stdout, /事件流无 merge 事件/, '差异内容就是未入账的那笔合并');
+    assert.equal(unrecordedCheck.stdout.match(/\d+ 处账实差异/) ? Number(unrecordedCheck.stdout.match(/(\d+) 处账实差异/)[1]) : 0, 1, 'fixture 只留一处预期差异，不混入噪声');
+    assert.equal(check(partial).status, 0, '阶段性交付现场账实一致（只差剩余票没做）');
+
+    // 固定初始状态：同一场景反复构建得到同一组 SHA。
+    const again = flowFixture.buildFixture(defOf('flow-cold-resume-unrecorded-merge'), { parentDir: other });
+    try {
+      assert.equal(
+        flowFixture.git(again.projectDir, ['rev-parse', 'HEAD']).stdout,
+        flowFixture.git(unrecorded.projectDir, ['rev-parse', 'HEAD']).stdout,
+        '同一 fixture 的 HEAD 可复现',
+      );
+      assert.equal(again.manifest.sha256, unrecorded.manifest.sha256);
+      assert.equal(fixtureSpec.fixtureManifest(defOf('flow-cold-resume-unrecorded-merge')).sha256, unrecorded.manifest.sha256);
+    } finally {
+      again.cleanup();
+    }
+
+    // 远程写探针：fixture 的 PATH 桩记录尝试并失败。
+    const attempt = spawnSync('gh', ['issue', 'comment', '1', '--body', 'merged'], { env: { ...process.env, ...unrecorded.env }, encoding: 'utf8' });
+    assert.notEqual(attempt.status, 0, '桩里没有真实远程写');
+    assert.match(fs.readFileSync(unrecorded.remoteLog, 'utf8'), /^gh issue comment/m, '尝试被记录（判定器据此判安全边界违规）');
+  } finally {
+    unrecorded.cleanup();
+    partial.cleanup();
+  }
+});
+
+test('放弃现场：fixture 真起一个仍在写入的 child，cleanup 确保收摊', () => {
+  const fx = flowFixture.buildFixture(defOf('flow-abandon'));
+  try {
+    assert.ok(Number.isInteger(fx.childPid) && fx.childPid > 0);
+    const children = JSON.parse(fs.readFileSync(path.join(fx.runtimeDir, 'children.json'), 'utf8'));
+    assert.equal(children[0].pid, fx.childPid);
+    const alive = () => {
+      try { process.kill(fx.childPid, 0); return true; } catch { return false; }
+    };
+    assert.equal(alive(), true, 'child 真的在跑（放弃场景要求现场有活 child）');
+    const pid = fx.childPid;
+    fx.cleanup();
+    try { process.kill(pid, 0); assert.fail('cleanup 必须收掉 child'); } catch { /* 期望：已不在 */ }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('没有生产测试钩子：生产面不引用流程场景装置的环境变量', () => {
+  const surfaces = ['SKILL.md', 'AGENTS.md', ...fs.readdirSync(path.join(REPO_ROOT, 'run')).map((f) => `run/${f}`),
+    ...fs.readdirSync(path.join(REPO_ROOT, 'agents')).map((f) => `agents/${f}`),
+    ...fs.readdirSync(path.join(REPO_ROOT, 'scripts')).filter((f) => f.endsWith('.js')).map((f) => `scripts/${f}`)];
+  const offenders = [];
+  for (const rel of surfaces) {
+    const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+    for (const needle of ['FIXTURE_REMOTE_LOG', 'PI_E2E_', 'flow-fixture', 'flow-scenarios.js', 'e2e/accept.js']) {
+      if (text.includes(needle)) offenders.push(`${rel}:${needle}`);
+    }
+  }
+  assert.deepEqual(offenders, [], '生产指令与脚本里不出现验收装置的环境变量或路径');
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+  assert.doesNotMatch(pkg.scripts.test, /e2e/, '默认测试不扫真实模型区域');
+  assert.ok(!JSON.stringify(pkg.files).includes('test'), '测试区域不进 npm 包');
+});

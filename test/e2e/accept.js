@@ -45,6 +45,8 @@ const USAGE = `用法:
   --retries <n>              每个场景的重试额度，计入调用上限（默认 0）
   --call-cap <n>             本批模型调用上限（默认 = 计划内调用数）
   --baseline <git-ref>       对照基线：做优化前后对照时指名
+  --candidate <git-ref>      被测阶段候选（基线 / 原样搬迁 / 最终候选）：记入计划与内容标识，
+                             与工作区内容不一致时如实标注；换候选要重新授权
   --out <dir>                证据目录（默认 .scratch/e2e-runs/<runId>）
   --approve <hash|->         明确授权与该哈希一致的这一批计划；- 表示从 stdin 读入
   --clean                    按保留策略清理证据目录
@@ -63,7 +65,7 @@ function parseArgs(argv) {
   const args = {
     mode: 'run', json: false, run: false, scenario: null, model: planLib.DEFAULT_MODEL,
     thinking: planLib.DEFAULT_THINKING, runs: 1, retries: 0, callCap: null,
-    baseline: null, out: null, approve: null, keepDays: 14, force: false,
+    baseline: null, candidate: null, out: null, approve: null, keepDays: 14, force: false,
   };
   const need = (i, flag) => {
     if (i + 1 >= argv.length) throw new UsageError(`${flag} 缺参数值`);
@@ -81,6 +83,7 @@ function parseArgs(argv) {
     else if (a === '--retries') { args.retries = intArg(need(i, a), a, 0); i++; }
     else if (a === '--call-cap') { args.callCap = intArg(need(i, a), a, 0); i++; }
     else if (a === '--baseline') { args.baseline = need(i, a); i++; }
+    else if (a === '--candidate') { args.candidate = need(i, a); i++; }
     else if (a === '--out') { args.out = need(i, a); i++; }
     else if (a === '--approve') { args.approve = need(i, a); i++; }
     else if (a === '--clean') args.mode = 'clean';
@@ -202,6 +205,7 @@ async function main(argv, env) {
       retries: args.retries,
       callCap: args.callCap,
       baseline: args.baseline,
+      candidateRef: args.candidate,
       platform: planLib.probePlatform({ binary: env.PI_E2E_PI_BIN || 'pi' }),
       target: planLib.gitTarget(),
       scenariosFile: loaded.file,
