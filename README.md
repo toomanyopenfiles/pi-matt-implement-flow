@@ -321,6 +321,7 @@ Contributions are welcome! Before diving in:
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — dev workflow (`npm test`, no build step), the issue lifecycle labels, and the PR checklist
 - When validating repair, pause, partial-delivery, or abandonment behavior: [scenario acceptance](./docs/agents/prompt-driven-scenario-acceptance.md) — reproducible steps and the limits of recorded native, walkthrough, and CLI evidence
+- Before running anything that calls a real model (paid, human-authorized): [real-model acceptance entry](./docs/agents/real-model-acceptance.md) — plan, authorization, results, and cleanup for `node test/e2e/accept.js` (`npm run repro` is the same entry)
 - File a [bug report](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=bug.yml) or a [feature request](https://github.com/toomanyopenfiles/pi-matt-implement-flow/issues/new?template=feature.yml) through the issue forms
 - Report security vulnerabilities privately via [SECURITY.md](./SECURITY.md) — never as public issues
 

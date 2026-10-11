@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 'use strict';
 // ============================================================================
-// repro-reviewer-axes.js —— issue #6 的复现 / 验收探针（红绿同源）
+// repro-reviewer-axes.js —— issue #6 的双轴派发契约探针（红绿同源）。
+//
+// 定位（不要冒充分级）：这是【局部平台契约探针】——在真实 pi + 真实模型上调验一个
+// 平台契约事实（轴指定定义里的 async 值能否让裁决点晚于两轴完成）。它不是一次完整
+// reviewer / final-reviewer 验收，也不是完整流程 E2E；导航验收与完整流程场景另行批立。
+//
+// 受支持入口：`node test/e2e/accept.js`（默认无模型调用，先展示计划，要 --approve
+// <计划哈希> 才执行本探针）。本文件也可以直接跑（调试用），但那条路径绕过受支持的
+// 授权入口——护栏防的是误触发，不是权限隔离，直接跑同样会产生付费模型调用。
 //
 // 被测断言（guarantee 极性，exit 0 = 保证成立 = 修复后验收通过）：
 //   G0 contract-extracted   从被测定义抽出轴派发契约（async 值 + 稳定 key）
@@ -33,11 +41,20 @@
 //   `async: true` 时调用立即返回 → 收场必然抢在轴完成之前（rev-362 签名）；
 //   `async: false` 时调用阻塞到两轴返回 → 收场必然晚于两轴完成。
 //
-// 用法：
-//   node test/repro-reviewer-axes.js [--only keyless|reviewer|final-reviewer|all]
-//        [--model provider/id] [--dump]
+// 用法（经受支持入口，或调试直跑）：
+//   node test/e2e/accept.js                         预检 + 计划（无模型调用）
+//   node test/e2e/accept.js --approve <计划哈希>     授权后执行本探针的场景
+//   node test/e2e/probes/repro-reviewer-axes.js --only keyless  （调试直跑，会调用模型）
 //
-// 不进默认 `npm test`（真实模型调用、分钟级、需 API 凭证）；npm run repro 手动跑。
+// 平台二进制取 PI_E2E_PI_BIN（默认 `pi`）——入口把当前批次的平台绑定传进来。
+//
+// 结果契约（入口执行时）：入口设置 PI_E2E_RESULT_PATH / PI_E2E_ATTEMPT /
+// PI_E2E_SCENARIO，本探针在退出前写一份机器可读结果：
+//   { schema: "e2e-scenario-result-1", scenario, status: pass|fail|inconclusive,
+//     kind: none|product-regression|infrastructure|harness|undetermined,
+//     calls: <实际模型调用数>, assertions: [...], notes }
+// 退出码：0 通过、1 明确失败（产品回归）、2 无法判定（证据不足）。
+// 证据不足绝不判通过：模型没按指令调用工具、轴完成时刻不可得，都归 `inconclusive`。
 // ============================================================================
 
 const fs = require('fs');
@@ -45,22 +62,42 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
 
-const PKG_ROOT = path.resolve(__dirname, '..');
+const PKG_ROOT = path.resolve(__dirname, '..', '..', '..');
 const DEF_FILES = {
   reviewer: 'agents/reviewer.md',
   'final-reviewer': 'agents/final-reviewer.md',
 };
+const PI_BIN = process.env.PI_E2E_PI_BIN || 'pi';
 
 // ---------------------------------------------------------------- CLI
 
+const HELP = `用法:
+  node test/e2e/accept.js                 受支持入口（预检 + 计划，无模型调用）
+  node test/e2e/probes/repro-reviewer-axes.js [选项]   调试直跑（会调用真实模型）
+
+选项:
+  --only keyless|reviewer|final-reviewer|all   跑哪些场景（默认 all）
+  --model <provider/id>                        模型（默认 opencode-go/muse-spark-1.3-contributor）
+  --thinking <level>                           thinking 级别（透传给 pi）
+  --timeout <seconds>                          单次 pi 调用的超时上限（默认 900）
+  --dump                                       打印完整证据 JSON
+  -h, --help                                   本帮助
+
+定位：本文件是局部平台契约探针——不是完整 reviewer 验收，也不是流程 E2E。
+直接跑会绕过受支持的授权入口；护栏防误触发，不是权限隔离。
+证据不足（模型未按指令调用、轴完成时刻不可得）一律记为无法判定，不判通过。
+`;
+
 function parseArgs(argv) {
-  const args = { only: 'all', model: 'opencode-go/muse-spark-1.3-contributor', dump: false, timeout: 900 };
+  const args = { only: 'all', model: 'opencode-go/muse-spark-1.3-contributor', thinking: null, dump: false, timeout: 900, help: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--only') args.only = argv[++i];
     else if (a === '--model') args.model = argv[++i];
+    else if (a === '--thinking') args.thinking = argv[++i];
     else if (a === '--timeout') args.timeout = Number(argv[++i]);
     else if (a === '--dump') args.dump = true;
+    else if (a === '-h' || a === '--help') args.help = true;
     else { console.error(`unknown flag: ${a}`); process.exit(2); }
   }
   return args;
@@ -118,11 +155,12 @@ function tsOfMessage(entry) {
 
 // ---------------------------------------------------------------- pi -p 执行
 
-function runPi(prompt, { model, sessionRoot, timeoutSec }) {
+function runPi(prompt, { model, thinking, sessionRoot, timeoutSec }) {
   const argv = ['-p', '--mode', 'json', '--tools', 'subagent', '--session-dir', sessionRoot];
   if (model) argv.push('--model', model);
+  if (thinking) argv.push('--thinking', thinking);
   argv.push(prompt);
-  const r = spawnSync('pi', argv, {
+  const r = spawnSync(PI_BIN, argv, {
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
     timeout: timeoutSec * 1000,
@@ -225,7 +263,7 @@ function scenarioKeyless(args) {
     '{"workflow": "./keyless-probe.js", "async": false}. ' +
     'IMPORTANT: `workflow` is the string "./keyless-probe.js" (a file path), `async` is the JSON boolean false. ' +
     'When the tool result arrives (whatever it is), reply with exactly: PROBE_DONE';
-  runPi(prompt, { model: args.model, sessionRoot: root, timeoutSec: Math.min(args.timeout, 300) });
+  runPi(prompt, { model: args.model, thinking: args.thinking, sessionRoot: root, timeoutSec: Math.min(args.timeout, 300) });
 
   let errorText = null;
   let callSeen = false;
@@ -245,8 +283,15 @@ function scenarioKeyless(args) {
   console.log('── 场景 keyless：无 key 的 runs.all 是否被拒绝（#6 缺陷 2 的契约事实）──');
   console.log(`  evidence root: ${root}`);
   if (!callSeen) {
-    console.log('  INCONCLUSIVE：未观察到 subagent 工具调用（模型未按指令调用），请重跑或换 --model');
-    return { name: 'keyless', ok: false, inconclusive: true, root };
+    console.log('  INCONCLUSIVE：未观察到 subagent 工具调用（模型未按指令调用），证据不足，不判通过');
+    return {
+      name: 'keyless',
+      verdict: 'inconclusive',
+      calls: 1,
+      root,
+      assertions: [{ id: 'K1 keyless-rejected', state: 'inconclusive', note: '未观察到工具调用' }],
+      note: '模型未按指令调用工具，无法判定契约事实',
+    };
   }
   console.log(`  调用被拒: ${rejected}；错误信息提及 key: ${mentionsKey}`);
   if (rejected) console.log(`  错误原文: ${(errorText || '').trim().slice(0, 300)}`);
@@ -254,7 +299,18 @@ function scenarioKeyless(args) {
   console.log(ok
     ? '  ✅ 契约事实成立：runs.all 条目缺 key 会被平台拒绝 → 当前定义文本未规定 key 是真实缺陷\n'
     : '  ❌ 未复现「缺 key 被拒」（可能模型补了 key，或平台行为有变）——看上方原文再判断\n');
-  return { name: 'keyless', ok, inconclusive: false, errorText, root };
+  return {
+    name: 'keyless',
+    verdict: ok ? 'pass' : 'fail',
+    calls: 1,
+    errorText,
+    root,
+    assertions: [{
+      id: 'K1 keyless-rejected',
+      state: ok ? 'pass' : 'fail',
+      note: `调用被拒: ${rejected}；错误信息提及 key: ${mentionsKey}`,
+    }],
+  };
 }
 
 // ---------------------------------------------------------------- 场景 2/3：guarantee 探针（红绿同源）
@@ -288,7 +344,7 @@ function scenarioGuarantee(args, defName) {
     'Call the tool EXACTLY ONCE — never a second call, even if something fails.\n' +
     'STEP 2: The INSTANT the tool result arrives, reply with exactly: VERDICT_EARLY — plain text, ' +
     'no further tool calls, no polling, no waiting.';
-  runPi(prompt, { model: args.model, sessionRoot: root, timeoutSec: args.timeout });
+  runPi(prompt, { model: args.model, thinking: args.thinking, sessionRoot: root, timeoutSec: args.timeout });
 
   // ---- 证据汇集：顶层会话事件 + 双轴完成时刻 ----
   const timeline = [];
@@ -362,61 +418,130 @@ function scenarioGuarantee(args, defName) {
   console.log('  时间线（平台事件日志）：');
   for (const ev of timeline) console.log(`    ${fmtRel(ev.ts, t0)}  ${ev.text}`);
 
-  // ---- 断言 ----
+  // ---- 断言（三态：pass / fail / inconclusive；harness = 探针自身装置故障）----
   const results = [];
-  results.push({ id: 'G0 contract-extracted', ok: contract.asyncMode != null, note: `async: ${contract.asyncMode}` });
+  results.push({
+    id: 'G0 contract-extracted',
+    state: contract.asyncMode != null ? 'pass' : 'harness',
+    note: `async: ${contract.asyncMode}`,
+  });
   const accepted = callTs != null && returnError == null;
-  results.push({ id: 'G1 workflow-accepted', ok: accepted, note: returnError ? `拒绝原文: ${returnError.trim().slice(0, 200)}` : '' });
-  results.push({ id: 'G2 axes-keyed(standards,spec)', ok: contract.hasStableKeys, note: `定义须规定的 key: [${contract.keys.join(', ') || '无'}]（文本层；运行时 key 缺陷见 keyless 场景）` });
+  results.push({
+    id: 'G1 workflow-accepted',
+    state: callTs == null ? 'inconclusive' : returnError ? 'fail' : 'pass',
+    note: callTs == null
+      ? '未观察到双轴 workflow 调用：证据不足，不判通过'
+      : returnError ? `拒绝原文: ${returnError.trim().slice(0, 200)}` : '',
+  });
+  results.push({
+    id: 'G2 axes-keyed(standards,spec)',
+    state: contract.hasStableKeys ? 'pass' : 'fail',
+    note: `定义须规定的 key: [${contract.keys.join(', ') || '无'}]（文本层；运行时 key 缺陷见 keyless 场景）`,
+  });
 
   let verdictAfter = false;
+  let g3state = 'pass';
   let g3note = '';
   const anchor = verdictTs != null ? verdictTs : null;
   if (anchor == null) {
-    g3note = '未观察到收场文本（VERDICT_EARLY）——证据不足，看时间线';
+    g3state = 'inconclusive';
+    g3note = '未观察到收场文本（VERDICT_EARLY）——证据不足，不判通过，看时间线';
   } else if (axisList.length >= 2 && axisList.every((a) => a.doneTs != null)) {
     const latest = Math.max(...axisList.map((a) => a.doneTs));
     verdictAfter = anchor >= latest;
+    g3state = verdictAfter ? 'pass' : 'fail';
     g3note = verdictAfter
       ? `收场晚于全部轴完成 ${((anchor - latest) / 1000).toFixed(1)}s`
       : `收场早于轴完成 ${((latest - anchor) / 1000).toFixed(1)}s（= #6 失效签名：裁决抢在报告之前）`;
   } else {
-    g3note = `轴完成时刻不可得（axes=${axisList.length}）——证据不足，看时间线`;
+    g3state = 'inconclusive';
+    g3note = `轴完成时刻不可得（axes=${axisList.length}）——证据不足，不判通过，看时间线`;
   }
-  results.push({ id: 'G3 verdict-after-axes', ok: verdictAfter, note: g3note });
+  results.push({ id: 'G3 verdict-after-axes', state: g3state, note: g3note });
 
   if (args.dump) console.log('  dump:', JSON.stringify({ contract, callAsync, axisList, verdictTs }, null, 2));
 
-  let okAll = true;
   console.log('  断言：');
-  for (const r of results) {
-    if (!r.ok) okAll = false;
-    console.log(`    ${r.ok ? '✅' : '❌'} ${r.id}${r.note ? ` — ${r.note}` : ''}`);
-  }
-  console.log(okAll
-    ? '  ✅ 保证成立：收场不早于两轴完成（修复后验收通过）\n'
-    : '  ❌ 保证不成立 —— 上方 ❌ 断言与时间线即 issue #6 失效签名的真实复现证据\n');
-  return { name: defName, ok: okAll, root };
+  const MARK = { pass: '✅', fail: '❌', inconclusive: '⚠️', harness: '⚠️' };
+  for (const r of results) console.log(`    ${MARK[r.state]} ${r.id}${r.note ? ` — ${r.note}` : ''}`);
+
+  // 场景判定：有明确失败即产品回归；装置故障优先于“无法判定”；证据不足绝不判通过。
+  const verdict = results.some((r) => r.state === 'fail') ? 'fail'
+    : results.some((r) => r.state === 'harness') ? 'inconclusive'
+      : results.some((r) => r.state === 'inconclusive') ? 'inconclusive'
+        : 'pass';
+  const kind = verdict === 'fail' ? 'product-regression'
+    : results.some((r) => r.state === 'harness') ? 'harness' : 'undetermined';
+  console.log(verdict === 'pass'
+    ? '  ✅ 保证成立：收场不早于两轴完成（验收通过）\n'
+    : verdict === 'fail'
+      ? '  ❌ 保证不成立 —— 上方 ❌ 断言与时间线即 issue #6 失效签名的真实复现证据\n'
+      : '  ⚠️ 无法判定 —— 证据不足，不得标为通过\n');
+  return {
+    name: defName,
+    verdict,
+    kind,
+    calls: 1 + axisList.length,
+    root,
+    assertions: results.map(({ id, state, note }) => ({ id, state, note })),
+    notes: `契约: async=${contract.asyncMode}；轴 ${axisList.length} 根；${accepted ? 'workflow 被接受' : 'workflow 未确认接受'}`,
+  };
+}
+
+// ---------------------------------------------------------------- 结果契约
+
+// 入口执行时把本场景写成机器可读结果；直跑（无 PI_E2E_RESULT_PATH）时只打印。
+function writeScenarioResult(out) {
+  const target = process.env.PI_E2E_RESULT_PATH;
+  if (!target) return null;
+  const verdict = out.some((r) => r.verdict === 'fail') ? 'fail'
+    : out.some((r) => r.verdict === 'inconclusive') ? 'inconclusive'
+      : 'pass';
+  const kind = verdict === 'fail' ? 'product-regression'
+    : out.some((r) => r.kind === 'harness') ? 'harness'
+      : out.some((r) => r.kind === 'undetermined') ? 'undetermined' : 'none';
+  const doc = {
+    schema: 'e2e-scenario-result-1',
+    scenario: process.env.PI_E2E_SCENARIO || out.map((r) => r.name).join('+'),
+    status: verdict,
+    kind,
+    calls: out.reduce((n, r) => n + (r.calls || 0), 0),
+    assertions: out.flatMap((r) => r.assertions || []),
+    evidence: { roots: out.map((r) => r.root).filter(Boolean) },
+    notes: out.map((r) => `${r.name}: ${r.notes || r.verdict || ''}`).join('；'),
+  };
+  fs.writeFileSync(target, JSON.stringify(doc));
+  return doc;
 }
 
 // ---------------------------------------------------------------- main
 
 function main() {
   const args = parseArgs(process.argv);
+  if (args.help) {
+    process.stdout.write(HELP);
+    process.exit(0);
+  }
+  if (!process.env.PI_E2E_RESULT_PATH) {
+    console.error('注意：直接跑本探针会绕过受支持入口 test/e2e/accept.js 的授权（护栏防误触发，不是权限隔离）。受支持方式：node test/e2e/accept.js，看计划后用 --approve <哈希> 授权本批。\n');
+  }
   const want = (s) => args.only === 'all' || args.only === s;
   const out = [];
   if (want('keyless')) out.push(scenarioKeyless(args));
   if (want('reviewer')) out.push(scenarioGuarantee(args, 'reviewer'));
   if (want('final-reviewer')) out.push(scenarioGuarantee(args, 'final-reviewer'));
 
-  console.log('══ 汇总 ══');
-  let fail = false;
+  console.log('══ 汇总（局部平台契约探针，不是完整 reviewer / 流程 E2E）══');
   for (const r of out) {
-    console.log(`  ${r.inconclusive ? '⚠️' : r.ok ? '✅' : '❌'} ${r.name}`);
-    if (!r.ok) fail = true;
+    console.log(`  ${{ pass: '✅', fail: '❌', inconclusive: '⚠️' }[r.verdict]} ${r.name} —— ${r.notes || r.verdict}`);
     if (r.root) console.log(`      evidence: ${r.root}`);
   }
-  process.exit(fail ? 1 : 0);
+  writeScenarioResult(out);
+
+  const failed = out.some((r) => r.verdict === 'fail');
+  const inconclusive = out.some((r) => r.verdict === 'inconclusive');
+  // 退出码：0 通过、1 明确失败、2 无法判定（证据不足绝不判通过）。
+  process.exit(failed ? 1 : inconclusive ? 2 : 0);
 }
 
 main();

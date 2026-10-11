@@ -19,8 +19,11 @@ implementation stage of [Matt Pocock's engineering flow](https://github.com/matt
   [`docs/agents/regression-coverage.md`](./docs/agents/regression-coverage.md).
 - Test layout: every test lives under `test/` (fixtures in `test/fixtures/`), named after what it
   covers — `<module>.test.js` for a module in `scripts/` or `audit-report/`, `<sub-command>-cli.test.js`
-  for a CLI black-box suite. `test/repro-*.js` are manual acceptance probes (`npm run repro`, real model
-  calls) and are never part of `npm test`. None of `test/` ships in the npm package.
+  for a CLI black-box suite. Real-model acceptance lives in its own area, `test/e2e/`, behind a single
+  authorized entry (`node test/e2e/accept.js`; the legacy `npm run repro` alias runs the same entry):
+  it makes no model call until you approve the exact batch plan, and it is never part of `npm test`
+  or CI. See [`docs/agents/real-model-acceptance.md`](./docs/agents/real-model-acceptance.md).
+  None of `test/` ships in the npm package.
 - Orientation for agents and humans alike: [`AGENTS.md`](./AGENTS.md) points at the issue-tracker
   setup, the triage label vocabulary, and the domain docs; [`CONTEXT.md`](./CONTEXT.md) holds the
   glossary and the flow's vocabulary.
