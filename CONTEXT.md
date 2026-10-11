@@ -73,7 +73,8 @@ retained resume（修复轮接续）沿用平台保留合同，不携带新值�
 双轴评审内部的两个 axis 子代理同样是新派发：reviewer 根据简报中的主仓库配置绝对路径，
 在派发双轴前重新读取最新值，并通过 axis-axes.js 的 args.timeoutMs 显式传给两个子代理。
 父 reviewer 的启动时限不会自动透传；已运行的 reviewer 不延长自己的截止时间。
-门禁超时（gate.timeoutMs 600000）、命令超时、并发上限与取消能力独立不变。校验镜像
+门禁超时（gate.timeoutMs 600000）独立不变：平台 verify 默认固定 120 秒且不可配，
+派发对象必须显式覆盖。命令超时、并发上限与取消能力独立不变。校验镜像
 平台派发合同：正整数毫秒且不超过 2147483647（Node 定时器上限），0 / false 不解释为
 无限时长。平台合同（对 pi-subagents 0.76.1 源码核对）：派发级 timeoutMs 优先于 agent
 frontmatter 的 defaultTimeoutMs，再回退工作流父截止时间（仅无 agent 默认时限时）、
@@ -117,7 +118,8 @@ frontmatter 的 defaultTimeoutMs，再回退工作流父截止时间（仅无 ag
 spec 与工单的落点系统，形态由**目标仓库**的 `docs/agents/issue-tracker.md`
 （`/setup-matt-pocock-skills` 落盘的产物，上游 local / github / gitlab 三范本之一）
 定义，但本包不直接读它的散文：运行时按范本判型选中一份随包发布的**契约预设**
-（「tracker 契约」词条），此后一切 tracker 行为吃契约对象。票号一律采用 tracker 原生
+（「tracker 契约」词条），此后一切 tracker 行为吃契约对象。判型 = H1 标题 + 锚短语（用户
+编辑过正文也容忍），认不出即显式不支持。票号一律采用 tracker 原生
 编号（local 为文件序号补零两位，github 为 issue number，gitlab 为 IID）；定位一次
 run 的 spec 的标识是 spec 引用——具体合法形态由契约声明引用（local 传 spec 文件路径，
 github 传 issue 号/URL，gitlab 传 IID/URL）。范本判不出的 tracker 显式不支持
@@ -158,7 +160,8 @@ marker，人改写评论正文后重跑不重复推送。同步评论的固定�
 ### 占坑（claim the spec）
 
 以在 tracker 上认领 spec 为形式的并发锁，声明某个 feature 已被本 run 占用，防止多
-会话/多人同时开跑。占坑是 run 在 tracker 上的第一个写动作，先于快照拉取；锁语义实时
+会话/多人同时开跑。占坑是咨询锁（advisory lock），不是原子互斥量：它阻止第二个会话在第一次写入
+前开跑，但不提供原子性。占坑是 run 在 tracker 上的第一个写动作，先于快照拉取；锁语义实时
 生效，与进度同步分离（同步延迟不影响锁）。封账同步或放弃时释放。
 
 ### 认领（claim a ticket）
@@ -201,7 +204,9 @@ run 采用新修复规则时说明变化；已封账 run 不重开。
 
 宿主侧机械组装的票据报告：只含可验证事实、不含主观自评，生产权不在模型手里。
 凡是"该不该、好不好、还有没有风险"级别的主观判断，一律不进报告、归评审者；
-报告里剩下的每一项，评审者都可以信任为事实而非自述。
+报告里剩下的每一项，评审者都可以信任为事实而非自述。机制（ADR-0008）：报告在子代理结束后由
+脚本从 git 真相 + 真实测试运行组装，双编码与字段丢失在结构上不可能；stdout 即结构化输出、
+退出码即判定。输出上限 12,000 字符，超长截断打标记而非判死。
 
 ### 工作报告与平台验收表单（work report / acceptance form）
 
@@ -222,7 +227,9 @@ ticket 36 把编排指令拆成两层：**主干** `SKILL.md` 常驻（角色、
 `recovery` / `closing` / `dispatch-reference`。每个入口写明触发条件与动作前读取要求，对应文档
 首行给出继续条件（何时可以离开该阶段）。两者都随 npm 包发货，指令指针一律用
 `<this-package>/` 前缀，安装后可达（源码树里可达不算）。搬迁与精简分阶段提交：原样搬迁
-（ticket 36）与措辞精简（ticket 38）各自可回退；拆分本身不改变生产编排语义。
+（ticket 36）与措辞精简（ticket 38）各自可回退；拆分本身不改变生产编排语义。ticket 38 起，
+机制原因、平台常量与历史解释住在设计参考（CONTEXT.md / `docs/adr/`），指令文档只留操作规则、
+触发入口与危险动作旁的短提醒——不在指令面复制第二套定义。
 
 ### 共享评审协议（shared review protocol）
 
@@ -235,18 +242,22 @@ ticket 37 把两类 reviewer——逐票 `pi-matt-implement-flow.reviewer` 与�
 逐票裁决（approved / changes_requested）与整支裁决（ready / ready_with_fixes / not_ready）、
 跨票检查与延期 findings 处置、标准来源定位责任、只读面与加载入口——共享协议不复述这些。
 入口是两份 agent 定义自身（平台按注册名加载时读到「读它」的段落），主干只披露「两轴前读它」这一层。
+ticket 38 起共享输入清单（轴脚本、协议、最新时限设置）只在协议 `Inputs arrive as pointers`
+里列一次，两份定义不再各存副本；定义只保留角色范围与一行加载入口。
 
 ### 承重契约登记表（contract registry）
 
 `scripts/registration-checks.js` 的 `CONTRACT_DOCUMENTS`：承重契约 → 权威文档位置的单一来源
 （`id` 契约名、`contract` 契约一句摘要、`docs` 当前权威位置、`previous` 搬迁前原位置、
-`entry` 触发入口、`tests` 对应测试）。静态合同的检查器只吃文本、不认文件名；测试与派发
+`entry` 触发入口、`tests` 对应测试、`slimming` 精简影响：删除 / 外移 / 改写 / 未变，
+外移记下原句与设计参考目标）。静态合同的检查器只吃文本、不认文件名；测试与派发
 边界检查经 `resolveContractText` / `resolveContractCorpus` 按契约 id 取文本。**指令搬迁 =
 改这张表**：检查器、断言与打包闭包原样跟随；表里只有位置、入口与测试指针，不承载规则副本。
 注册事实（agent frontmatter）与可执行派发脚本按各自的注册面/包布局读，不在本表内。
 拆分布局下（ticket 36）多数契约的权威位置是 `run/` 阶段操作文档，主干在动作前披露；
 ticket 37 起共同评审协议住在 `scripts/review-protocol.md`，入口是两份 reviewer agent 定义
-（登记行的 `previous` 记下它原来就住在这两份定义里）。
+（登记行的 `previous` 记下它原来就住在这两份定义里）；ticket 38 起登记行另记 `slimming` 影响，
+外移的机制叙述只认设计参考一处（指令面留副本即红）。
 检查器问题串里的 `SKILL.md` 是「被检查的指令文本」的稳定标签，位置一律以本表为准。
 
 ### 披露入口（disclosure entry）

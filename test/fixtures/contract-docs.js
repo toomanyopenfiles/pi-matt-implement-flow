@@ -23,13 +23,15 @@ function relocationRoot(t, files) {
 }
 
 // 假想登记表行：默认入口是主干（carriers）且不钉触发锚点（trigger 为空即只查路径与
-// 动作前读取语义）；要验触发条件时显式传 trigger。
+// 动作前读取语义）；要验触发条件时显式传 trigger。slimming 字段与真实登记行同形
+// （ticket 38），默认「本轮未动」，验证精简影响的构造显式传入。
 function contractRow(id, docs, {
   previous = [TRUNK_DOC],
   carriers = [TRUNK_DOC],
   trigger = '',
+  slimming = { kind: 'unchanged', note: 'fixture row' },
 } = {}) {
-  return { id, contract: 'fixture row', docs, previous, entry: { carriers, trigger }, tests: [] };
+  return { id, contract: 'fixture row', docs, previous, entry: { carriers, trigger }, tests: [], slimming };
 }
 
 module.exports = { relocationRoot, contractRow };

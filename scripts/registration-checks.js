@@ -113,6 +113,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/dispatch-reference.md'),
     tests: ['test/self-check.test.js · coder brief carries the worktree-reality contract'],
+    slimming: {
+      kind: 'unchanged',
+      note: '简报模板与 Worktree reality 块是派发面事实，本轮逐字未动',
+    },
   },
   {
     id: 'briefs',
@@ -121,6 +125,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/dispatch-reference.md'),
     tests: ['test/self-check.test.js · anchor-4、anchor-8'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；五套简报与承重收尾句逐字未动',
+    },
   },
   // —— 新运行（run/new-run.md）：前置条件、流程形态、运行时限、Round 0。
   {
@@ -130,6 +138,11 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/new-run.md'),
     tests: ['test/self-check.test.js · run/new-run.md flow configuration and new init expose reviewer/concurrency'],
+    slimming: {
+      kind: 'relocated',
+      note: '前置条件的操作边界不变；范本判型机制外移到术语表，tracker 段落的重复叙述压短',
+      moved: [{ text: '判型 = H1 标题 + 锚短语', to: 'CONTEXT.md' }],
+    },
   },
   {
     id: 'round0',
@@ -138,6 +151,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/new-run.md'),
     tests: ['test/self-check.test.js · Round 0 carries the environment-survey step'],
+    slimming: {
+      kind: 'rewritten',
+      note: '环境勘测与分支/基线步骤原样；快照机制说明删去重复副本（唯一权威在快照词条）',
+    },
   },
   // —— ticket 循环（run/ticket-loop.md）：派发、结算、评审、修复轮、合并收尾。
   {
@@ -147,6 +164,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/self-check.test.js · run/ticket-loop.md formal review rounds are independent / ticket repairs'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；认领、结算、评审轮次与批准门逐字未动',
+    },
   },
   {
     id: 'coder-dispatch-typed-gate',
@@ -155,6 +176,15 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/self-check.test.js · anchor-1'],
+    slimming: {
+      kind: 'relocated',
+      note: '派发形态与门禁命令逐字未动；机制原因与平台常量外移到设计参考，危险动作旁短提醒保留',
+      moved: [
+        { text: '双编码与字段丢失在结构上不可能', to: 'CONTEXT.md' },
+        { text: '平台 verify 默认固定 120 秒且不可配', to: 'CONTEXT.md' },
+        { text: '超长截断打标记而非判死', to: 'CONTEXT.md' },
+      ],
+    },
   },
   {
     id: 'dispatch-schema-copy',
@@ -163,6 +193,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/self-check.test.js · anchor-2'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；schema 副本与真源的逐字一致要求未动',
+    },
   },
   {
     id: 'gate-commands',
@@ -171,6 +205,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/self-check.test.js · anchor-5'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；门禁命令与 --base / --test-command 要求逐字未动',
+    },
   },
   {
     id: 'fix-loop',
@@ -179,6 +217,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/self-check.test.js · anchor-3、anchor-9'],
+    slimming: {
+      kind: 'rewritten',
+      note: '手跑门禁命令与 acceptance: false 形状逐字保留；平台拒绝原因的长解释压成短提醒',
+    },
   },
   // —— 恢复（run/recovery.md）：续跑与升级历史；round0 的续段入口在 new-run 文档。
   {
@@ -188,6 +230,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/recovery.md'),
     tests: ['test/self-check.test.js · run/recovery.md cold resume 合同'],
+    slimming: {
+      kind: 'rewritten',
+      note: '续跑步骤与拒绝面不变；续跑 vs 子代理 resume 的术语澄清由术语表单源',
+    },
   },
   {
     id: 'human-handoff',
@@ -196,6 +242,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/recovery.md'),
     tests: ['test/self-check.test.js · run/recovery.md human handoff / anomaly history 合同'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；升级历史与异常处置措辞未动',
+    },
   },
   // —— 收尾（run/closing.md）：终审、阶段性交付、用户放弃。
   {
@@ -205,6 +255,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/closing.md'),
     tests: ['test/self-check.test.js · run/closing.md final repairs / pre-seal sync 合同'],
+    slimming: {
+      kind: 'rewritten',
+      note: '终审、修复、pre-seal sync 与封账边界不变；同步幂等与历史异常的重复叙述压短',
+    },
   },
   {
     id: 'partial-delivery',
@@ -213,6 +267,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/closing.md'),
     tests: ['test/self-check.test.js · run/closing.md partial delivery 合同'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；阶段性交付边界未动',
+    },
   },
   {
     id: 'user-abandonment',
@@ -221,6 +279,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/closing.md'),
     tests: ['test/self-check.test.js · run/closing.md user abandonment 合同'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；放弃出口与不可逆封账边界未动',
+    },
   },
   // —— 跨文档契约：一节在循环、一节在收尾（按阅读顺序拼接）。
   {
@@ -230,6 +292,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/self-check.test.js · anchor-7、reconciliation before merge accounting'],
+    slimming: {
+      kind: 'rewritten',
+      note: '串行合并、集成验证先于记账、合并 token 与票完成顺序不变；token 规则只说一次',
+    },
   },
   {
     id: 'run-deadlines',
@@ -241,6 +307,10 @@ const CONTRACT_DOCUMENTS = [
       'test/self-check.test.js · every new dispatch carries the freshly resolved run deadline',
       'test/run-timeout-dispatch.test.js · all fresh top-level workflow templates send the latest A → B value',
     ],
+    slimming: {
+      kind: 'unchanged',
+      note: '每次新派发重读时限、retained resume 零覆盖、门禁超时独立的文本都是承重面，逐字未动',
+    },
   },
   {
     id: 'dispatch-templates',
@@ -249,6 +319,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/run-timeout-dispatch.test.js · fresh templates / retained-resume template'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；六种派发形态的模板围栏与散文形态逐字未动',
+    },
   },
   {
     id: 'dispatch-delivery',
@@ -257,6 +331,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/self-check.test.js · dispatch delivery（issue #9）'],
+    slimming: {
+      kind: 'rewritten',
+      note: '仅阶段文档首行自述改动；脚本落盘新文件再按路径调用的纪律未动',
+    },
   },
   // —— 主干常驻契约（角色、记忆层写权、共享修复决策、硬规则）。
   {
@@ -266,6 +344,11 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: TRUNK_ENTRY,
     tests: ['test/self-check.test.js · ledger / reconciliation / pre-seal sync 合同'],
+    slimming: {
+      kind: 'relocated',
+      note: '三层写权、对账门、封账不可逆与 bypass 禁令原样；事件信封机制外移，保留不供时间戳 / 不直接改文件的短提醒',
+      moved: [{ text: '单调序号、格式版本字段与写入时刻的 git HEAD 锚点', to: 'CONTEXT.md' }],
+    },
   },
   {
     id: 'repair-decisions',
@@ -274,6 +357,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: TRUNK_ENTRY,
     tests: ['test/self-check.test.js · SKILL.md repair decisions use evidence and approved scope'],
+    slimming: {
+      kind: 'unchanged',
+      note: '修复决策是共享原则的唯一权威，本轮逐字未动',
+    },
   },
   {
     id: 'hard-rules',
@@ -282,6 +369,10 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: TRUNK_ENTRY,
     tests: ['test/self-check.test.js · anchor-6'],
+    slimming: {
+      kind: 'unchanged',
+      note: '硬规则逐字未动（不写 feature code、合并 token、裁决值、单写者、封账不可逆）',
+    },
   },
   // —— agent 定义与只读参考（平台按注册名加载 / 主干在动作前披露）。
   {
@@ -294,6 +385,10 @@ const CONTRACT_DOCUMENTS = [
       trigger: '每次派发 pi-matt-implement-flow.coder（平台按注册名加载该定义）',
     },
     tests: ['test/self-check.test.js · agents/coder.md follows the brief workspace'],
+    slimming: {
+      kind: 'unchanged',
+      note: 'workspace/批准范围/test-first/提交/升级与两句承重收尾语逐字未动（负空间边界）',
+    },
   },
   {
     id: 'reviewer-agent-definition',
@@ -308,6 +403,10 @@ const CONTRACT_DOCUMENTS = [
       'test/self-check.test.js · reviewer 输入对齐 brief 与机械 gate 证据',
       'test/self-check.test.js · both reviewer definitions load the shared review protocol',
     ],
+    slimming: {
+      kind: 'deleted',
+      note: '共享输入清单与协议摘要的副本删除（单源在共享协议）；补一行动作前读取步骤（37-r1 P2：票据与 spec 的读取不再只靠轴简报）',
+    },
   },
   {
     id: 'final-reviewer-agent-definition',
@@ -322,6 +421,10 @@ const CONTRACT_DOCUMENTS = [
       'test/self-check.test.js · final-reviewer 保留跨票检查与延期 findings 处置',
       'test/self-check.test.js · both reviewer definitions load the shared review protocol',
     ],
+    slimming: {
+      kind: 'deleted',
+      note: '共享输入清单与协议摘要的副本删除；frontmatter 摘要不再复制四类跨票检查清单（权威在正文）',
+    },
   },
   {
     id: 'review-protocol',
@@ -337,6 +440,10 @@ const CONTRACT_DOCUMENTS = [
       'test/self-check.test.js · shared review protocol is the single axis-spawn contract',
       'test/package-manifest.test.js · tarball 清单闭包',
     ],
+    slimming: {
+      kind: 'unchanged',
+      note: '共享输入与双轴派发契约的唯一权威；本轮文本未改，删的是两份定义里的副本',
+    },
   },
   {
     id: 'axis-run-timeout-settings',
@@ -351,6 +458,10 @@ const CONTRACT_DOCUMENTS = [
       'test/self-check.test.js · shared review protocol is the single axis-spawn contract',
       'test/package-manifest.test.js · tarball 清单闭包',
     ],
+    slimming: {
+      kind: 'unchanged',
+      note: 'reviewer 只读面的解析规则与主干披露入口原样保留',
+    },
   },
 ];
 
@@ -477,6 +588,89 @@ function checkContractDocLocations(root, {
     }
   }
   return problems;
+}
+
+// ====================================================================
+// ticket 38：指令精简的对照记录（精简单独提交、可独立回退）
+//
+// 精简对每个承重契约逐项记影响：deleted（删重复完整定义 / 陈旧说明）、relocated
+// （机制原因、平台常量、历史解释外移到设计参考）、rewritten（承重规则保留、措辞精简）、
+// unchanged（本轮未动）。规则文本本身仍以文档为权威，本表只记影响与证据：
+// ① 每行都有影响记录（对照不留空）；
+// ② 外移的机制叙述在设计参考里**唯一**存在——moved.text 必须在目标设计参考里，且不得
+//    出现在任何指令文档里（指令面留副本 = 又一份永久第二套定义，红）。
+// 已删除的陈旧说法（如「逐字搬迁」式的自我描述）由 RETIRED_INSTRUCTION_CLAIMS 反向钉死。
+// ====================================================================
+const SLIMMING_KINDS = ['deleted', 'relocated', 'rewritten', 'unchanged'];
+const RETIRED_INSTRUCTION_CLAIMS = ['split verbatim out of the trunk'];
+
+function readOrNullText(root, doc, read) {
+  try {
+    return read(root, doc);
+  } catch {
+    return null;
+  }
+}
+
+function checkSlimmingImpacts(root, {
+  registry = CONTRACT_DOCUMENTS,
+  isFile = isFileAt,
+  readText: read = readText,
+} = {}) {
+  const problems = [];
+  const corpus = contractDocPaths(registry)
+    .map((doc) => readOrNullText(root, doc, read))
+    .filter((text) => text !== null)
+    .join('\n');
+  for (const entry of registry) {
+    const slimming = entry.slimming;
+    if (!slimming || typeof slimming !== 'object') {
+      problems.push(
+        `contract ${entry.id} has no slimming record — ticket 38 精简必须逐项记录删除 / 外移 / 改写的影响`
+      );
+      continue;
+    }
+    if (!SLIMMING_KINDS.includes(slimming.kind)) {
+      problems.push(
+        `contract ${entry.id} slimming kind "${slimming.kind}" is not one of ${SLIMMING_KINDS.join(' / ')}`
+      );
+    }
+    if (!slimming.note || !String(slimming.note).trim()) {
+      problems.push(
+        `contract ${entry.id} slimming record has no note — 影响记录要能复核（删了什么 / 外移到哪 / 改写了什么）`
+      );
+    }
+    for (const move of slimming.moved ?? []) {
+      if (!isFile(root, move.to)) {
+        problems.push(
+          `contract ${entry.id} records "${move.text}" as moved to ${move.to}, which is not a readable file — 外移目标必须是落地的设计参考`
+        );
+        continue;
+      }
+      const target = readOrNullText(root, move.to, read);
+      if (target === null || !target.includes(move.text)) {
+        problems.push(
+          `contract ${entry.id}: ${move.to} does not carry the relocated statement "${move.text}" — 外移丢内容：机制原因不能两头都没有`
+        );
+      }
+      if (corpus.includes(move.text)) {
+        problems.push(
+          `contract ${entry.id}: the relocated statement "${move.text}" still appears in an instruction doc — 指令面不得保留第二份定义（唯一权威在设计参考）`
+        );
+      }
+    }
+  }
+  return problems;
+}
+
+// 精简删掉的陈旧说法（阶段文档不再自称「原样搬迁」的产物）：回流即红。
+function checkStaleInstructionClaims(corpusText) {
+  return presentForbidden(
+    normalizeWhitespace(corpusText),
+    RETIRED_INSTRUCTION_CLAIMS,
+    (claim) =>
+      `instruction docs still carry the stale claim "${claim}" — 精简后阶段文档不再是原样搬迁产物，这类自我描述会误导复核`
+  );
 }
 
 // pi.skills 声明面的共用读取：非数组时返回 null（由调用方按各自措辞报错）。
@@ -779,6 +973,8 @@ module.exports = {
   resolveContractText,
   resolveContractCorpus,
   checkContractDocLocations,
+  checkSlimmingImpacts,
+  checkStaleInstructionClaims,
   checkTrunkSkillRegistration,
   checkContractDocsPackaged,
   checkInstructionPointersPackaged,

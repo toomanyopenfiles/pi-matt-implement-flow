@@ -16,6 +16,8 @@ const {
   resolveContractText,
   resolveContractCorpus,
   checkContractDocLocations,
+  checkSlimmingImpacts,
+  checkStaleInstructionClaims,
   checkTrunkSkillRegistration,
   checkContractDocsPackaged,
   readPackageJson,
@@ -1303,6 +1305,106 @@ test('breakage simulation: 主干没被 pi.skills 注册即红（披露入口自
   assert.deepEqual(checkTrunkSkillRegistration({ pi: { skills: ['./SOMETHING-ELSE.md'] } }), [
     `package.json: pi.skills does not register the trunk instruction doc (${TRUNK_DOC}) — 主干是披露入口的入口，未注册即整套指令不可达`,
   ]);
+});
+
+// --- ticket 38 回归护栏：指令精简（契约不变、精简单独提交可回退、机制叙述单源） ---
+// 精简影响逐项记在登记行上（checkSlimmingImpacts）；机制原因 / 平台常量外移到设计参考后
+// 只在设计参考里存在——指令面留副本、目标丢句、行里没记录，各自红。
+
+test('ticket 38: 每个契约行记录精简影响（删除 / 外移 / 改写 / 未变），对照不留空', () => {
+  assert.deepEqual(checkSlimmingImpacts(PKG_ROOT), []);
+});
+
+test('ticket 38: 机制叙述外移后在设计参考唯一存在（目标丢句 / 指令面留副本 / 行没记录各自红）', (t) => {
+  const design = { 'CONTEXT.md': '# CONTEXT\n机制原因只住这里：双编码与字段丢失在结构上不可能。\n' };
+  const instruction = { 'run/loop.md': '# Loop\n派发形态与命令逐字未动。\n' };
+  const moved = { text: '双编码与字段丢失在结构上不可能', to: 'CONTEXT.md' };
+  const registry = [
+    contractRow('fix-loop', ['run/loop.md'], {
+      slimming: { kind: 'relocated', note: '机制原因外移到设计参考', moved: [moved] },
+    }),
+  ];
+  // 正例：目标有句、指令面没副本。
+  assert.deepEqual(checkSlimmingImpacts(relocationRoot(t, { ...design, ...instruction }), { registry }), []);
+  // 1) 目标设计参考丢句 → 外移丢内容。
+  const lost = relocationRoot(t, { 'CONTEXT.md': '# CONTEXT\n（机制原因不见了）\n', ...instruction });
+  assert.ok(
+    checkSlimmingImpacts(lost, { registry }).some((p) => p.includes('does not carry the relocated statement')),
+    `外移丢内容必须红，实得: ${JSON.stringify(checkSlimmingImpacts(lost, { registry }))}`
+  );
+  // 2) 指令文档保留第二份定义 → 红。
+  const duplicated = relocationRoot(t, {
+    ...design,
+    'run/loop.md': '# Loop\n派发形态未动；顺带复述：双编码与字段丢失在结构上不可能。\n',
+  });
+  assert.ok(
+    checkSlimmingImpacts(duplicated, { registry }).some((p) => p.includes('still appears in an instruction doc')),
+    `指令面留副本必须红，实得: ${JSON.stringify(checkSlimmingImpacts(duplicated, { registry }))}`
+  );
+  // 3) 外移目标不存在（没落地的设计参考）→ 红。
+  const dangling = [
+    contractRow('fix-loop', ['run/loop.md'], {
+      slimming: { kind: 'relocated', note: '外移', moved: [{ ...moved, to: 'docs/design/missing.md' }] },
+    }),
+  ];
+  assert.ok(
+    checkSlimmingImpacts(relocationRoot(t, { ...design, ...instruction }), { registry: dangling }).some((p) =>
+      p.includes('not a readable file')
+    ),
+    '悬空外移目标必须红'
+  );
+  // 4) 行没记影响 / kind 不在词表 → 红。
+  assert.ok(
+    checkSlimmingImpacts(relocationRoot(t, { ...design, ...instruction }), {
+      registry: [{ ...contractRow('fix-loop', ['run/loop.md']), slimming: undefined }],
+    }).some((p) => p.includes('no slimming record')),
+    '对照不留空：缺影响记录必须红'
+  );
+  assert.ok(
+    checkSlimmingImpacts(relocationRoot(t, { ...design, ...instruction }), {
+      registry: [contractRow('fix-loop', ['run/loop.md'], { slimming: { kind: 'moved', note: 'x' } })],
+    }).some((p) => p.includes('slimming kind')),
+    '影响类别必须取自词表'
+  );
+});
+
+test('ticket 38: 阶段文档不再自称「原样搬迁」产物（陈旧说法回流即红）', () => {
+  assert.deepEqual(checkStaleInstructionClaims(instructionCorpus), []);
+  const stale = 'pi-matt-implement-flow operation doc, split verbatim out of the trunk `SKILL.md` (read it first).';
+  assert.ok(
+    checkStaleInstructionClaims(stale).some((p) => p.includes('split verbatim out of the trunk')),
+    '陈旧自我描述回流必须红'
+  );
+});
+
+test('ticket 38: 两类 reviewer 定义只留一行加载入口，共享输入清单与协议摘要单源在共享协议', () => {
+  const protocol = contractText('review-protocol');
+  for (const anchor of [
+    'absolute user/project settings paths from the main repo',
+    'no model-written implementer report',
+    'Inputs arrive as pointers',
+  ]) {
+    assert.ok(protocol.includes(anchor), `共享输入说明单源在共享协议，缺: ${anchor}`);
+  }
+  for (const id of ['reviewer-agent-definition', 'final-reviewer-agent-definition']) {
+    const text = contractText(id);
+    assert.doesNotMatch(
+      text,
+      /it holds the shared dispatch \(one blocking call, stable axes, fresh deadline\)/,
+      `${id} 又复制了一份协议摘要`
+    );
+    assert.doesNotMatch(text, /absolute user\/project settings paths from the main repo/, `${id} 又列了一份共享输入清单`);
+    assert.match(
+      text,
+      /Read `<this-package>\/scripts\/review-protocol\.md` before dispatching the axes/,
+      `${id} 少了加载入口（路径 + 动作前读取）`
+    );
+  }
+  // 37-r1 P2：票据与 spec 的读取不再只靠轴简报——定义里补了动作前读取步骤。
+  assert.match(
+    contractText('reviewer-agent-definition'),
+    /Read them yourself before dispatching: the bundle, the ticket, the spec, and the changed files/
+  );
 });
 
 // --- 环境诊断（git 版本 < 2.41 的 patch 捕获降级警告）属于票 03，不在此套件内。 ---

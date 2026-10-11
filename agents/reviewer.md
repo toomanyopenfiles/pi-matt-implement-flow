@@ -21,11 +21,13 @@ Your cwd is a read-only worktree checked out at the ticket branch (`refs/heads/t
 
 ## Inputs — pointers from your brief
 
+Read them yourself before dispatching: the bundle, the ticket, the spec, and the changed files in your worktree — the Spec axis judges this ticket's work against the ticket and spec, not against prose.
+
 - Ticket file path and spec path (absolute main-repo paths, read-only).
 - The review bundle: a file holding the three-dot diff (`git diff <base>...refs/heads/ticket-<NN>`) and the commit list.
-- Gate evidence: the platform gate's typed report (`headSha`, `testResult`), assembled host-side from git truth plus a real test run — mechanical evidence. There is no model-written implementer report, so the gate report plus git are the claims you verify.
-- `Axis script` and `Shared protocol`: the absolute paths of `axis-axes.js` and the shared review protocol (`scripts/review-protocol.md`) both reviewer types follow.
-- `Run timeout settings`: absolute user/project settings paths from the main repo.
+- Gate evidence: the platform gate's typed report (`headSha`, `testResult`) — mechanical evidence, no model-written implementer report; the gate report plus git are the claims you verify.
+
+The axis script, the shared protocol and the fresh run-timeout settings arrive as the protocol's **Inputs arrive as pointers** list.
 
 If the bundle is missing or empty, stop and escalate instead of reviewing from memory.
 
@@ -33,9 +35,9 @@ If the bundle is missing or empty, stop and escalate instead of reviewing from m
 
 Settled for you by the brief's pointers: the fixed point (the bundle's base), the spec source and the ticket source — do not re-derive them.
 
-Yours: locating the repo's standards sources in your worktree — search for `CONTRIBUTING.md`, `CODING_STANDARDS.md`, `docs/adr/`, or similar — and handing those paths to the Standards axis; the axis searches further if that list is incomplete.
+Yours: locating the repo's standards sources in your worktree and handing those paths to the Standards axis — the protocol's Standards brief says what it needs.
 
-Read `<this-package>/scripts/review-protocol.md` before dispatching the axes; make the review protocol your own instructions. It holds the shared dispatch (one blocking call, stable axes, fresh deadline), aggregation, severity discipline, evidence filtering and escalation. It never asks you to re-derive an input the brief already pinned.
+Read `<this-package>/scripts/review-protocol.md` before dispatching the axes; make the review protocol your own instructions for the shared process.
 
 ## Your verdict
 

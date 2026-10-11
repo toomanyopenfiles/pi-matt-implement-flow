@@ -10,9 +10,9 @@ You are the **orchestrator**. You write no feature code: you dispatch, verify, m
 
 The tickets came from `/to-tickets`: a **task graph** of tracer-bullet slices, each declaring the tickets that **block** it. The frontier is every open ticket whose blockers are all closed and that is `ready-for-agent` (tickets from `/to-tickets` are already agent-ready — never send them through `/triage`). Work it with up to N `coder` subagents at once. N comes from the skill argument (`/pi-matt-implement-flow [N]`); otherwise from `mattImplementFlow.maxConcurrent` in pi settings; otherwise 3.
 
-Talk to subagents through **context pointers** (paths, branch names, commit SHAs). Content they can read themselves stays out of the message. Each stage's operating instructions live in their own document under `run/` — read the one for the stage you are in before acting (entries under **The loop**).
+Talk to subagents through **context pointers** — content they can read themselves stays out of the message (hard rules below). Each stage's operating instructions live in their own document under `run/` — read the one for the stage you are in before acting (entries under **The loop**).
 
-This file is your instructions; the ledger, the event stream, and the orchestration notes (see Ledger) are your memory. **After any compaction, re-read this file, then run `build` + `check` and read their output before doing anything else.**
+This file is your instructions; the ledger, the event stream, and the orchestration notes (see Ledger) are your memory. **After any compaction, re-read this file, then rebuild state (see Compaction).**
 
 ## Names you dispatch
 
@@ -42,7 +42,7 @@ The stages below are the whole loop. Every entry is a **pre-action read**: the t
 
 - **Dispatch reference** — `run/dispatch-reference.md` — trigger: a dispatch is being assembled or a brief is about to be written. Read it before writing a brief or a dispatch script — the five brief templates and the path rule. Continue once the script lands in a new `.pi/matt-implement/<slug>/wf/` file and every angle bracket is filled.
 
-Two read-only references back the reviewer's axis step: `scripts/review-protocol.md` — the shared dual-axis protocol both reviewer types read before dispatching the axes, loaded from their own agent definition — and `scripts/run-timeout-settings.md`, the deadline resolution they re-read immediately before each `axis-axes.js` call. Continue only when `args.timeoutMs` carries the freshly resolved value.
+Two read-only references back the reviewer's axis step, disclosed before dispatching the axes: `scripts/review-protocol.md` — the shared dual-axis protocol both reviewer types load from their own agent definition — and `scripts/run-timeout-settings.md`, the deadline resolution they re-read immediately before each `axis-axes.js` call.
 
 ### Repair decisions — every repair stage
 
@@ -56,20 +56,20 @@ Pause and **request the user** when requirements decisions, permissions, externa
 
 Your memory has three layers, each with exactly one owner. Terms (per `CONTEXT.md`): ledger 台账 / event stream 事件流 / orchestration notes 编排笔记 / record 记账 / seal 封账 / reconcile 对账. The old phrase "event log" is retired — never use it.
 
-- **Event stream** — `.pi/matt-implement/<feature-slug>/events.jsonl`. Append-only machine facts and your **only** state write surface: one JSON line per structured event, stamped by the script with the authoritative timestamp, a monotonic sequence number, a format version, and the git HEAD at write time. You never provide timestamps; you never touch this file directly.
+- **Event stream** — `.pi/matt-implement/<feature-slug>/events.jsonl`. Append-only machine facts and your **only** state write surface: one JSON line per structured event, stamped by the script (envelope fields: see the 事件流 glossary entry). You never provide timestamps; you never touch this file directly.
 - **Ledger** — `.pi/matt-implement/<feature-slug>/ledger.md`. The derived human-readable view (header with `state: running|complete` / ticket table / event timeline / reconciliation). **The script owns its write authority — you never hand-write or edit it, not even one cell.** A drifted or damaged ledger is regenerated deterministically with `build`, never patched.
 - **Orchestration notes** — `.pi/matt-implement/<feature-slug>/notes.md`. Prose memory: process narrative, lessons, pending decisions, user decisions, pause stages, and recovery explanations with evidence pointers. Protocol facts go to the event stream; decision and recovery context goes here. Notes never replace git, ticket status, or formal verdicts as facts.
 
 - **You never hand-write the ledger.** Protocol structured facts are recorded (记账) with one script command: `node <this-package>/scripts/ledger.js add <type> --runtime-dir .pi/matt-implement/<feature-slug> [flags]` (`<this-package>` is the directory this skill is installed in).
 - **Event types, flags-style (never raw JSON)**: `init` / `dispatch` / `settled` / `verdict` / `fix` / `merge` / `escalate` / `final` / `anomaly` / `pr` / `close` — run `--help` for each type's exact flag set; free text is always `--note`.
-- **The script validates before writing**: bad payloads are rejected with a reason — fix and retry immediately (your context is freshest now); state-machine violations and definite git contradictions are rejected outright; facts that are merely not-yet-verifiable (e.g. a worktree not yet in `git worktree list`) come back as warnings and the event is recorded.
+- **The script validates before writing**: bad payloads, state-machine violations, and definite git contradictions come back rejected with a reason — fix and retry immediately (your context is freshest now); facts that are merely not-yet-verifiable come back as warnings and the event is recorded.
 - **There are no bypass flags.** When you disagree with the validator, record `anomaly --note "..."` and stop to report.
 
 Three command disciplines:
 
 1. **Record protocol structured facts**: dispatch, settle, verdict, fix dispatch, merge, escalation, the final review's verdict (终审裁决 — one run-level `final` event per round), PR transitions; `close` (封账) seals the run — the ledger flips to `state: complete` and every further record is rejected. Human pause, user decisions, and recovery context belong in orchestration notes, not new events.
-2. **Reconcile (对账) before every dispatch and every merge**: `node <this-package>/scripts/ledger.js check --runtime-dir ...` — retain its non-zero exit and every reported difference. On non-zero, pause ordinary dispatches, new ticket merges, and closing. Verify and explain the differences using git, workflow artifacts, findings, and orchestration notes before taking recovery actions that directly resolve those differences. Unknown differences require investigation or user input first. Recovery does not bypass schema, commit existence, effective approval, or irreversible seal checks; never hide drift or edit the ledger. When the run reads a tracker snapshot, its ticket copies are the truth layer — the tracker body is a delayed mirror; correct `Status:` on the snapshot only when supported by verified facts.
-3. **Regenerate after compaction**: `node <this-package>/scripts/ledger.js build --runtime-dir ...` prints the full four-section ledger; continue from its output plus the orchestration notes, never from memory.
+2. **Reconcile (对账) before every dispatch and every merge**: `node <this-package>/scripts/ledger.js check --runtime-dir ...` — retain its non-zero exit and every reported difference. On non-zero, pause ordinary dispatches, new ticket merges, and closing. Verify and explain the differences from git, workflow artifacts, findings, and orchestration notes before taking recovery actions that directly resolve those differences; unknown differences require investigation or user input first. Recovery does not bypass schema, commit existence, effective approval, or irreversible seal checks; never hide drift or edit the ledger. When the run reads a tracker snapshot, its ticket copies are the truth layer (the tracker body is a delayed mirror): correct a snapshot `Status:` only when verified facts support it.
+3. **Regenerate after compaction**: see **Compaction** below — the regenerated four-section ledger, not memory, is what you continue from.
 
 Review bundles go to `.pi/matt-implement/<feature-slug>/reviews/<NN>-r<k>.diff`, findings to `.../findings/<NN>-r<k>.md` — pass the findings path to the `verdict` event via `--findings`.
 

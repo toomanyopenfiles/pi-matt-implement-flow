@@ -1,6 +1,6 @@
 # Recovery — cold resume and escalation history
 
-pi-matt-implement-flow operation doc, split verbatim out of the trunk `SKILL.md` (the always-loaded entry point — read it first). **Continue:** once the reconciliation differences are explained and the interrupted stage is recovered, back into the remaining frontier, fix loop, merges, or final gate.
+pi-matt-implement-flow stage operation doc — `SKILL.md` (the always-loaded trunk) discloses this stage and is read first. **Continue:** once the reconciliation differences are explained and the interrupted stage is recovered, back into the remaining frontier, fix loop, merges, or final gate.
 
 ### Human handoff and history
 
@@ -20,6 +20,4 @@ Before Round 0, check whether this run already exists: if `.pi/matt-implement/<s
 4. **Recover the interrupted stage before ordinary progress**: read the notes and referenced evidence alongside git and workflow artifacts. If an unrecorded merge is awaiting integration validation, explain that check difference and dispatch only the integration fixer needed for it (Merge and close in `run/ticket-loop.md`); leave unrelated tickets and new merges paused. Validation must pass before recording `merge` and completing the ticket. For other differences, follow the reconciliation discipline in the trunk's Ledger section. Once reconciled, continue the remaining frontier, fix loop, merges, or final gate from the verified state, not just the last recorded event.
 
 For every unfinished old run, historical repair budgets no longer limit attempts: explain the new repair rules to the user on resume. Leave old settings, init fields, and event lines unchanged; they are readable history, not active quotas. Sealed runs are historical only — never reopen them.
-
-(续跑 is a run-level action. A subagent's retained-context resume inside the loop is a platform mechanism — the glossary keeps the two apart.)
 
