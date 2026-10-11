@@ -500,6 +500,99 @@ test('探针自带边界与绕过说明：声明局部探针性质，直跑时�
 });
 
 // ====================================================================
+// 定义闭包抽取（ticket 37 集成修复）：契约单源在共享协议文档时，探针跟随 agent 定义的
+// 披露指针读它；闭包真的缺契约仍判明确失败——集中化不放松断言。全部用桩平台，零模型调用。
+// ====================================================================
+
+// 合成包树：探针按自身位置解析包根（__dirname/../../..），于是被测「定义 + 披露文档」
+// 可以逐例给。平台二进制仍用桩（调用边界桩，记不记录都不影响本组断言）。
+function probeTree({ entry, protocol }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-closure-'));
+  const probeDir = path.join(root, 'test', 'e2e', 'probes');
+  fs.mkdirSync(probeDir, { recursive: true });
+  fs.mkdirSync(path.join(root, 'agents'));
+  fs.mkdirSync(path.join(root, 'scripts'));
+  fs.copyFileSync(PROBE, path.join(probeDir, 'repro-reviewer-axes.js'));
+  fs.writeFileSync(path.join(root, 'agents', 'reviewer.md'), entry);
+  if (protocol != null) fs.writeFileSync(path.join(root, 'scripts', 'review-protocol.md'), protocol);
+  const tmp = path.join(root, 'tmp');
+  fs.mkdirSync(tmp);
+  const piBin = path.join(tmp, 'pi');
+  fs.copyFileSync(STUB_PI, piBin);
+  fs.chmodSync(piBin, 0o755);
+  return { root, probe: path.join(probeDir, 'repro-reviewer-axes.js'), tmp, piBin };
+}
+
+function runProbe(tree) {
+  const out = path.join(tree.root, 'probe-result.json');
+  const r = spawnSync(process.execPath, [tree.probe, '--only', 'reviewer', '--model', 'stub/model'], {
+    cwd: tree.root,
+    env: { ...process.env, PI_E2E_PI_BIN: tree.piBin, PI_E2E_RESULT_PATH: out, TMPDIR: tree.tmp },
+    encoding: 'utf8',
+    timeout: 60000,
+  });
+  return { status: r.status, stdout: r.stdout || '', stderr: r.stderr || '', doc: readProbeResult(out, r) };
+}
+
+function readProbeResult(out, r) {
+  assert.ok(fs.existsSync(out), `探针未写出结果文件：${r.stdout || ''}${r.stderr || ''}`);
+  return JSON.parse(fs.readFileSync(out, 'utf8'));
+}
+
+test('定义闭包抽取：探针跟随 agent 定义的披露指针读共享协议，闭包缺契约仍判明确失败', () => {
+  const AXIS_BRIEF = 'Dispatch ONE blocking dual-axis call, then aggregate both reports.\n';
+  const cases = [
+    {
+      name: 'ticket 37 形态：入口披露共享协议（<this-package>/ 路径）',
+      entry: '# reviewer\n\nRead `<this-package>/scripts/review-protocol.md` before dispatching the axes.\n',
+      protocol: `${AXIS_BRIEF}async: false; every axis item carries \`key: "standards"\` and \`key: "spec"\`.\n`,
+      exit: 2, status: 'inconclusive', kind: 'undetermined',
+      g0: 'pass', g2: 'pass', sources: ['agents/reviewer.md', 'scripts/review-protocol.md'],
+    },
+    {
+      name: '披露指针按包根解析（scripts/… 形态）',
+      entry: '# reviewer\n\nRead `scripts/review-protocol.md` before dispatching the axes.\n',
+      protocol: `${AXIS_BRIEF}async: false; every axis item carries \`key: "standards"\` and \`key: "spec"\`.\n`,
+      exit: 2, status: 'inconclusive', kind: 'undetermined',
+      g0: 'pass', g2: 'pass', sources: ['agents/reviewer.md', 'scripts/review-protocol.md'],
+    },
+    {
+      name: '共享协议缺稳定 key：定义闭包真的没规定 → 明确失败（不因集中化而判无法判定）',
+      entry: '# reviewer\n\nRead `<this-package>/scripts/review-protocol.md` before dispatching the axes.\n',
+      protocol: `${AXIS_BRIEF}async: false.\n`,
+      exit: 1, status: 'fail', kind: 'product-regression',
+      g0: 'pass', g2: 'fail', sources: ['agents/reviewer.md', 'scripts/review-protocol.md'],
+    },
+    {
+      name: '入口不再披露共享协议：定义自己没规定契约 → 明确失败',
+      entry: '# reviewer\n\nDispatch the two axes yourself, then write your verdict.\n',
+      protocol: null,
+      exit: 1, status: 'fail', kind: 'product-regression',
+      g0: 'harness', g2: 'fail', sources: ['agents/reviewer.md'],
+    },
+  ];
+
+  for (const c of cases) {
+    const tree = probeTree({ entry: c.entry, protocol: c.protocol });
+    try {
+      const r = runProbe(tree);
+      assert.equal(r.status, c.exit, `${c.name}：${r.stdout}${r.stderr}`);
+      const by = Object.fromEntries(r.doc.assertions.map((a) => [a.id.split(' ')[0], a]));
+      assert.equal(r.doc.status, c.status, `${c.name}：证据不足绝不判通过、缺契约不掩"无法判定"`);
+      assert.equal(r.doc.kind, c.kind, `${c.name}：失败分类如实`);
+      assert.equal(by.G0.state, c.g0, `${c.name}：G0 ${JSON.stringify(by.G0)}`);
+      assert.equal(by.G2.state, c.g2, `${c.name}：G2 ${JSON.stringify(by.G2)}`);
+      const closureSources = c.sources.join(' + ');
+      for (const id of ['G0', 'G2']) {
+        assert.ok(by[id].note.includes(closureSources), `${c.name}：${id} 须逐份报出契约来源（${by[id].note}）`);
+      }
+    } finally {
+      fs.rmSync(tree.root, { recursive: true, force: true });
+    }
+  }
+});
+
+// ====================================================================
 // 证据：脱敏、位置、保留策略
 // ====================================================================
 

@@ -12,10 +12,14 @@
 // 授权入口——护栏防的是误触发，不是权限隔离，直接跑同样会产生付费模型调用。
 //
 // 被测断言（guarantee 极性，exit 0 = 保证成立 = 修复后验收通过）：
-//   G0 contract-extracted   从被测定义抽出轴派发契约（async 值 + 稳定 key）
+//   G0 contract-extracted   从被测定义及其披露的共享协议抽出轴派发契约（async 值 + 稳定 key）
 //   G1 workflow-accepted    该契约实例化的双轴 workflow 调用被平台接受
-//   G2 axes-keyed           双轴结果带稳定 key：standards / spec（定义须规定）
+//   G2 axes-keyed           双轴结果带稳定 key：standards / spec（定义闭包须规定）
 //   G3 verdict-after-axes   收场（裁决点）不得早于两根轴各自的完成时刻
+//
+// 契约文本的来源是「被测定义 + 它披露的文档闭包」（ticket 37 起共同双轴协议单源在
+// scripts/review-protocol.md，两份 agent 定义只保留加载入口）：不跟随披露指针就会把
+// 「按设计集中」误判成「定义没规定」。定义闭包真的缺契约时依旧判明确失败（不放松断言）。
 //
 // 构型说明（为什么不是「真 reviewer 直跑」）：
 //   真 reviewer 直跑被两个与 #6 无关的平台级事实堵死（见探针报告与事件证据）：
@@ -67,6 +71,9 @@ const DEF_FILES = {
   reviewer: 'agents/reviewer.md',
   'final-reviewer': 'agents/final-reviewer.md',
 };
+// 披露闭包的上界：入口定义 + 一跳/两跳内的共享文档。封闭有界，避免把无关文档算进契约。
+const CLOSURE_MAX_DOCS = 4;
+const CLOSURE_MAX_DEPTH = 2;
 const PI_BIN = process.env.PI_E2E_PI_BIN || 'pi';
 
 // ---------------------------------------------------------------- CLI
@@ -171,9 +178,58 @@ function runPi(prompt, { model, thinking, sessionRoot, timeoutSec }) {
 
 // ---------------------------------------------------------------- 契约抽取（被测定义 → 探针实例化）
 
-// 从 agent 定义文本抽轴派发契约：async 值 + 稳定 key。
+// 定义文本里披露的仓库内文档指针（反引号包着的相对路径，如
+// `<this-package>/scripts/review-protocol.md` / `scripts/review-protocol.md`）。
+// 只跟随带目录的文档路径：契约是文本层事实（运行脚本不是文档权威），而裸文件名是
+// 「搜索 CONTRIBUTING.md 之类」的举例性提及，不构成披露指针。指针按引用文档所在目录
+// 与包根两种口径解析，`<this-package>/` 前缀去掉；不存在或逃出包根的一律忽略。
+function disclosedDocs(fromRel, text) {
+  const found = [];
+  for (const m of text.matchAll(/`([^`\n]+?\.md)`/g)) {
+    const raw = m[1].trim().replace(/^<this-package>\//, '');
+    if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) continue; // URL 等非路径
+    if (!raw.includes('/')) continue; // 裸文件名＝举例性提及，不是披露路径
+    if (path.isAbsolute(raw) || raw.split('/').includes('..')) continue;
+    const candidates = [
+      path.normalize(path.join(path.dirname(fromRel), raw)),
+      path.normalize(raw),
+    ];
+    const hit = candidates.find((c) => !path.isAbsolute(c) && !c.split(path.sep).includes('..')
+      && fs.existsSync(path.join(PKG_ROOT, c)));
+    if (!hit || found.includes(hit)) continue;
+    found.push(hit);
+  }
+  return found;
+}
+
+// 契约文本的权威闭包：被测定义 + 它披露的文档（有界、逐份可追溯）。
+// ticket 37 起共同双轴协议单源在 scripts/review-protocol.md，入口定义只保留加载入口：
+// 跟随披露指针才是在读「定义规定的契约」，闭包缺契约仍判明确失败。
+function definitionClosure(defFile) {
+  const docs = [];
+  const seen = new Set();
+  let frontier = [defFile];
+  for (let depth = 0; frontier.length && depth <= CLOSURE_MAX_DEPTH; depth++) {
+    const next = [];
+    for (const rel of frontier) {
+      if (seen.has(rel) || docs.length >= CLOSURE_MAX_DOCS) continue;
+      const text = readText(path.join(PKG_ROOT, rel));
+      if (text == null) continue;
+      seen.add(rel);
+      docs.push({ rel, text });
+      if (depth < CLOSURE_MAX_DEPTH) {
+        for (const doc of disclosedDocs(rel, text)) if (!seen.has(doc)) next.push(doc);
+      }
+    }
+    frontier = next;
+  }
+  return docs;
+}
+
+// 从 agent 定义闭包文本抽轴派发契约：async 值 + 稳定 key。
 // 与 scripts/registration-checks.js 的 checkAxisSpawnContract（静态断言）同源互补：
-// 那边钉文案合规，这边把文案实例化成真实 harness 行为。
+// 那边钉文案合规（权威文本 = scripts/review-protocol.md），这边把文案实例化成真实
+// harness 行为，来源是定义 + 定义披露的文档（入口定义不再各存一份派发副本）。
 function extractAxisContract(defText) {
   const asyncMatch = defText.match(/async:\s*(true|false)/);
   const keyMatches = [...defText.matchAll(/key[^\n]*?[`'"]?(standards|spec)[`'"]?/gi)].map((m) => m[1].toLowerCase());
@@ -317,12 +373,13 @@ function scenarioKeyless(args) {
 
 function scenarioGuarantee(args, defName) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `repro-${defName}-`));
-  const defText = readText(path.join(PKG_ROOT, DEF_FILES[defName])) || '';
-  const contract = extractAxisContract(defText);
+  const closure = definitionClosure(DEF_FILES[defName]);
+  const contract = extractAxisContract(closure.map((d) => d.text).join('\n'));
+  const sources = closure.map((d) => d.rel);
 
   console.log(`── 场景 guarantee：${defName} 的「收场不得抢在双轴之前」保证（红绿同源）──`);
   console.log(`  evidence root: ${root}`);
-  console.log(`  契约抽取（G0）：async: ${contract.asyncMode}，定义规定的 key: [${contract.keys.join(', ') || '无'}]`);
+  console.log(`  契约抽取（G0）：async: ${contract.asyncMode}，定义规定的 key: [${contract.keys.join(', ') || '无'}]（来源: ${sources.join(' + ')}）`);
 
   // 双轴 workflow 脚本：轴 key 固定用运行时常规名（key 缺陷由 keyless 场景专门复刻，
   // 对应 rev-362「缺 key 被拒 → 补 key 重试」路径的重试后状态）；本探针唯一实例化的
@@ -365,7 +422,7 @@ function scenarioGuarantee(args, defName) {
           if (c.type === 'toolCall' && /subagent/i.test(c.name || '')) {
             callTs = ts;
             callAsync = (c.arguments || {}).async;
-            timeline.push({ ts, text: `调用方: 双轴 workflow 调用（async: ${JSON.stringify(callAsync)}，契约来自 ${DEF_FILES[defName]}）` });
+            timeline.push({ ts, text: `调用方: 双轴 workflow 调用（async: ${JSON.stringify(callAsync)}，契约来自 ${sources.join(' + ')}）` });
           }
           if (c.type === 'text' && /VERDICT_EARLY/.test(c.text || '')) {
             verdictTs = ts;
@@ -423,7 +480,7 @@ function scenarioGuarantee(args, defName) {
   results.push({
     id: 'G0 contract-extracted',
     state: contract.asyncMode != null ? 'pass' : 'harness',
-    note: `async: ${contract.asyncMode}`,
+    note: `async: ${contract.asyncMode}（来源: ${sources.join(' + ')}）`,
   });
   const accepted = callTs != null && returnError == null;
   results.push({
@@ -436,7 +493,7 @@ function scenarioGuarantee(args, defName) {
   results.push({
     id: 'G2 axes-keyed(standards,spec)',
     state: contract.hasStableKeys ? 'pass' : 'fail',
-    note: `定义须规定的 key: [${contract.keys.join(', ') || '无'}]（文本层；运行时 key 缺陷见 keyless 场景）`,
+    note: `定义须规定的 key: [${contract.keys.join(', ') || '无'}]（来源: ${sources.join(' + ')}；文本层；运行时 key 缺陷见 keyless 场景）`,
   });
 
   let verdictAfter = false;
