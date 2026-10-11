@@ -383,7 +383,7 @@ function paragraphNaming(text, doc) {
 }
 
 // 契约位置与披露入口：登记文档与入口文档必须存在；不在 carriers 内的文档必须由 carriers
-// 某段以「触发条件 + 动作前读取」披露（含登记表里的 trigger 锚点）；主干不得仍指向已搬迁的旧路径。
+// 某段以「触发条件 + 动作前读取」披露（含登记表里的 trigger 锚点）；入口文档不得仍指向已搬迁的旧路径。
 function checkContractDocLocations(root, {
   registry = CONTRACT_DOCUMENTS,
   isFile = isFileAt,
@@ -440,11 +440,17 @@ function checkContractDocLocations(root, {
       }
       disclosed.add(doc);
     }
+    // 入口目标错误：登记行的每份入口文档（主干 / agent 定义 / 运行参考）都不得仍指向
+    // 已搬迁的旧路径。ticket 37 起共同评审协议住在共享运行文档里、入口在 agent 定义内——
+    // 只扫主干会漏掉 agent 侧的回流指针，故按 carriers 逐份扫（搬迁后的文档正文不在此列，
+    // 它本来就可以正常点名主干）。
     for (const old of entry.previous ?? []) {
       if (entry.docs.includes(old)) continue;
-      if (trunk.includes(old)) {
+      for (const carrier of carriers) {
+        const carrierText = readOrNull(carrier);
+        if (carrierText === null || !carrierText.includes(old)) continue;
         problems.push(
-          `${TRUNK_DOC} still points at the superseded location ${old} (contract ${entry.id}) — 入口目标错误：权威位置是 ${entry.docs.join(', ')}`
+          `${carrier} still points at the superseded location ${old} (contract ${entry.id}) — 入口目标错误：权威位置是 ${entry.docs.join(', ')}`
         );
       }
     }

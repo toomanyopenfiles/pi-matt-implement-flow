@@ -1042,6 +1042,35 @@ test('breakage simulation: 入口缺失 / 入口缺动作前读取语义 / 错�
   );
 });
 
+test('breakage simulation: 入口文档（agent 定义）仍指向已搬迁的旧路径即红（旧路径检查扫全部 carriers，ticket 37）', (t) => {
+  // ticket 37 把共同评审协议从两份 agent 定义搬进共享运行文档：旧位置就在入口文档里，
+  // 只扫主干会漏掉 agent 侧的回流指针——登记行的每份 carrier 都要查。
+  const registry = [
+    contractRow('review-protocol', ['scripts/review-protocol.md'], {
+      previous: ['agents/old-protocol.md'],
+      carriers: [TRUNK_DOC, 'agents/reviewer.md'],
+      trigger: 'before dispatching the axes',
+    }),
+  ];
+  const clean = relocationRoot(t, {
+    'scripts/review-protocol.md': '# Shared review protocol\n',
+    'agents/reviewer.md': '# reviewer\nRead `scripts/review-protocol.md` before dispatching the axes.\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\n',
+  });
+  assert.deepEqual(checkContractDocLocations(clean, { registry }), []);
+  const stale = relocationRoot(t, {
+    'scripts/review-protocol.md': '# Shared review protocol\n',
+    'agents/reviewer.md':
+      '# reviewer\nRead `scripts/review-protocol.md` (the rules that used to live in `agents/old-protocol.md`) before dispatching the axes.\n',
+    [TRUNK_DOC]: '# Implement, orchestrated\n',
+  });
+  const problems = checkContractDocLocations(stale, { registry });
+  assert.ok(
+    problems.some((p) => p.includes('agents/old-protocol.md') && p.includes('superseded')),
+    `入口文档里的旧路径必须红，实得: ${JSON.stringify(problems)}`
+  );
+});
+
 test('relocation fixture: 派发模板搬到登记文档后，模板字段检查跟随新位置（字段错误仍红）', (t) => {
   // 字段检查同时钉运行时限节与各派发节：fixture 用该契约自己的登记文本（跨文档按阅读顺序拼接）。
   const templates = resolveContractText(PKG_ROOT, 'run-deadlines');
