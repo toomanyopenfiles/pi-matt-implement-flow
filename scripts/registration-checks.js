@@ -464,6 +464,38 @@ function checkContractDocsPackaged(packedFiles, { registry = CONTRACT_DOCUMENTS 
   return problems;
 }
 
+// 指令指针闭包（ticket 36）：主干、运行参考与 agent 定义里以 `<this-package>/` 指名的文件
+// 必须随包发货 —— 源码树里可达不算，判定只看真实 tarball 的文件清单。
+// 只认这套显式前缀：散文里的运行期路径（`.pi/…`）与仓库文档不是包内指针，
+// 不按「看起来像路径」扫描，避免把非指针误判成悬空指针。
+const PACKAGE_POINTER_RE = /<this-package>\/[A-Za-z0-9._/-]+/g;
+const PACKAGE_POINTER_PREFIX = '<this-package>/';
+
+function checkInstructionPointersPackaged(packedFiles, {
+  registry = CONTRACT_DOCUMENTS,
+  root = PKG_ROOT,
+  readText: read = readText,
+} = {}) {
+  const packed = new Set(packedFiles);
+  const problems = [];
+  for (const doc of contractDocPaths(registry)) {
+    let text;
+    try {
+      text = read(root, doc);
+    } catch {
+      continue; // 文档缺位由位置检查报出，不在本检查里重复报
+    }
+    for (const pointer of text.match(PACKAGE_POINTER_RE) ?? []) {
+      const relPath = pointer.slice(PACKAGE_POINTER_PREFIX.length);
+      if (packed.has(relPath)) continue;
+      problems.push(
+        `${doc} points at ${pointer}, which is not in the tarball — 指令指针必须在安装包内可达，不能依赖源码独有文件`
+      );
+    }
+  }
+  return problems;
+}
+
 // --- 注册不变量：每条返回问题数组，空数组 = 通过 ---
 // 不变量 1：pi.skills 声明的每个字面路径都指向真实存在的文件。
 function checkSkillFileRegistration(manifest, { isFile = isFileAt } = {}) {
@@ -700,6 +732,7 @@ module.exports = {
   checkContractDocLocations,
   checkTrunkSkillRegistration,
   checkContractDocsPackaged,
+  checkInstructionPointersPackaged,
   readPackageJson,
   readText,
   isFileAt,
