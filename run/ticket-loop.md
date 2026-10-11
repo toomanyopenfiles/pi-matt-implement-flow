@@ -1,6 +1,6 @@
 # The ticket loop — dispatch, verify, fix, merge
 
-pi-matt-implement-flow operation doc, split verbatim out of the trunk `SKILL.md` (the always-loaded entry point — read it first). **Continue:** per ticket — claim, dispatch, settle, review, repair, merge — and leave the stage once every merged ticket is closed and the frontier is recomputed.
+pi-matt-implement-flow stage operation doc — `SKILL.md` (the always-loaded trunk) discloses this stage and is read first. **Continue:** per ticket — claim, dispatch, settle, review, repair, merge — and leave the stage once every merged ticket is closed and the frontier is recomputed.
 
 ### Each round — dispatch the frontier
 
@@ -75,10 +75,10 @@ The `schema` in the dispatch above is a copy of the mechanical-report contract. 
 
 Record each child as a `dispatch` event（记账：`--ticket --key --run-id`，`--worktree` 取自 handoff manifest 的 `artifacts`）— the fix loop, the fallback, and compaction recovery all read them from the event stream. If the tree was dirty at dispatch, the whole call fails with a worktree-admission error: fix the tree, do not retry blindly.
 
-- **Why a typed `gate` instead of an `acceptance` object** (they are mutually exclusive — a child has exactly one structured-output source): the report is assembled host-side, after the child ends, by a script from git truth plus a real test run — double-encoding and dropped fields are structurally impossible. The gate's stdout becomes the structured output and its exit code is the verdict, so you never parse model prose to decide a run.
-- **stdout contract**: the gate command must print a single JSON document of at most 12,000 characters; empty, truncated, non-JSON, or schema-mismatched output fails the gate fail-closed. The script keeps itself inside the limit (over-long output is truncated and marked, never fatal).
-- **Gate timeout**: the platform's verify default is a fixed 120 s — too short for full suites in a cold worktree, and the constant is not configurable; the dispatch pins `timeoutMs: 600000` (10 min) on the gate object.
-- **Mutual exclusion (iron rule)**: `gate`, a non-`false` `acceptance` object, and `outputSchema` are three-way exclusive — the coder dispatch carries the gate and neither of the other two (`acceptance: false` counts as omitted — what the read-only reviewer dispatch and the fix-loop resumes below use; beside a `gate` it is no shield: the gate still normalizes into a `verified` acceptance carrying its report duty, so `acceptance: false` never de-risks a gate dispatch).
+- **Why a typed `gate` instead of an `acceptance` object** (they are mutually exclusive — a child has exactly one structured-output source): the report is assembled host-side from git truth plus a real test run, so you never parse model prose to decide a run. The gate's stdout becomes the structured output and its exit code is the verdict.
+- **stdout contract**: the gate command must print a single JSON document of at most 12,000 characters; empty, truncated, non-JSON, or schema-mismatched output fails the gate fail-closed.
+- **Gate timeout**: the dispatch pins `timeoutMs: 600000` (10 min) on the gate object — the gate budget, independent of the run deadline.
+- **Mutual exclusion (iron rule)**: `gate`, a non-`false` `acceptance` object, and `outputSchema` are three-way exclusive — the coder dispatch carries the gate and neither of the other two. `acceptance: false` counts as omitted (what the read-only reviewer dispatch and the fix-loop resumes below use), but beside a `gate` it is no shield: the gate still normalizes into a `verified` acceptance carrying its report duty.
 - **The fix loop** runs the same gate by hand (below): a gate is rejected on a retained resume, so you execute the identical script command in the retained worktree — the same standard every round, no second track.
 
 ### Verify each finished ticket
@@ -132,7 +132,7 @@ const r = await runs.run("fix-01-<fixNo>", { resume: "<coderRunId>", task: `<fix
 return { ok: r.ok, structured: r.structuredOutput ?? null };
 ```
 
-(`acceptance: false` — this round's verdict is the hand-run gate you run below. Without it the resumed child inherits the first round's acceptance obligations — level `verified` plus an attestation report — and a completed fix ends `rejected` with "Structured acceptance report not found" before any check runs.)
+(`acceptance: false` — this round's verdict is the hand-run gate you run below. Without it the resumed child inherits the first round's acceptance contract, and the platform rejects the finished fix for a report the model never writes before any check runs.)
 
 Two rules the platform forces:
 
@@ -145,13 +145,13 @@ cd <coderWorktree> && node <this-package>/scripts/mechanical-report.js --base <t
 Its stdout is that round's report and its exit code is that round's gate; the `settled` `--gate` summary for the round comes from the fresh report's `testResult`, same source as round one.
 - Judge the fix by **git truth** (new HEAD SHA on the coder's branch), never by run status — a rejected run may still contain the finished work.
 
-Then `git branch -f ticket-<NN> <newSha>` and retain the fresh validation evidence. Use **Repair decisions**: perform another supported repair if needed, or rebuild the bundle, record `settled` for this candidate, and dispatch the next complete formal-review round. Review ordinals count reviews, not fixes plus one. If the resume fails because the retained worktree is gone, fall back to a fresh coder — the ticket branch carries the accumulated commits — dispatched as `worktree: true, baseRef: "refs/heads/ticket-<NN>", acceptance: false, timeoutMs: RUN_TIMEOUT_MS` (a fresh dispatch is a new deadline, resolved per the **Run deadline** rule), with **no gate**: a gate would arm the platform's acceptance-report duty and settle the round by platform checks, while a fix round has exactly one verdict source — your hand-run gate. Record that fallback as a `fix` event too (new `--key`，`--resume-run-id` = the run it replaces).
+Then `git branch -f ticket-<NN> <newSha>` and retain the fresh validation evidence. Use **Repair decisions**: perform another supported repair if needed, or rebuild the bundle, record `settled` for this candidate, and dispatch the next complete formal-review round. If the resume fails because the retained worktree is gone, fall back to a fresh coder — the ticket branch carries the accumulated commits — dispatched as `worktree: true, baseRef: "refs/heads/ticket-<NN>", acceptance: false, timeoutMs: RUN_TIMEOUT_MS` (a fresh dispatch is a new deadline, resolved per the **Run deadline** rule), with **no gate**: a gate would arm the platform's acceptance-report duty and settle the round by platform checks, while a fix round has exactly one verdict source — your hand-run gate. Record that fallback as a `fix` event too (new `--key`，`--resume-run-id` = the run it replaces).
 
 ### Merge and close
 
 Serially, in the main checkout on the feature branch — merges never run in parallel with each other:
 
-1. `git merge --no-ff -m "Merge ticket-<NN>: <title>" ticket-<NN>` — the message **must** contain the `ticket-<NN>` token (hard rule in the trunk; the ledger script cross-checks merges by it). On a conflict, follow the `resolving-merge-conflicts` skill.
+1. `git merge --no-ff -m "Merge ticket-<NN>: <title>" ticket-<NN>` — the message **must** contain the merge token (`ticket-<NN>` is a hard rule; the ledger script cross-checks merges by it). On a conflict, follow the `resolving-merge-conflicts` skill.
 2. Run the full suite. Red means an integration problem no ticket-level review could see: save the failing output to `findings/integration-<NN>.md` and dispatch **one** coder **without isolation** (omit `worktree`) on the feature branch, guarded by a pure-verdict gate (command plus timeout only — no `output`/`schema`, zero report because zero consumers). Script-file delivery: write the script below to a new file `.pi/matt-implement/<slug>/wf/integration-<NN>.js`, then call `subagent({ workflow: "./.pi/matt-implement/<slug>/wf/integration-<NN>.js", async: true })`:
 
 ```js

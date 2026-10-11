@@ -22,7 +22,9 @@ ticket 33 前基线（`289981f1`）：520/520 通过（186 秒）；指令搬迁
 ticket 36 前基线（`c70f1f7`）：534/534；指针闭包护栏落地后：536/536；主干/阶段操作文档
 原样拆分后（2026-10-11）：536/536 通过（约 176 秒）。
 ticket 37（共享评审协议集中 + 入口护栏收紧）前基线沿用上述 536/536（`10121c7`）；
-补 7 条回归后：**543/543** 通过（2026-10-11）。
+补 7 条回归后：**543/543** 通过（2026-10-11）——该数未计 `test/e2e-accept-cli.test.js` 的 28 例。
+ticket 38 前基线（`9979330`，整条 `npm test` 实测，2026-10-11）：571/571 通过（约 171 秒）；
+指令精简与对照护栏（ticket 38）后：**575/575** 通过。
 `test/e2e/`（真实模型验收入口，`node test/e2e/accept.js`；旧别名 `npm run repro` 走同一入口）
 内嵌双轴探针（`test/e2e/probes/repro-reviewer-axes.js`，局部平台契约探针）不在 `npm test` 与 CI 内。
 真实模型批次默认不启动：先看计划，再用计划哈希授权，详见
@@ -44,6 +46,7 @@ ticket 37（共享评审协议集中 + 入口护栏收紧）前基线沿用上�
 | 指令权威位置与披露入口（ticket 33） | 承重契约的权威文档位置、触发入口（触发条件 + 动作前读取）、打包可达；指令搬迁时护栏跟随新位置 | `self-check.test.js` · contract registry 4 用例、relocation fixture 3 用例、入口/目标/位置/触发条件 breakage；`package-manifest.test.js` · 清单闭包 + 契约入包 + 遗漏打包负例；`run-timeout-dispatch.test.js` · 模板边界（含搬迁 fixture） | 静态合同 + 包级系统 + workflow 派发边界 | 位置与触发入口取自 `scripts/registration-checks.js` 的 `CONTRACT_DOCUMENTS`（指令文档：主干、阶段文档、agent 定义；测试不写死其路径）；入口缺失 / 只提名不要求动作前读取 / 缺触发条件锚点 / 错误目标 / 入口或权威位置缺失 / 承重规则丢失 / 派发字段错误 / 遗漏打包各自红；对照行必须记全原位置、权威位置、触发入口与对应测试指针 | **非行为证据**：不证明模型会在动作前读取或按入口导航；只钉路径、触发条件与动作前读取语义，不锁标题、行数、目录数量；释义与继续条件措辞不定型 |
 | 指令主干与阶段操作文档（ticket 36） | 主干常驻（角色、核心安全约束、流程地图、披露入口），阶段操作文档在 `run/` 下按需披露；原样搬迁、可独立回退，拆分不改变生产编排语义 | `self-check.test.js` · contract registry 4 用例、relocation fixture 3 用例、入口/目标/位置/触发条件 breakage；`package-manifest.test.js` · 清单闭包 + 契约入包 + 指针闭包 + 未打包指针负例；`run-timeout-dispatch.test.js` · 模板边界（含搬迁 fixture） | 静态合同 + 包级系统 + workflow 派发边界 | 位置、触发入口与对应测试取自 `scripts/registration-checks.js` 的 `CONTRACT_DOCUMENTS`（测试不写死路径）；主干保留硬规则、记忆层写权、修复决策与流程入口，阶段段落住在 `run/new-run.md` / `run/ticket-loop.md` / `run/recovery.md` / `run/closing.md` / `run/dispatch-reference.md`；入口缺失 / 错误目标 / 承重规则丢失 / 模板字段错误 / 遗漏打包 / 指针指向未打包文件各自红；`<this-package>/` 指针按真实 tarball 文件清单判定；搬迁文本里的 init/CLI 示例与当前公开接口逐条核对（`ledger.js --help` / `flow-config-cli.js --help`，2026-10-11：init / snapshot-init / claim / sync / add / build / check / pr / close 全在，退役的 `--tracker`、`--max-fix-rounds` 仍标为退役），与 #29 的重叠覆盖在此记录，不改动其状态 | **非行为证据**：不证明模型会在动作前读取或按入口导航；本轮候选**待真实模型验收**（尚未授权，由 ticket 35/39 组织），不以确定性测试替代 |
 | 共享评审协议与 agent 职责（ticket 37） | 两类 reviewer 的共同只读双轴协议集中维护（不新增 skill）；coder 保留批准范围/workspace/test-first/提交/升级/事实报告，报告通道与机械报告职责不再错位；final-reviewer 保留跨票检查与延期 findings 处置且前提兼容 `reviewer=off`；平台表单义务仍单源归平台 | `self-check.test.js` · 票 37 组 6 用例（共享协议单源、两类 reviewer 入口、协议契约保留、coder / reviewer 输入 / final-reviewer 职责）+ 入口与旧路径破坏模拟 2 用例；`package-manifest.test.js` · 契约入包 + 指针闭包（覆盖新文档） | 静态合同 + 包级系统 | 双轴派发契约（路径形态、`async: false`、`standards`/`spec` 稳定 key、两轴后才裁决、最新时限与主仓库配置指针、证据过滤、不跨轴合并）只认 `scripts/review-protocol.md`；两份 agent 定义各自披露加载入口（路径 + 动作前读取 + 触发条件）；coder 定义不再声称写结构化输出，也不复述平台表单义务（`checkNoReportBans` 仍全绿）；final-reviewer 定义带 `reviewer=off` 前提与四类跨票检查 | **非行为证据**：不证明模型真的先读协议再派轴；真实模型验收仍属 ticket 39 授权范围 |
+| 指令精简与机制叙述分层（ticket 38） | 在契约不变的前提下精简指令：删重复完整定义与陈旧自述，机制原因/平台常量/历史解释外移设计参考并保单一权威，危险动作旁保留短提醒；精简单独提交、可独立回退；读取时机、修复决策、当前候选审批、验证、合并、对账恢复、续跑、阶段性交付、用户放弃与封账边界不变 | `self-check.test.js` · 票 38 组 4 用例（精简影响记录完整性、外移唯一性破坏模拟、陈旧自述回流、两类 reviewer 定义单源 + 37-r1 P2 读取步骤）；`package-manifest.test.js` · 契约入包 + 指针闭包；`run-timeout-dispatch.test.js` · 模板边界 | 静态合同 + 包级系统 + workflow 派发边界 | 登记行逐项记 `slimming` 影响（deleted / relocated / rewritten / unchanged，外移记原句 + 设计参考目标）；外移句必须在设计参考里且不出现在任何指令文档；阶段文档不再自称「原样搬迁」产物；共享输入清单与协议摘要只在 `scripts/review-protocol.md` 列一次；派发模板、门禁命令、时限与封账边界逐字未动（既有断言与破坏模拟一条未删） | **非行为证据**：只证指令面没有第二套定义与陈旧自述，不证模型少读上下文后仍按入口导航；精简后候选仍**待真实模型验收**（未授权，ticket 39 范围） |
 | 串行合并事实核验 | merge 前 git 交叉核对（存在/祖先/令牌/headSha） | `ledger-cli.test.js` · "merge git 交叉核对"、"merge 门" | CLI 黑盒 | 四类矛盾全拒绝；历史不变 | — |
 | reviewer on/off 与批准门 | on 时无 approved 不可合并；off 语义保留 | `ledger-cli.test.js` · "reviewer=off"、"merge 门"、"最新正式裁决才是批准门" | CLI 黑盒 | 旧 approved/notes/anomaly 不覆盖后续阻塞裁决 | 真实 reviewer 裁决质量 |
 | 修复编号与独立评审轮次 | fixNo 顺序尝试、评审轮次独立、同票同轮去重 | `ledger-cli.test.js` · "fix 尝试无默认配额"、"结算被拒（坏 SHA）不归零 fixNo"、"无新增 fix 可正式重评…" | CLI 黑盒 | 不以 fix 数推导轮次；非法正数拒绝 | — |
@@ -74,6 +77,14 @@ ticket 37（共享评审协议集中 + 入口护栏收紧）前基线沿用上�
 ticket 37 后：两类 reviewer 的共同只读双轴协议单源在 `scripts/review-protocol.md`，入口是两份
 reviewer agent 定义（主干只说“两轴前读它”）；旧路径检查逐份扫登记行的 carriers，agent 定义
 不再漏检。
+ticket 38 后：登记行另带 `slimming` 列（每行一条：删除 / 外移 / 改写 / 未变 + 复核说明，外移记下
+原句与设计参考目标），由 `checkSlimmingImpacts` 逐行验「外移句在设计参考里唯一存在」——目标丢句、
+指令面留副本、悬空目标、行没记影响、类别越界各自红；阶段文档不再自称「原样搬迁」产物
+（`checkStaleInstructionClaims`，回流即红）。精简对照（同一条命令、同一装机，2026-10-11）：
+指令面 11 份文档 77,998 → 75,762 字节（约 -2.9%），行数不是验收条件——可复核的对照是「删了哪些
+重复完整定义、哪些机制说明搬到了哪份设计参考」。阶段引用供后续对照：原样搬迁 `2f1e43d`
+（ticket 36）、agent 归并收口 `d041cfa`（ticket 37）；ticket 38 的精简是独立提交，可单独回退
+（回退时登记行的 `slimming` 记录与护栏一并回退，不会留下悬空证据）。
 检查器问题串里的 `SKILL.md` 是「被检查的指令文本」的稳定标签，位置一律以登记表为准。
 搬迁时改登记表并把原位置记进 `previous`；跨文档的小节断言随拆分调整
 检查对象与入口，但不删断言、不删破坏模拟。

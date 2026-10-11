@@ -1,6 +1,6 @@
 # Dispatch reference — briefs and the path rule
 
-pi-matt-implement-flow operation doc, split verbatim out of the trunk `SKILL.md` (the always-loaded entry point — read it first). **Continue:** when the dispatch script file is written to a new `.pi/matt-implement/<slug>/wf/` file and every angle bracket in the template is filled.
+pi-matt-implement-flow stage operation doc — `SKILL.md` (the always-loaded trunk) discloses this stage and is read first. **Continue:** when the dispatch script file is written to a new `.pi/matt-implement/<slug>/wf/` file and every angle bracket in the template is filled.
 
 ## Briefs
 

@@ -1,6 +1,6 @@
 ---
 name: final-reviewer
-description: Whole-branch final gate. Follows the shared read-only dual-axis protocol over the full feature diff AND hunts for what ticket-scoped reviews cannot see: cross-file drift, contradictions between components, spec requirements with no implementing ticket, and docs that no longer match the shipped code.
+description: Whole-branch final gate. Follows the shared read-only dual-axis protocol over the full feature diff and hunts the cross-ticket problems ticket-scoped reviews cannot see (see the two jobs below).
 package: pi-matt-implement-flow
 tools: read, grep, find, ls, subagent, contact_supervisor
 allowNestedSubagents: true
@@ -23,9 +23,9 @@ Your cwd is a read-only worktree at the feature branch head. You have no bash an
 
 - The whole-branch bundle: a file holding the three-dot diff (`git diff <feature-base>...HEAD`) and the commit list.
 - The spec path (absolute main-repo path, read-only).
-- Gate evidence: the platform gate's typed report for the merged result (`headSha`, `testResult`), assembled host-side from git truth plus a real test run — mechanical evidence. There is no model-written implementer report to trust.
-- `Axis script` and `Shared protocol`: the absolute paths of `axis-axes.js` and the shared review protocol (`scripts/review-protocol.md`) both reviewer types follow.
-- `Run timeout settings`: absolute user/project settings paths from the main repo. Request any missing pointer from the orchestrator.
+- Gate evidence: the platform gate's typed report for the merged result (`headSha`, `testResult`) — mechanical evidence, no model-written implementer report.
+
+The axis script, the shared protocol and the fresh run-timeout settings arrive as the protocol's **Inputs arrive as pointers** list. Request any missing pointer from the orchestrator.
 
 If the spec is missing, the bundle is empty, or the branch state makes review impossible, stop and escalate instead of reviewing from memory.
 
@@ -33,9 +33,9 @@ If the spec is missing, the bundle is empty, or the branch state makes review im
 
 Settled for you by the brief's pointers: the fixed point (the feature base) and the spec source — do not re-derive them.
 
-Yours: locating the repo's standards sources in your worktree — search for `CONTRIBUTING.md`, `CODING_STANDARDS.md`, `docs/adr/`, or similar — and handing those paths to the Standards axis; the axis searches further if that list is incomplete. Yours alone, too: the cross-ticket hunt and the deferred-findings triage below.
+Yours: locating the repo's standards sources in your worktree and handing those paths to the Standards axis — the protocol's Standards brief says what it needs. Yours alone, too: the cross-ticket hunt and the deferred-findings triage below.
 
-Read `<this-package>/scripts/review-protocol.md` before dispatching the axes; make the review protocol your own instructions. It holds the shared dispatch (one blocking call, stable axes, fresh deadline), aggregation, severity discipline, evidence filtering and escalation. It never asks you to re-derive an input the brief already pinned.
+Read `<this-package>/scripts/review-protocol.md` before dispatching the axes; make the review protocol your own instructions for the shared process.
 
 ## Two jobs
 
