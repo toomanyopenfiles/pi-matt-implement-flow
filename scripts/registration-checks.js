@@ -58,12 +58,16 @@ function parseFrontmatter(text) {
 }
 
 // ====================================================================
-// 承重契约 → 权威文档位置登记表（ticket 33：回归护栏支持指令搬迁）
+// 承重契约 → 权威文档位置登记表（ticket 33 建立，ticket 36 跟随指令拆分）
 //
 // 静态合同的检查器只吃文本、不认文件名；测试经 resolveContractText / resolveContractCorpus
 // 按契约 id 取文本。指令搬迁 = 改本表的 docs（原位置记进 previous）：检查器、断言与派发
 // 边界测试原样跟随，测试里不再写死指令文档路径（注册事实如 agent frontmatter、
 // 可执行派发脚本按各自的注册面/包布局读，不属本表）。
+//
+// 当前布局（ticket 36）：主干 `SKILL.md` 常驻（角色、核心安全约束、流程地图、披露入口），
+// 阶段操作文档在 `run/` 下按需加载；检查器问题串里的 `SKILL.md` 沿用为「被检查的指令文本」
+// 的稳定标签，位置一律以本表为准（拆分不改逐条消息的措辞）。
 //
 // 字段：
 // - id       契约名（检查器与测试按它取值）
@@ -82,37 +86,157 @@ function parseFrontmatter(text) {
 // 只钉承重的路径、触发条件与动作前读取语义，不锁标题措辞、行数或目录数量，也不以
 // 「拼接全部文档搜关键词」代替入口检查。
 // 边界：散文解释与「继续条件」措辞不定型，不做逐字断言；跨文档的小节断言随实际拆分
-// 调整检查对象与入口（检查器问题串里的 SKILL.md 是当前权威位置的名字），但不删断言、
-// 不删破坏模拟。
+// 调整检查对象与入口，但不删断言、不删破坏模拟。
 // ====================================================================
 const TRUNK_DOC = 'SKILL.md';
 
 // 主干常驻：入口就是主干本身，每次加载，无独立披露段。
 const TRUNK_ENTRY = Object.freeze({ carriers: ['SKILL.md'], trigger: '主干常驻（每次加载）' });
 
+// 阶段操作文档（ticket 36 原样拆分自主干）的触发锚点：主干「The loop」的入口段逐条携带，
+// 登记行按文档取对应锚点；同一文档的多个契约行共用本锚点。
+const STAGE_ENTRY = Object.freeze({
+  'run/dispatch-reference.md': 'before writing a brief or a dispatch script',
+  'run/new-run.md': 'before Round 0',
+  'run/ticket-loop.md': 'before dispatching a wave',
+  'run/recovery.md': 'before resuming an unfinished run',
+  'run/closing.md': 'before the Final gate',
+});
+const stageEntry = (doc) => ({ carriers: ['SKILL.md'], trigger: STAGE_ENTRY[doc] });
+
 const CONTRACT_DOCUMENTS = [
+  // —— 派发参考（run/dispatch-reference.md）：五套简报模板与路径规则。
   {
     id: 'coder-brief-worktree-reality',
     contract: 'coder 简报的 Worktree reality 块、退役编排笔记指针、用户裁定的软围栏原句',
-    docs: ['SKILL.md'],
+    docs: ['run/dispatch-reference.md'],
     previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
+    entry: stageEntry('run/dispatch-reference.md'),
     tests: ['test/self-check.test.js · coder brief carries the worktree-reality contract'],
   },
   {
+    id: 'briefs',
+    contract: '五套简报模板、零报告职责、承重收尾句（SHA 报告与提交纪律）',
+    docs: ['run/dispatch-reference.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/dispatch-reference.md'),
+    tests: ['test/self-check.test.js · anchor-4、anchor-8'],
+  },
+  // —— 新运行（run/new-run.md）：前置条件、流程形态、运行时限、Round 0。
+  {
     id: 'preconditions-flow-config',
     contract: '前置条件与流程形态冻结（reviewer/concurrency，无修复配额）',
-    docs: ['SKILL.md'],
+    docs: ['run/new-run.md'],
     previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · SKILL.md flow configuration and new init expose reviewer/concurrency'],
+    entry: stageEntry('run/new-run.md'),
+    tests: ['test/self-check.test.js · run/new-run.md flow configuration and new init expose reviewer/concurrency'],
+  },
+  {
+    id: 'round0',
+    contract: 'Round 0：图、分支、基线、环境勘测（勘测结论归编排笔记环境事实节）',
+    docs: ['run/new-run.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/new-run.md'),
+    tests: ['test/self-check.test.js · Round 0 carries the environment-survey step'],
+  },
+  // —— ticket 循环（run/ticket-loop.md）：派发、结算、评审、修复轮、合并收尾。
+  {
+    id: 'ticket-round',
+    contract: '认领、派发、结算、正式评审轮次独立与批准门看当前候选',
+    docs: ['run/ticket-loop.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/ticket-loop.md'),
+    tests: ['test/self-check.test.js · run/ticket-loop.md formal review rounds are independent / ticket repairs'],
+  },
+  {
+    id: 'coder-dispatch-typed-gate',
+    contract: '票据 coder 派发 = typed gate（gate 在场、无 acceptance 对象 / outputSchema）',
+    docs: ['run/ticket-loop.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/ticket-loop.md'),
+    tests: ['test/self-check.test.js · anchor-1'],
+  },
+  {
+    id: 'dispatch-schema-copy',
+    contract: '派发 schema 副本与 mechanical-report 真源逐字一致',
+    docs: ['run/ticket-loop.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/ticket-loop.md'),
+    tests: ['test/self-check.test.js · anchor-2'],
+  },
+  {
+    id: 'gate-commands',
+    contract: '每条机械报告门禁命令带 --base 与 --test-command',
+    docs: ['run/ticket-loop.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/ticket-loop.md'),
+    tests: ['test/self-check.test.js · anchor-5'],
+  },
+  {
+    id: 'fix-loop',
+    contract: '修复轮 resume（acceptance: false、无 gate）与编排者手跑同一门禁命令',
+    docs: ['run/ticket-loop.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/ticket-loop.md'),
+    tests: ['test/self-check.test.js · anchor-3、anchor-9'],
+  },
+  // —— 恢复（run/recovery.md）：续跑与升级历史；round0 的续段入口在 new-run 文档。
+  {
+    id: 'cold-resume',
+    contract: '续跑：跳过 init 与拉取、再生对账、核验条件、恢复中断阶段（续段回到 Round 0）',
+    docs: ['run/recovery.md', 'run/new-run.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/recovery.md'),
+    tests: ['test/self-check.test.js · run/recovery.md cold resume 合同'],
+  },
+  {
+    id: 'human-handoff',
+    contract: '票级升级历史与异常处置证据归编排笔记，升级不是完成',
+    docs: ['run/recovery.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/recovery.md'),
+    tests: ['test/self-check.test.js · run/recovery.md human handoff / anomaly history 合同'],
+  },
+  // —— 收尾（run/closing.md）：终审、阶段性交付、用户放弃。
+  {
+    id: 'final-gate',
+    contract: '终审裁决、修复与重审、not_ready 拒正常封账、pre-seal sync',
+    docs: ['run/closing.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/closing.md'),
+    tests: ['test/self-check.test.js · run/closing.md final repairs / pre-seal sync 合同'],
+  },
+  {
+    id: 'partial-delivery',
+    contract: '阶段性交付：保持未封账与续跑证据，只续剩余范围',
+    docs: ['run/closing.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/closing.md'),
+    tests: ['test/self-check.test.js · run/closing.md partial delivery 合同'],
+  },
+  {
+    id: 'user-abandonment',
+    contract: '用户放弃：停子代理、保存成果、abandon 同步成功后封账',
+    docs: ['run/closing.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/closing.md'),
+    tests: ['test/self-check.test.js · run/closing.md user abandonment 合同'],
+  },
+  // —— 跨文档契约：一节在循环、一节在收尾（按阅读顺序拼接）。
+  {
+    id: 'merge-close',
+    contract: '串行合并、集成修复纯判定 gate、验证通过后才合并记账与票完成',
+    docs: ['run/ticket-loop.md', 'run/closing.md'],
+    previous: ['SKILL.md'],
+    entry: stageEntry('run/ticket-loop.md'),
+    tests: ['test/self-check.test.js · anchor-7、reconciliation before merge accounting'],
   },
   {
     id: 'run-deadlines',
     contract: '每次新派发携带新解析的运行时限、retained resume 零时限、门禁超时独立',
-    docs: ['SKILL.md'],
+    docs: ['run/new-run.md', 'run/ticket-loop.md', 'run/closing.md'],
     previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
+    entry: stageEntry('run/new-run.md'),
     tests: [
       'test/self-check.test.js · every new dispatch carries the freshly resolved run deadline',
       'test/run-timeout-dispatch.test.js · all fresh top-level workflow templates send the latest A → B value',
@@ -121,35 +245,20 @@ const CONTRACT_DOCUMENTS = [
   {
     id: 'dispatch-templates',
     contract: '六种派发形态的模板围栏与散文形态（派发边界执行检查的被测面）',
-    docs: ['SKILL.md'],
+    docs: ['run/ticket-loop.md', 'run/closing.md'],
     previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
+    entry: stageEntry('run/ticket-loop.md'),
     tests: ['test/run-timeout-dispatch.test.js · fresh templates / retained-resume template'],
   },
   {
-    id: 'coder-dispatch-typed-gate',
-    contract: '票据 coder 派发 = typed gate（gate 在场、无 acceptance 对象 / outputSchema）',
-    docs: ['SKILL.md'],
+    id: 'dispatch-delivery',
+    contract: '派发交付形态：脚本先落盘新文件、再以文件路径调用',
+    docs: ['run/ticket-loop.md', 'run/closing.md'],
     previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · anchor-1'],
+    entry: stageEntry('run/ticket-loop.md'),
+    tests: ['test/self-check.test.js · dispatch delivery（issue #9）'],
   },
-  {
-    id: 'dispatch-schema-copy',
-    contract: '派发 schema 副本与 mechanical-report 真源逐字一致',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · anchor-2'],
-  },
-  {
-    id: 'gate-commands',
-    contract: '每条机械报告门禁命令带 --base 与 --test-command',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · anchor-5'],
-  },
+  // —— 主干常驻契约（角色、记忆层写权、共享修复决策、硬规则）。
   {
     id: 'ledger-discipline',
     contract: '台账/事件流/编排笔记三层写权、对账纪律、封账前同步',
@@ -157,30 +266,6 @@ const CONTRACT_DOCUMENTS = [
     previous: ['SKILL.md'],
     entry: TRUNK_ENTRY,
     tests: ['test/self-check.test.js · ledger / reconciliation / pre-seal sync 合同'],
-  },
-  {
-    id: 'round0',
-    contract: 'Round 0：图、分支、基线、环境勘测（勘测结论归编排笔记环境事实节）',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · Round 0 carries the environment-survey step'],
-  },
-  {
-    id: 'ticket-round',
-    contract: '认领、派发、结算、正式评审轮次独立与批准门看当前候选',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · formal review rounds are independent / ticket repairs'],
-  },
-  {
-    id: 'fix-loop',
-    contract: '修复轮 resume（acceptance: false、无 gate）与编排者手跑同一门禁命令',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · anchor-3、anchor-9'],
   },
   {
     id: 'repair-decisions',
@@ -191,62 +276,6 @@ const CONTRACT_DOCUMENTS = [
     tests: ['test/self-check.test.js · SKILL.md repair decisions use evidence and approved scope'],
   },
   {
-    id: 'human-handoff',
-    contract: '票级升级历史与异常处置证据归编排笔记，升级不是完成',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · human handoff / anomaly history 合同'],
-  },
-  {
-    id: 'cold-resume',
-    contract: '续跑：跳过 init 与拉取、再生对账、核验条件、恢复中断阶段',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · SKILL.md cold resume 合同'],
-  },
-  {
-    id: 'merge-close',
-    contract: '串行合并、集成修复纯判定 gate、验证通过后才合并记账与票完成',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · anchor-7、reconciliation before merge accounting'],
-  },
-  {
-    id: 'final-gate',
-    contract: '终审裁决、修复与重审、not_ready 拒正常封账、pre-seal sync',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · SKILL.md final repairs / pre-seal sync 合同'],
-  },
-  {
-    id: 'partial-delivery',
-    contract: '阶段性交付：保持未封账与续跑证据，只续剩余范围',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · SKILL.md partial delivery 合同'],
-  },
-  {
-    id: 'user-abandonment',
-    contract: '用户放弃：停子代理、保存成果、abandon 同步成功后封账',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · SKILL.md user abandonment 合同'],
-  },
-  {
-    id: 'briefs',
-    contract: '五套简报模板、零报告职责、承重收尾句（SHA 报告与提交纪律）',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · anchor-4、anchor-8'],
-  },
-  {
     id: 'hard-rules',
     contract: '硬规则：不写 feature code、合并 token、裁决值、单写者、封账不可逆',
     docs: ['SKILL.md'],
@@ -254,14 +283,7 @@ const CONTRACT_DOCUMENTS = [
     entry: TRUNK_ENTRY,
     tests: ['test/self-check.test.js · anchor-6'],
   },
-  {
-    id: 'dispatch-delivery',
-    contract: '派发交付形态：脚本先落盘新文件、再以文件路径调用',
-    docs: ['SKILL.md'],
-    previous: ['SKILL.md'],
-    entry: TRUNK_ENTRY,
-    tests: ['test/self-check.test.js · dispatch delivery（issue #9）'],
-  },
+  // —— agent 定义与只读参考（平台按注册名加载 / 主干在动作前披露）。
   {
     id: 'coder-agent-definition',
     contract: 'coder 定义的 workspace/批准范围/事实报告边界与零报告禁令面',
@@ -460,6 +482,38 @@ function checkContractDocsPackaged(packedFiles, { registry = CONTRACT_DOCUMENTS 
     problems.push(
       `contract doc is not in the tarball: ${doc} (contract ${owners}) — 安装后不可达：files 白名单或目录需覆盖它`
     );
+  }
+  return problems;
+}
+
+// 指令指针闭包（ticket 36）：主干、运行参考与 agent 定义里以 `<this-package>/` 指名的文件
+// 必须随包发货 —— 源码树里可达不算，判定只看真实 tarball 的文件清单。
+// 只认这套显式前缀：散文里的运行期路径（`.pi/…`）与仓库文档不是包内指针，
+// 不按「看起来像路径」扫描，避免把非指针误判成悬空指针。
+const PACKAGE_POINTER_RE = /<this-package>\/[A-Za-z0-9._/-]+/g;
+const PACKAGE_POINTER_PREFIX = '<this-package>/';
+
+function checkInstructionPointersPackaged(packedFiles, {
+  registry = CONTRACT_DOCUMENTS,
+  root = PKG_ROOT,
+  readText: read = readText,
+} = {}) {
+  const packed = new Set(packedFiles);
+  const problems = [];
+  for (const doc of contractDocPaths(registry)) {
+    let text;
+    try {
+      text = read(root, doc);
+    } catch {
+      continue; // 文档缺位由位置检查报出，不在本检查里重复报
+    }
+    for (const pointer of text.match(PACKAGE_POINTER_RE) ?? []) {
+      const relPath = pointer.slice(PACKAGE_POINTER_PREFIX.length);
+      if (packed.has(relPath)) continue;
+      problems.push(
+        `${doc} points at ${pointer}, which is not in the tarball — 指令指针必须在安装包内可达，不能依赖源码独有文件`
+      );
+    }
   }
   return problems;
 }
@@ -700,6 +754,7 @@ module.exports = {
   checkContractDocLocations,
   checkTrunkSkillRegistration,
   checkContractDocsPackaged,
+  checkInstructionPointersPackaged,
   readPackageJson,
   readText,
   isFileAt,

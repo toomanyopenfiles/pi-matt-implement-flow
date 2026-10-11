@@ -19,6 +19,8 @@
 issue #26（运行时限）补齐后：514/514；补齐 axis 时限透传与派发参数测试后：520/520。
 ticket 33 前基线（`289981f1`）：520/520 通过（186 秒）；指令搬迁护栏落地后：530/530；
 评审轮 1 修复后（agent 定义入登记表 + 触发入口锚点 + 派发交付护栏入表）：534/534。
+ticket 36 前基线（`c70f1f7`）：534/534；指针闭包护栏落地后：536/536；主干/阶段操作文档
+原样拆分后（2026-10-11）：536/536 通过（约 176 秒）。
 `test/repro-reviewer-axes.js`（真实模型探针）不在 `npm test` 与 CI 内。
 
 ## 主体功能矩阵
@@ -35,6 +37,7 @@ ticket 33 前基线（`289981f1`）：520/520 通过（186 秒）；指令搬迁
 | 阻塞边与快照 | 正文行与 native 边合并；快照转写逐字节确定 | `tracker-sync-core.test.js` · "阻塞映射"、"转写确定性"；`snapshot-core.test.js` · "planSnapshot" 系列；`snapshot-cli.test.js` · 13 用例 | 单元 + CLI 黑盒 | 三层定界（sub-issues→Parent 反查→init 清单）；拉取失败 best-effort 警告 | 真实 GitHub/GitLab API 形态（桩替代） |
 | 工作树隔离与派发合同 | coder/reviewer/final-reviewer 派发形态、typed gate、双轴稳定 key | `self-check.test.js` · anchor-1/2/7/8、issue #6/#9 合同 + breakage 系列 | 静态合同 | 断言逐字锚点与派发块结构；破坏模拟即红 | **非行为证据**：不证明平台接受派发或子代理遵守 |
 | 指令权威位置与披露入口（ticket 33） | 承重契约的权威文档位置、触发入口（触发条件 + 动作前读取）、打包可达；指令搬迁时护栏跟随新位置 | `self-check.test.js` · contract registry 4 用例、relocation fixture 3 用例、入口/目标/位置/触发条件 breakage；`package-manifest.test.js` · 清单闭包 + 契约入包 + 遗漏打包负例；`run-timeout-dispatch.test.js` · 模板边界（含搬迁 fixture） | 静态合同 + 包级系统 + workflow 派发边界 | 位置与触发入口取自 `scripts/registration-checks.js` 的 `CONTRACT_DOCUMENTS`（指令文档：主干、阶段文档、agent 定义；测试不写死其路径）；入口缺失 / 只提名不要求动作前读取 / 缺触发条件锚点 / 错误目标 / 入口或权威位置缺失 / 承重规则丢失 / 派发字段错误 / 遗漏打包各自红；对照行必须记全原位置、权威位置、触发入口与对应测试指针 | **非行为证据**：不证明模型会在动作前读取或按入口导航；只钉路径、触发条件与动作前读取语义，不锁标题、行数、目录数量；释义与继续条件措辞不定型 |
+| 指令主干与阶段操作文档（ticket 36） | 主干常驻（角色、核心安全约束、流程地图、披露入口），阶段操作文档在 `run/` 下按需披露；原样搬迁、可独立回退，拆分不改变生产编排语义 | `self-check.test.js` · contract registry 4 用例、relocation fixture 3 用例、入口/目标/位置/触发条件 breakage；`package-manifest.test.js` · 清单闭包 + 契约入包 + 指针闭包 + 未打包指针负例；`run-timeout-dispatch.test.js` · 模板边界（含搬迁 fixture） | 静态合同 + 包级系统 + workflow 派发边界 | 位置、触发入口与对应测试取自 `scripts/registration-checks.js` 的 `CONTRACT_DOCUMENTS`（测试不写死路径）；主干保留硬规则、记忆层写权、修复决策与流程入口，阶段段落住在 `run/new-run.md` / `run/ticket-loop.md` / `run/recovery.md` / `run/closing.md` / `run/dispatch-reference.md`；入口缺失 / 错误目标 / 承重规则丢失 / 模板字段错误 / 遗漏打包 / 指针指向未打包文件各自红；`<this-package>/` 指针按真实 tarball 文件清单判定；搬迁文本里的 init/CLI 示例与当前公开接口逐条核对（`ledger.js --help` / `flow-config-cli.js --help`，2026-10-11：init / snapshot-init / claim / sync / add / build / check / pr / close 全在，退役的 `--tracker`、`--max-fix-rounds` 仍标为退役），与 #29 的重叠覆盖在此记录，不改动其状态 | **非行为证据**：不证明模型会在动作前读取或按入口导航；本轮候选**待真实模型验收**（尚未授权，由 ticket 35/39 组织），不以确定性测试替代 |
 | 串行合并事实核验 | merge 前 git 交叉核对（存在/祖先/令牌/headSha） | `ledger-cli.test.js` · "merge git 交叉核对"、"merge 门" | CLI 黑盒 | 四类矛盾全拒绝；历史不变 | — |
 | reviewer on/off 与批准门 | on 时无 approved 不可合并；off 语义保留 | `ledger-cli.test.js` · "reviewer=off"、"merge 门"、"最新正式裁决才是批准门" | CLI 黑盒 | 旧 approved/notes/anomaly 不覆盖后续阻塞裁决 | 真实 reviewer 裁决质量 |
 | 修复编号与独立评审轮次 | fixNo 顺序尝试、评审轮次独立、同票同轮去重 | `ledger-cli.test.js` · "fix 尝试无默认配额"、"结算被拒（坏 SHA）不归零 fixNo"、"无新增 fix 可正式重评…" | CLI 黑盒 | 不以 fix 数推导轮次；非法正数拒绝 | — |
@@ -56,9 +59,12 @@ ticket 33 前基线（`289981f1`）：520/520 通过（186 秒）；指令搬迁
 `entry` 触发入口（`carriers` + `trigger`）/ `tests` 对应测试）。
 检查器与测试经 `resolveContractText`、`resolveContractCorpus` 按契约 id 取指令文档文本，
 不在测试里写死这些路径（agent frontmatter 等注册事实与可执行派发脚本按注册面/包布局读）；
-本文件不复制这张表（对照是本次重构的验收证据，不是第二份运行协议）。当前布局：指令仍在主干
-`SKILL.md` 与三份 agent 定义，只有双轴运行时限设置文档（`scripts/run-timeout-settings.md`）是
-主干之外的权威文档，由主干在动作前披露（触发锚点 `before dispatching the axes`）。
+本文件不复制这张表（对照是本次重构的验收证据，不是第二份运行协议）。ticket 36 后的布局：
+主干 `SKILL.md` 常驻（角色、硬规则、记忆层写权、修复决策、流程地图与入口），阶段操作文档在
+`run/` 下按需披露（`new-run` / `ticket-loop` / `recovery` / `closing` / `dispatch-reference`，
+入口锚点见登记表的 `entry.trigger`），三份 agent 定义按注册名加载，双轴运行时限设置文档
+（`scripts/run-timeout-settings.md`）仍由主干在动作前披露（触发锚点 `before dispatching the axes`）。
+检查器问题串里的 `SKILL.md` 是「被检查的指令文本」的稳定标签，位置一律以登记表为准。
 搬迁时改登记表并把原位置记进 `previous`；跨文档的小节断言随拆分调整
 检查对象与入口，但不删断言、不删破坏模拟。
 

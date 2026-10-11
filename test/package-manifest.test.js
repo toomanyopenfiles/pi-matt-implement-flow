@@ -12,7 +12,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { loadPackage, cleanupPackage, REPO_ROOT } = require('./fixtures/package-harness');
-const { TRUNK_DOC, contractDocPaths, checkContractDocsPackaged } = require('../scripts/registration-checks.js');
+const {
+  TRUNK_DOC,
+  contractDocPaths,
+  checkContractDocsPackaged,
+  checkInstructionPointersPackaged,
+} = require('../scripts/registration-checks.js');
+const { relocationRoot, contractRow } = require('./fixtures/contract-docs.js');
 
 after(cleanupPackage);
 
@@ -29,7 +35,7 @@ function walk(root, rel = '') {
 }
 
 // 运行时目录：随包发布的生产代码与文档面。测试/文档草稿不在其中。
-const RUNTIME_DIRS = ['agents', 'extensions', 'scripts', 'audit-report'];
+const RUNTIME_DIRS = ['agents', 'extensions', 'scripts', 'run', 'audit-report'];
 // 运行文档根文件来自承重契约登记表（scripts/registration-checks.js 的 CONTRACT_DOCUMENTS）：
 // 指令搬迁时改登记表，打包闭包与契约可达检查原样跟随，不在这里再列一遍路径。
 const RUNTIME_FILES = [...new Set([TRUNK_DOC, ...contractDocPaths()])];
@@ -65,6 +71,25 @@ test('breakage simulation: 契约文档搬到未打包目录即红（遗漏打�
   );
   // 对照：同一 checker 对真实登记表在真实 tarball 上全绿。
   assert.deepEqual(checkContractDocsPackaged(pkg.files), []);
+});
+
+test('tarball 指针闭包：主干/运行参考/agent 定义的 <this-package> 指针全部指向包内文件（ticket 36）', () => {
+  const pkg = loadPackage();
+  assert.deepEqual(checkInstructionPointersPackaged(pkg.files), []);
+});
+
+test('breakage simulation: 指令指针指向未打包文件即红（源码独有文件不等于安装后可达）', (t) => {
+  const root = relocationRoot(t, { 'run/x.md': 'Read <this-package>/docs/run/plan.md before acting.\n' });
+  const problems = checkInstructionPointersPackaged(['run/x.md'], {
+    registry: [contractRow('fix-loop', ['run/x.md'])],
+    root,
+  });
+  assert.ok(
+    problems.some((p) => p.includes('<this-package>/docs/run/plan.md') && p.includes('not in the tarball')),
+    `未打包指针必须红，实得: ${JSON.stringify(problems)}`
+  );
+  // 对照：同一 checker 对真实登记表在真实 tarball 上全绿。
+  assert.deepEqual(checkInstructionPointersPackaged(loadPackage().files), []);
 });
 
 test('tarball 清单：私有区与开发草稿不入包（.pi/.scratch/test/docs/CI 配置/归档/凭证）', () => {
