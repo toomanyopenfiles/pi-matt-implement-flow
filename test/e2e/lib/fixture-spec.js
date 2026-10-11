@@ -28,7 +28,7 @@ function fixtureFacts(def) {
     roleExercise: f.roleExercise || null,
     alreadyMerged: tickets.filter((t) => t.mergedInGit).map((t) => t.num),
     unrecordedMerge: f.unrecordedMerge || null,
-    openTickets: tickets.filter((t) => t.status !== 'done' && t.status !== 'resolved').map((t) => t.num),
+    openTickets: tickets.filter((t) => !['resolved', 'wontfix', 'done', 'closed', 'abandoned'].includes(String(t.status).toLowerCase())).map((t) => t.num),
     tickets,
     testCommand: 'npm test',
     branch: `feat/${f.id}`,

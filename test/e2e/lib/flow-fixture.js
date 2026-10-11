@@ -163,7 +163,7 @@ function requireLedger(projectDir, runtimeDir, args, env) {
 // 一张票的完整现场：dispatch → settled → verdict（可选 merge）。
 function seedReviewedTicket(ctx, ticket, { verdictValue = 'approved', round = 1, merge: doMerge = true } = {}) {
   const runId = `fixture-run-${ticket.num}`;
-  requireLedger(ctx.projectDir, ctx.runtimeDir, ['add', 'dispatch', '--ticket', ticket.num, '--key', `${ctx.def.fixture.roleKey || 'pi-matt-implement-flow.coder'}`, '--run-id', runId]);
+  requireLedger(ctx.projectDir, ctx.runtimeDir, ['add', 'dispatch', '--ticket', ticket.num, '--key', 'pi-matt-implement-flow.coder', '--run-id', runId]);
   const headSha = ctx.ticketHeads[ticket.num];
   requireLedger(ctx.projectDir, ctx.runtimeDir, ['add', 'settled', '--ticket', ticket.num, '--round', String(round), '--head-sha', headSha, '--gate', 'pass']);
   const findings = path.join(ctx.runtimeDir, 'findings', `${ticket.num}-r${round}.md`);
@@ -324,6 +324,13 @@ function buildFixture(def, { parentDir = os.tmpdir() } = {}) {
 }
 
 // 现场事实：判定器与结果文件用的轨迹上下文（tracker 桩的未完成票来自票副本状态）。
+// 生产里的票终态：任务票 resolved、研究票 resolved / wontfix（外加旧写法 done / closed）。
+const CLOSED_STATUSES = ['resolved', 'wontfix', 'done', 'closed', 'abandoned'];
+
+function isOpenTicket(status) {
+  return !CLOSED_STATUSES.includes(String(status || '').toLowerCase());
+}
+
 function trackerState(fx) {
   const issuesDir = path.join(fx.trackerDir, 'issues');
   const tickets = fs.existsSync(issuesDir)
@@ -333,7 +340,7 @@ function trackerState(fx) {
       return { file: name, status };
     })
     : [];
-  return { tickets, open: tickets.filter((t) => t.status !== 'done' && t.status !== 'closed').length };
+  return { tickets, open: tickets.filter((t) => isOpenTicket(t.status)).length };
 }
 
 function ledgerState(fx) {
@@ -351,6 +358,8 @@ function ledgerState(fx) {
 module.exports = {
   REPO_ROOT,
   LEDGER,
+  CLOSED_STATUSES,
+  isOpenTicket,
   COMMIT_DATE,
   STAGE_CANDIDATE_NOTE,
   FixtureError,

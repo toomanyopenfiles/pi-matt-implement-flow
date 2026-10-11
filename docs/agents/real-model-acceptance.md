@@ -110,6 +110,11 @@ Comparison is **behavioural**: scenario results, action-before-load facts, branc
 boundaries. It is not a comparison of wording, token counts, or identical tool sequences, and each
 candidate is approved as its own batch.
 
+One caveat the plan prints as an unfixed condition: this entry installs nothing. What the model
+actually loads is the copy of the package registered with your platform, so install the candidate you
+intend to test before you approve the batch; the named ref and the working copy are compared and
+recorded, the installed copy is not.
+
 ## Authorize
 
 Copy the approval hash from the plan and pass it back in:

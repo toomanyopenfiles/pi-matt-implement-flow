@@ -562,6 +562,12 @@ test('fixture 装置：独立临时项目、tracker 桩、固定初始状态，�
     assert.match(unrecordedCheck.stdout, /事件流无 merge 事件/, '差异内容就是未入账的那笔合并');
     assert.equal(unrecordedCheck.stdout.match(/\d+ 处账实差异/) ? Number(unrecordedCheck.stdout.match(/(\d+) 处账实差异/)[1]) : 0, 1, 'fixture 只留一处预期差异，不混入噪声');
     assert.equal(check(partial).status, 0, '阶段性交付现场账实一致（只差剩余票没做）');
+    // 生命周期事实：已交付的票是终态，只有剩余票算未完成——封账范围判定用的就是这个数。
+    assert.deepEqual(flowFixture.trackerState(partial).tickets.map((t) => `${t.file}:${t.status}`), [
+      '01-greet.md:resolved', '02-farewell.md:resolved', '03-polish.md:ready-for-agent',
+    ]);
+    assert.equal(flowFixture.trackerState(partial).open, 1, '未完成票只数剩余那张');
+    assert.equal(flowFixture.trackerState(unrecorded).open, 2, '未入账合并那张仍算未完成');
 
     // 固定初始状态：同一场景反复构建得到同一组 SHA。
     const again = flowFixture.buildFixture(defOf('flow-cold-resume-unrecorded-merge'), { parentDir: other });

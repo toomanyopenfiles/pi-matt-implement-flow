@@ -148,7 +148,11 @@ function main() {
       trace: { source: 'synthetic', events: (trace.events || []).length, uncertainty: trace.uncertainty || [] },
     });
     writeResult(doc);
-    process.stdout.write(`${JSON.stringify(doc, null, args.json || args.dump ? 2 : 0)}\n`);
+    if (args.json || args.dump) process.stdout.write(`${JSON.stringify(doc, null, 2)}\n`);
+    else {
+      process.stdout.write(`══ 场景 ${def.id}（${def.level}）：${judgement.status} [${judgement.kind}]（合成轨迹自检，零调用）══\n`);
+      process.stdout.write(`  ${judgement.kindNote}\n`);
+    }
     process.exit(EXIT_BY_STATUS[judgement.status] ?? 2);
   }
 

@@ -377,11 +377,7 @@ function applicableMutations(def) {
 function mutate(scenarioId, name, spec = {}) {
   const fn = MUTATIONS[name];
   if (!fn) throw new Error(`未知变异: ${name}`);
-  const def = spec.__def;
-  const clean = { ...spec };
-  delete clean.__def;
-  void def;
-  return fn(clone(referenceTrace(scenarioId)), clean);
+  return fn(clone(referenceTrace(scenarioId)), spec);
 }
 
 module.exports = {
