@@ -35,7 +35,7 @@ function walk(root, rel = '') {
 }
 
 // 运行时目录：随包发布的生产代码与文档面。测试/文档草稿不在其中。
-const RUNTIME_DIRS = ['agents', 'extensions', 'scripts', 'audit-report'];
+const RUNTIME_DIRS = ['agents', 'extensions', 'scripts', 'run', 'audit-report'];
 // 运行文档根文件来自承重契约登记表（scripts/registration-checks.js 的 CONTRACT_DOCUMENTS）：
 // 指令搬迁时改登记表，打包闭包与契约可达检查原样跟随，不在这里再列一遍路径。
 const RUNTIME_FILES = [...new Set([TRUNK_DOC, ...contractDocPaths()])];
