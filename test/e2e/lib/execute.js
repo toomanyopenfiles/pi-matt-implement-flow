@@ -85,9 +85,9 @@ function classifyAttempt({ parsed, exitCode, signal, timedOut, cancelled }) {
   return { status: doc.status, kind: doc.kind || 'none', reason: doc.notes || '' };
 }
 
-// 只有"无法判定"和基础设施失败才重试；明确的产品失败不重跑。
+// 只有"无法判定"的尝试才重试：status=fail 是明确判定，永不重跑（不得重试到绿）。
 function isRetryable(attempt) {
-  return attempt.status === 'inconclusive' || attempt.kind === 'infrastructure';
+  return attempt.status === 'inconclusive';
 }
 
 function isAlive(pid) {
@@ -121,13 +121,13 @@ function scanRelatedProcesses(needles) {
 
 // ---------------------------------------------------------------- 单次尝试
 
-async function runAttempt({ plan, scenario, attempt, artifactsDir, env, state, sanitize }) {
+async function runAttempt({ plan, scenario, run, attempt, artifactsDir, env, state, sanitize }) {
   const attemptsDir = path.join(artifactsDir, 'attempts');
   const logsDir = path.join(artifactsDir, 'logs');
   fs.mkdirSync(attemptsDir, { recursive: true });
   fs.mkdirSync(logsDir, { recursive: true });
-  const resultFile = path.join(attemptsDir, `${scenario.id}-attempt-${attempt}.result.json`);
-  const logFile = path.join(logsDir, `${scenario.id}-attempt-${attempt}.log`);
+  const resultFile = path.join(attemptsDir, `${scenario.id}-run-${run}-attempt-${attempt}.result.json`);
+  const logFile = path.join(logsDir, `${scenario.id}-run-${run}-attempt-${attempt}.log`);
 
   const argv = [
     planLib.resolveProbe({ probe: scenario.probe }),
@@ -146,6 +146,7 @@ async function runAttempt({ plan, scenario, attempt, artifactsDir, env, state, s
       ...env,
       PI_E2E_PI_BIN: plan.platform.binary,
       PI_E2E_RESULT_PATH: resultFile,
+      PI_E2E_RUN: String(run),
       PI_E2E_ATTEMPT: String(attempt),
       PI_E2E_SCENARIO: scenario.id,
     },
@@ -184,6 +185,7 @@ async function runAttempt({ plan, scenario, attempt, artifactsDir, env, state, s
   sanitizeFile(resultFile, sanitize);
 
   const record = {
+    run,
     attempt,
     status: verdict.status,
     kind: verdict.kind,
@@ -207,12 +209,14 @@ async function runAttempt({ plan, scenario, attempt, artifactsDir, env, state, s
 
 // ---------------------------------------------------------------- 批次执行
 
+// 场景聚合：明确失败永远赢（已经通过的重复不得掩盖它），其次是取消；
+// 只有批准范围内的每一次重复都通过才算通过，否则是未完成（不判通过）。
 function scenarioOutcome(record) {
   const attempts = record.attempts;
-  if (attempts.some((a) => a.status === 'pass')) return 'pass';
-  if (attempts.some((a) => a.status === 'cancelled')) return 'cancelled';
   if (attempts.some((a) => a.status === 'fail')) return 'fail';
+  if (attempts.some((a) => a.status === 'cancelled')) return 'cancelled';
   if (attempts.length === 0) return 'not-run';
+  if (record.runs.passed === record.runs.planned) return 'pass';
   return 'incomplete';
 }
 
@@ -239,7 +243,9 @@ async function executeBatch({ plan, approvalHash, artifactsDir, runId, env, sani
     for (const scenario of plan.scenarios) {
       const record = {
         id: scenario.id, title: scenario.title, level: scenario.level,
-        status: 'not-run', reason: null, classification: null, calls: 0, attempts: [],
+        status: 'not-run', reason: null, classification: null, calls: 0,
+        runs: { planned: scenario.runs, attempted: 0, passed: 0 },
+        attempts: [],
       };
       records.push(record);
       if (state.overrun) {
@@ -251,39 +257,57 @@ async function executeBatch({ plan, approvalHash, artifactsDir, runId, env, sani
         continue;
       }
 
-      for (let attempt = 1; attempt <= scenario.maxAttempts; attempt++) {
-        if (state.overrun) { record.reason = overrunReason(); break; }
-        if (state.cancelled) { record.reason = cancelReason(); break; }
-        if (budget.usedCalls + scenario.callsPerRun > budget.callCap) {
-          record.reason = `budget-exhausted: 已用 ${budget.usedCalls}/${budget.callCap}，本次尝试还需 ${scenario.callsPerRun}`;
-          break;
+      // 批准范围里的每一次重复都要执行（额度与取消除外）；重试额度只用于无法判定的尝试。
+      for (let run = 1; run <= scenario.runs; run++) {
+        let decided = null;
+        for (let attempt = 1; attempt <= scenario.attemptsPerRun; attempt++) {
+          if (state.overrun) { record.reason = overrunReason(); decided = 'stopped'; break; }
+          if (state.cancelled) { record.reason = cancelReason(); decided = 'stopped'; break; }
+          if (budget.usedCalls + scenario.callsPerRun > budget.callCap) {
+            record.reason = `budget-exhausted: 已用 ${budget.usedCalls}/${budget.callCap}，本次尝试还需 ${scenario.callsPerRun}`;
+            decided = 'stopped';
+            break;
+          }
+
+          budget.usedCalls += scenario.callsPerRun; // 先预留，事后按探针报告的实际调用数对账
+          if (attempt === 1) record.runs.attempted += 1; // 已开始的重复（重试不重复计数）
+          const attemptRecord = await runAttempt({ plan, scenario, run, attempt, artifactsDir, env, state, sanitize });
+          const charged = attemptRecord.callsReported == null ? scenario.callsPerRun : attemptRecord.callsReported;
+          budget.usedCalls = budget.usedCalls - scenario.callsPerRun + charged;
+          record.calls += charged;
+          record.attempts.push(attemptRecord);
+          children.push({
+            scenario: scenario.id,
+            run,
+            attempt,
+            pid: attemptRecord.pid,
+            endedBy: attemptRecord.endedBy,
+            exitCode: attemptRecord.exitCode,
+            signal: attemptRecord.signal,
+            aliveAfterClose: attemptRecord.aliveAfterClose,
+          });
+
+          if (budget.usedCalls > budget.callCap) state.overrun = true;
+          if (attemptRecord.status === 'pass') { decided = 'pass'; break; }
+          if (attemptRecord.status === 'cancelled') { decided = 'cancelled'; break; }
+          if (!isRetryable(attemptRecord)) {
+            attemptRecord.retryNote = 'definitive-failure: 明确失败不重试（重试不得掩盖失败）';
+            decided = 'fail';
+            break;
+          }
+          if (attempt >= scenario.attemptsPerRun) {
+            attemptRecord.retryNote = `retry-budget-exhausted: 本次重复已尝试 ${attempt}/${scenario.attemptsPerRun}，仍未判定`;
+          }
         }
 
-        budget.usedCalls += scenario.callsPerRun; // 先预留，事后按探针报告的实际调用数对账
-        const attemptRecord = await runAttempt({ plan, scenario, attempt, artifactsDir, env, state, sanitize });
-        const charged = attemptRecord.callsReported == null ? scenario.callsPerRun : attemptRecord.callsReported;
-        budget.usedCalls = budget.usedCalls - scenario.callsPerRun + charged;
-        record.calls += charged;
-        record.attempts.push(attemptRecord);
-        children.push({
-          scenario: scenario.id,
-          attempt,
-          pid: attemptRecord.pid,
-          endedBy: attemptRecord.endedBy,
-          exitCode: attemptRecord.exitCode,
-          signal: attemptRecord.signal,
-          aliveAfterClose: attemptRecord.aliveAfterClose,
-        });
-
-        if (budget.usedCalls > budget.callCap) state.overrun = true;
-        if (attemptRecord.status === 'pass' || attemptRecord.status === 'cancelled') break;
-        if (!isRetryable(attemptRecord)) {
-          attemptRecord.retryNote = 'definitive-failure: 明确失败不重试（重试不得掩盖失败）';
+        if (decided === 'pass') record.runs.passed += 1;
+        if (decided === 'fail') {
+          record.reason = run < scenario.runs
+            ? `definitive-failure: 明确失败，剩余 ${scenario.runs - run} 次重复未运行（不重跑掩盖失败）`
+            : 'definitive-failure: 明确失败（不重试、不判通过）';
           break;
         }
-        if (attempt >= scenario.maxAttempts) {
-          record.reason = `retry-budget-exhausted: 已尝试 ${attempt}/${scenario.maxAttempts}，仍未判定`;
-        }
+        if (decided === 'stopped' || decided === 'cancelled') break;
       }
 
       record.status = scenarioOutcome(record);
@@ -347,9 +371,9 @@ function renderResults(results) {
   lines.push(`模型       ${results.plan.platform.model}（thinking ${results.plan.platform.thinking}）；平台 ${results.plan.platform.binary} ${results.plan.platform.version}`);
   lines.push(`额度       用了 ${results.budget.usedCalls} / 上限 ${results.budget.callCap}（计划内 ${results.budget.plannedCalls}）`);
   for (const s of results.scenarios) {
-    lines.push(`  ${s.status === 'pass' ? '✔' : s.status === 'not-run' ? '□' : '✖'} ${s.id}  ${s.status}${s.classification ? ` [${s.classification}]` : ''} 调用 ${s.calls} 尝试 ${s.attempts.length}${s.reason ? ` —— ${s.reason}` : ''}`);
+    lines.push(`  ${s.status === 'pass' ? '✔' : s.status === 'not-run' ? '□' : '✖'} ${s.id}  ${s.status}${s.classification ? ` [${s.classification}]` : ''} 重复通过 ${s.runs.passed}/${s.runs.planned}（已尝试 ${s.runs.attempted}）调用 ${s.calls} 尝试 ${s.attempts.length}${s.reason ? ` —— ${s.reason}` : ''}`);
     for (const a of s.attempts) {
-      lines.push(`      尝试 ${a.attempt}: ${a.status}${a.kind ? ` [${a.kind}]` : ''} 调用 ${a.callsReported == null ? '?' : a.callsReported}，${a.endedBy}${a.reason ? ` —— ${a.reason}` : ''}`);
+      lines.push(`      重复 ${a.run} 尝试 ${a.attempt}: ${a.status}${a.kind ? ` [${a.kind}]` : ''} 调用 ${a.callsReported == null ? '?' : a.callsReported}，${a.endedBy}${a.reason ? ` —— ${a.reason}` : ''}${a.retryNote ? ` —— ${a.retryNote}` : ''}`);
     }
   }
   lines.push(`证据       ${results.artifactsDir}/results.json（全部尝试与失败分类保留）`);

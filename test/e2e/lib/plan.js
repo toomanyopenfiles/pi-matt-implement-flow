@@ -130,7 +130,7 @@ function buildPlan(opts) {
     plannedCalls: s.callsPerRun * runs,
     callsPerRun: s.callsPerRun,
     retries,
-    maxAttempts: runs + retries,
+    attemptsPerRun: 1 + retries,
     attemptTimeoutMs: s.timeoutMs,
     concurrency: 1,
     writes: s.writes,
@@ -155,14 +155,14 @@ function buildPlan(opts) {
       mode: baseline ? 'before-after' : 'none',
       baseline: baseline || null,
       note: baseline
-        ? `对照基线 ${baseline}：优化前后在可比条件下各自运行，结果分列`
-        : '本轮不做优化前后对照：只记录被测版本；需要对照时用 --baseline 指名基线',
+        ? `对照基线 ${baseline}：只记录该基线标识供报告绑定（本入口不执行对照运行）`
+        : '本轮无对照：只记录被测版本（本入口不做优化前后对照运行）',
     },
     scenarios: entries,
     counts: {
       scenarios: entries.length,
       plannedCalls,
-      plannedAttempts: entries.reduce((n, s) => n + s.maxAttempts, 0),
+      plannedAttempts: entries.reduce((n, s) => n + s.runs * s.attemptsPerRun, 0),
       callCap: cap,
       retryBudget: retries,
       concurrency: 1,
@@ -170,8 +170,11 @@ function buildPlan(opts) {
     feasibility: {
       partial,
       note: partial
-        ? `调用上限 ${cap} 低于计划内调用数 ${plannedCalls}：只执行装进额度的部分，其余场景记为未运行（不会超限调用）`
+        ? `调用上限 ${cap} 低于计划内调用数 ${plannedCalls}：只执行装进额度的部分，其余重复记为未运行（不会超限调用）`
         : '计划内调用数不超过批准额度',
+    },
+    policy: {
+      note: '顺序执行。每次重复最多 1+重试额度 次尝试，重试只用于无法判定的尝试；明确失败即停止该场景剩余重复；额度耗尽或取消立即停止新增调用，未运行的重复记为 not-run，整批不判通过。',
     },
     cost: { estimate: 'unknown', note: COST_NOTE },
     guardrail: { kind: 'mis-trigger-prevention', note: GUARDRAIL_NOTE },
@@ -201,14 +204,15 @@ function renderPlan({ plan, approvalHash, artifactsDir, invocation, state }) {
   lines.push(`平台       ${plan.platform.binary} ${plan.platform.version}；模型 ${plan.platform.model}；thinking ${plan.platform.thinking}`);
   lines.push(`场景（${plan.scenarios.length}）`);
   for (const s of plan.scenarios) {
-    lines.push(`  - ${s.id}  [${s.level}]  次数 ${s.runs}，调用 ${s.callsPerRun}/次，共 ${s.plannedCalls}，超时 ${Math.round(s.attemptTimeoutMs / 1000)}s，并发 ${s.concurrency}`);
+    lines.push(`  - ${s.id}  [${s.level}]  次数 ${s.runs}，每次最多 ${s.attemptsPerRun} 次尝试，调用 ${s.callsPerRun}/次，共 ${s.plannedCalls}，超时 ${Math.round(s.attemptTimeoutMs / 1000)}s，并发 ${s.concurrency}`);
     lines.push(`      ${s.title}`);
     lines.push(`      边界：${s.claim}`);
     lines.push(`      写入：文件 ${s.writes.files}；网络 ${s.writes.network}；远程 ${s.writes.remote}`);
   }
-  lines.push(`调用上限   ${plan.counts.callCap}（计划内 ${plan.counts.plannedCalls}；计划尝试 ${plan.counts.plannedAttempts} 次，并发 ${plan.counts.concurrency}）`);
+  lines.push(`调用上限   ${plan.counts.callCap}（计划内 ${plan.counts.plannedCalls}；计划尝试上限 ${plan.counts.plannedAttempts} 次，并发 ${plan.counts.concurrency}）`);
   if (plan.feasibility.partial) lines.push(`额度提示   ${plan.feasibility.note}`);
-  lines.push(`重试额度   ${plan.counts.retryBudget}（重试计入调用上限；明确的产品失败不重试）`);
+  lines.push(`重试额度   ${plan.counts.retryBudget} 次/重复（重试计入调用上限；只用于无法判定的尝试）`);
+  lines.push(`执行策略   ${plan.policy.note}`);
   lines.push(`费用       ${plan.cost.estimate} —— ${plan.cost.note}`);
   lines.push(`护栏       ${plan.guardrail.kind} —— ${plan.guardrail.note}`);
   lines.push(`写入范围   文件 ${plan.writeScope.files}`);

@@ -38,10 +38,17 @@ node test/e2e/accept.js --json   # same plan, machine-readable (includes approva
 
 The plan it prints is the thing you are being asked to approve, and it covers: the version under test
 (package version + git HEAD + whether the worktree is dirty), the scenarios and their declared
-boundary, the comparison scope (`--baseline` or none), model / provider / thinking, the platform
+boundary, the comparison scope it records (`--baseline <ref>` names a baseline for the report; this
+entry does **not** run comparison batches — before/after or candidate comparison facilities are
+separate work), model / provider / thinking, the platform
 binary and its version (a local `--version` probe, never a model call), run counts, the call cap,
 concurrency, per-attempt timeout, retry budget, a cost statement or an explicit "cannot be
 estimated" statement, and the file / network / remote-write scope of every scenario.
+
+Counts mean what they say: `--runs n` is the number of repetitions the batch will actually execute,
+`--retries r` allows up to `1 + r` attempts *per repetition*, and the plan's planned-call count is
+`callsPerRun × runs`. Retries are extra attempts for a repetition that could not be judged; they are
+never used to re-run a decided failure.
 
 Everything inside the plan is hashed into the **approval hash** shown at the bottom. The hash is the
 authorization unit: any change to the scenario set, run counts, retries, call cap, model, thinking,
@@ -72,8 +79,12 @@ Rules the entry enforces:
 - **A different batch's hash is refused.** Change the scope and you must approve again: new scenarios,
   more runs or retries, a different model / provider / thinking, a higher call cap, or a new
   real-remote-write requirement.
-- **Retries consume the approved budget** and are only used for attempts that could not be judged
-  (undetermined / infrastructure). A definitive product failure is never retried into a green run.
+- **Retries consume the approved budget**, are per repetition, and are only used for attempts that
+  could not be judged (undetermined / infrastructure / harness). A definitive failure is never
+  retried, and a repetition that already passed never masks a later definitive failure.
+- **Every approved repetition runs** (unless the cap or a cancellation stops the batch). A definitive
+  failure stops that scenario's remaining repetitions; they are recorded as not run with the reason,
+  and the batch is not accepted.
 - **The call cap is enforced across the whole batch**, including retries. If a probe reports more
   calls than the plan declared, the batch stops and is recorded as not accepted; raising the cap
   means re-approving.
@@ -114,9 +125,10 @@ Every run writes into the evidence directory (`--out <dir>`, default
 
 - `results.json` — batch status, the approved plan, budget accounting (`usedCalls` vs `callCap`),
   the direct-child process record plus a best-effort scan for processes still matching the known
-  probe/platform paths, and one entry per scenario with **every** attempt: status, failure
-  kind (`product-regression` / `infrastructure` / `harness` / `undetermined`), reported call count,
-  exit code, end method, duration, and the log paths.
+  probe/platform paths, and one entry per scenario with its repetition accounting
+  (`runs: { planned, attempted, passed }`) and **every** attempt: repetition and attempt index, status,
+  failure kind (`product-regression` / `infrastructure` / `harness` / `undetermined`), reported call
+  count, exit code, end method, duration, and the log paths.
 - `logs/<scenario>-attempt-N.log` — sanitized stdout/stderr of that attempt.
 - `attempts/<scenario>-attempt-N.result.json` — the probe's raw result for that attempt.
 - `refusal.json` — present instead when an execution request was refused.
@@ -143,8 +155,12 @@ statement about model reliability in general, and undetermined scenarios stay un
   means the platform or provider failed, timed out, or the process died; `harness` means this
   repository's own test gear failed (missing result file, contradictory exit code). Only
   `product-regression` on a definitive `fail` says the code under test is wrong.
-- **`budget-exhausted` / `not-run`** — the approved cap was reached, so the remaining scenarios never
-  ran. This is not a pass. Approve a larger cap (a new hash) if you want them executed.
+- **`budget-exhausted` / `not-run`** — the approved cap was reached, so the remaining repetitions or
+  scenarios never ran. This is not a pass. Approve a larger cap (a new hash) if you want them
+  executed.
+- **A repetition stopped early after a definitive failure** — `runs.attempted < runs.planned` with a
+  `definitive-failure` reason. The scenario stays `fail`: already-passed repetitions do not mask it,
+  and the remaining repetitions were not re-run to look for a green one.
 - **`budget-overrun`** — a probe reported more calls than the plan declared. Nothing further ran;
   re-plan with honest call counts before approving again.
 - **The run was cancelled** — check the platform session state for the probe's sub-sessions, keep the

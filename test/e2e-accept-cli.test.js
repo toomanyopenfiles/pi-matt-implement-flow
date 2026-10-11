@@ -622,3 +622,107 @@ test('无悬空指针：旧探针路径与旧别名说明不再出现在文档�
   scan(REPO_ROOT);
   assert.deepEqual(offenders, [], '旧探针路径的引用已随搬迁更新');
 });
+
+// ====================================================================
+// 重复次数（--runs）与聚合：批准范围内的每一次重复都要真的执行
+// ====================================================================
+
+test('重复次数按批准范围执行：--runs N 真跑 N 次，全部重复通过才判通过', () => {
+  const h = harness({ scenarios: [{ id: 'stub-runs', mode: 'pass' }] });
+  const args = ['--runs', '3', '--out', h.out];
+  const { doc } = planJson(h, args);
+  assert.equal(doc.plan.scenarios[0].runs, 3, '次数进计划');
+  assert.equal(doc.plan.scenarios[0].attemptsPerRun, 1);
+  assert.equal(doc.plan.counts.plannedCalls, 3);
+  assert.equal(doc.plan.counts.plannedAttempts, 3);
+
+  const r = runEntry(h, [...args, '--approve', doc.approvalHash, '--json']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(h.probeCalls().map((c) => [c.run, c.attempt]), [[1, 1], [2, 1], [3, 1]], '批准的 3 次重复都真的执行了');
+
+  const s = readResults(h).scenarios[0];
+  assert.equal(s.status, 'pass');
+  assert.deepEqual(s.runs, { planned: 3, attempted: 3, passed: 3 });
+  assert.equal(s.calls, 3);
+  assert.deepEqual(s.attempts.map((a) => [a.run, a.attempt, a.status]), [[1, 1, 'pass'], [2, 1, 'pass'], [3, 1, 'pass']]);
+  assert.equal(readResults(h).budget.usedCalls, 3);
+});
+
+test('每次重复独立重试：重试计入额度，重复与尝试逐条保留', () => {
+  const h = harness({ scenarios: [{ id: 'stub-flaky', mode: 'flaky' }] });
+  const args = ['--runs', '2', '--retries', '1', '--call-cap', '6', '--out', h.out];
+  const { doc } = planJson(h, args);
+  assert.equal(doc.plan.scenarios[0].attemptsPerRun, 2, '每次重复最多 1+retry 次尝试');
+  assert.equal(doc.plan.counts.plannedAttempts, 4);
+  assert.equal(doc.plan.counts.retryBudget, 1);
+
+  const r = runEntry(h, [...args, '--approve', doc.approvalHash, '--json']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(h.probeCalls().map((c) => [c.run, c.attempt]), [[1, 1], [1, 2], [2, 1], [2, 2]], '两次重复各自重试一次');
+
+  const s = readResults(h).scenarios[0];
+  assert.equal(s.status, 'pass');
+  assert.deepEqual(s.runs, { planned: 2, attempted: 2, passed: 2 });
+  assert.deepEqual(s.attempts.map((a) => [a.run, a.attempt, a.status]), [
+    [1, 1, 'inconclusive'], [1, 2, 'pass'], [2, 1, 'inconclusive'], [2, 2, 'pass'],
+  ], '失败/未判定的尝试不因为后来成功而消失');
+  assert.equal(readResults(h).budget.usedCalls, 4);
+});
+
+test('明确失败不被后续通过掩盖也不重试：剩余重复如实记为未运行，整批不判通过', () => {
+  const h = harness({ scenarios: [{ id: 'stub-pass-then-fail', mode: 'pass-then-fail' }] });
+  const args = ['--runs', '3', '--retries', '2', '--call-cap', '9', '--out', h.out];
+  const { doc } = planJson(h, args);
+  const r = runEntry(h, [...args, '--approve', doc.approvalHash, '--json']);
+
+  assert.equal(r.status, 3, `明确失败不得判通过：${r.stdout}${r.stderr}`);
+  assert.deepEqual(h.probeCalls().map((c) => [c.run, c.attempt]), [[1, 1], [2, 1]], '明确失败后不重试，也不跑剩余重复');
+
+  const results = readResults(h);
+  assert.equal(results.status, 'not-accepted');
+  const s = results.scenarios[0];
+  assert.equal(s.status, 'fail', '已经通过的重复不得掩盖后面的明确失败');
+  assert.equal(s.classification, 'product-regression');
+  assert.deepEqual(s.runs, { planned: 3, attempted: 2, passed: 1 });
+  assert.deepEqual(s.attempts.map((a) => [a.run, a.status]), [[1, 'pass'], [2, 'fail']], '全部尝试保留');
+  assert.match(s.reason, /明确失败/);
+  assert.match(s.reason, /剩余/);
+  assert.match(s.attempts[1].retryNote, /不重试/);
+});
+
+test('部分完成不判通过：额度只够部分重复时，未运行的重复如实记录', () => {
+  const h = harness({ scenarios: [{ id: 'stub-runs', mode: 'pass' }] });
+  const args = ['--runs', '3', '--call-cap', '2', '--out', h.out];
+  const { doc } = planJson(h, args);
+  assert.equal(doc.plan.feasibility.partial, true, '计划如实说明额度装不下全部重复');
+
+  const r = runEntry(h, [...args, '--approve', doc.approvalHash, '--json']);
+  assert.equal(r.status, 3, r.stdout + r.stderr);
+  assert.deepEqual(h.probeCalls().map((c) => c.run), [1, 2], '额度用尽后不再启动新的重复');
+
+  const results = readResults(h);
+  const s = results.scenarios[0];
+  assert.equal(s.status, 'incomplete');
+  assert.deepEqual(s.runs, { planned: 3, attempted: 2, passed: 2 });
+  assert.match(s.reason, /budget|额度/);
+  assert.equal(results.budget.usedCalls, 2);
+  assert.notEqual(results.status, 'passed');
+});
+
+test('取消发生在重复中间：停止新增调用，保留已完成的重复与全部尝试', () => {
+  const h = harness({ scenarios: [{ id: 'stub-cancel-late', mode: 'cancel', cancelAtRun: 2 }] });
+  const args = ['--runs', '3', '--out', h.out];
+  const { doc } = planJson(h, args);
+  const r = runEntry(h, [...args, '--approve', doc.approvalHash, '--json'], { timeout: 60000 });
+
+  assert.equal(r.status, 4, `取消退出码应为 4：${r.stdout}${r.stderr}`);
+  assert.deepEqual(h.probeCalls().map((c) => [c.run, c.attempt]), [[1, 1], [2, 1]], '取消后不再启动新的重复');
+
+  const results = readResults(h);
+  assert.equal(results.status, 'cancelled');
+  const s = results.scenarios[0];
+  assert.equal(s.status, 'cancelled');
+  assert.deepEqual(s.runs, { planned: 3, attempted: 2, passed: 1 });
+  assert.deepEqual(s.attempts.map((a) => [a.run, a.status]), [[1, 'pass'], [2, 'cancelled']]);
+  assert.equal(results.budget.usedCalls, 2);
+});

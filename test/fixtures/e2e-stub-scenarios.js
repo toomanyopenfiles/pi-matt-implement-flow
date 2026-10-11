@@ -14,7 +14,11 @@ module.exports = {
     id: s.id,
     title: s.title || `桩场景 ${s.id}`,
     probe: path.join(__dirname, 'e2e-stub-probe.js'),
-    args: ['--stub-mode', s.mode || 'pass', '--stub-calls', String(s.reportCalls == null ? (s.calls || 1) : s.reportCalls)],
+    args: [
+      '--stub-mode', s.mode || 'pass',
+      '--stub-calls', String(s.reportCalls == null ? (s.calls || 1) : s.reportCalls),
+      ...(s.cancelAtRun ? ['--stub-cancel-at-run', String(s.cancelAtRun)] : []),
+    ],
     callsPerRun: s.calls || 1,
     timeoutMs: s.timeoutMs || 30000,
     level: s.level || 'platform-contract-probe',

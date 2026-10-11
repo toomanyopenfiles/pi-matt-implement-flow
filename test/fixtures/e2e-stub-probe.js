@@ -21,11 +21,13 @@ const argOf = (name) => {
 const mode = argOf('--stub-mode') || 'pass';
 const scenario = process.env.PI_E2E_SCENARIO || 'unknown';
 const attempt = Number(process.env.PI_E2E_ATTEMPT || 1);
+const run = Number(process.env.PI_E2E_RUN || 1);
+const cancelAtRun = Number(argOf('--stub-cancel-at-run') || 1);
 
 if (process.env.STUB_LOG) {
   fs.appendFileSync(
     process.env.STUB_LOG,
-    `${JSON.stringify({ scenario, attempt, mode, pid: process.pid })}\n`,
+    `${JSON.stringify({ scenario, run, attempt, mode, pid: process.pid })}\n`,
   );
 }
 
@@ -62,10 +64,19 @@ switch (mode) {
     process.exit(2);
     break;
   case 'flaky':
-    // 第一次无法判定，第二次通过：重试计入额度的验证路径。
+    // 本次重复的第一次尝试无法判定，重试后通过：重试计入额度的验证路径。
     if (attempt <= 1) {
       writeResult('inconclusive', 'infrastructure', reportedCalls);
       process.exit(2);
+    }
+    writeResult('pass', 'none', reportedCalls);
+    process.exit(0);
+    break;
+  case 'pass-then-fail':
+    // 前面的重复通过、后面的重复明确失败：验证聚合不得让通过掩盖失败。
+    if (run >= 2) {
+      writeResult('fail', 'product-regression', reportedCalls);
+      process.exit(1);
     }
     writeResult('pass', 'none', reportedCalls);
     process.exit(0);
@@ -88,10 +99,13 @@ switch (mode) {
     process.exit(0);
     break;
   case 'cancel':
-    // 请求入口取消：向父进程发 SIGINT，然后保持存活，等待入口终止本进程。
+    // 请求入口取消：到第 cancelAtRun 次重复时向父进程发 SIGINT，然后保持存活等待被终止；
+    // 更早的重复正常通过（取消发生在重复中间的证据路径）。
     writeResult('pass', 'none', reportedCalls);
-    process.kill(process.ppid, 'SIGINT');
-    setTimeout(() => {}, 30000);
+    if (run >= cancelAtRun) {
+      process.kill(process.ppid, 'SIGINT');
+      setTimeout(() => {}, 30000);
+    }
     break;
   case 'secret-leak': {
     const secret = process.env.STUB_SECRET || '';
