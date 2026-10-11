@@ -12,6 +12,20 @@ implementation history live in [`docs/adr/`](./docs/adr/).
 
 ### Changed
 
+- The real-model acceptance entry (`npm run repro`) can now run the flow scenarios the spec asks for,
+  not just the two local probes: a normal new run, per-ticket review turned off, a repair after
+  `changes_requested`, a cold continuation with an unrecorded merge, a continuation after a partial
+  delivery, and an explicit abandonment — plus both reviewer roles and a navigation-only scenario
+  (does the model find the stage instructions on its own and load them before acting?). Batches can
+  name the stage under test (`--candidate <ref>`, baseline / verbatim-migration / final candidate): the
+  plan records the commit, whether it matches your working copy, and a content fingerprint for the
+  instruction documents, and tells you plainly when a result may not be attributed to that candidate.
+  Each scenario states which tier of evidence it produces, so a local probe can never be read as a full
+  run, and the flow scenarios judge the boundary cases the spec calls out: a merge recorded twice, an
+  abandoned run sealed as completed, unfinished tickets closed at abandonment, and final sync /
+  readiness / cleanup happening before the remaining scope was delivered. `npm test` still makes no
+  model calls. (#35)
+
 - Running the real-model acceptance probe (`npm run repro`) no longer starts model calls on its own.
   It first prints the batch plan (scenarios, model, call budget, timeouts, write scope) and runs only
   that exact plan after you approve its hash; it stops at the approved call budget, keeps every

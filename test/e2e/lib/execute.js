@@ -17,11 +17,10 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
 const planLib = require('./plan');
+const { STATUSES, KINDS } = require('./result');
 
 const RESULTS_SCHEMA = 'e2e-results-1';
 const SCENARIO_RESULT_SCHEMA = 'e2e-scenario-result-1';
-const STATUSES = ['pass', 'fail', 'inconclusive'];
-const KINDS = ['none', 'product-regression', 'infrastructure', 'harness', 'undetermined'];
 // 探针退出码约定：0 通过、1 明确失败、2 无法判定。结果文件与退出码不一致时不信任报告。
 const EXIT_BY_STATUS = { pass: 0, fail: 1, inconclusive: 2 };
 
@@ -149,6 +148,13 @@ async function runAttempt({ plan, scenario, run, attempt, artifactsDir, env, sta
       PI_E2E_RUN: String(run),
       PI_E2E_ATTEMPT: String(attempt),
       PI_E2E_SCENARIO: scenario.id,
+      // 阶段候选（基线 / 原样搬迁 / 最终候选）随批次传下去：探针把它写进证据，
+      // 判定器据此区分「基线既有缺陷」与「候选回归」。候选范围进授权哈希。
+      PI_E2E_CANDIDATE: plan.candidate ? plan.candidate.ref : '',
+      PI_E2E_CANDIDATE_SHA: plan.candidate ? plan.candidate.sha : '',
+      PI_E2E_STAGE: plan.candidate ? plan.candidate.stage : 'unlabeled',
+      PI_E2E_SCENARIO_LEVEL: scenario.level,
+      PI_E2E_SCENARIO_FIXTURE: scenario.fixture ? scenario.fixture.id : '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -385,6 +391,8 @@ function renderResults(results) {
 module.exports = {
   RESULTS_SCHEMA,
   SCENARIO_RESULT_SCHEMA,
+  STATUSES,
+  KINDS,
   PROCESS_NOTE,
   SCAN_NOTE,
   createSanitizer,

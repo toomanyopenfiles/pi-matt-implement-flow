@@ -18,11 +18,17 @@ const path = require('node:path');
 
 const { spawnSync } = require('node:child_process');
 
+const candidateLib = require('./candidate');
+
 const PLAN_SCHEMA = 'e2e-plan-1';
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const DEFAULT_SCENARIOS_FILE = path.join(REPO_ROOT, 'test', 'e2e', 'scenarios.js');
 const DEFAULT_MODEL = 'opencode-go/muse-spark-1.3-contributor';
 const DEFAULT_THINKING = 'high';
+
+// 调用额度的单位：探针按模型调用计；流程场景按平台会话计（会话内的子派发不逐个计入
+// 护栏额度，费用以 provider 账单为准）。单位进计划、进授权哈希。
+const CALLS_UNIT_NOTE = '调用上限单位按场景声明：model-call = 每次真实模型调用；session = 平台会话（一次会话内部的子派发不逐个计入护栏额度，费用以 provider 账单为准）。两种单位都不宣称为精确金额上限。';
 
 // 费用与护栏的负空间裁定：这些是误触发护栏，不是权限隔离，也不是金额上限。
 const COST_NOTE = '无法估算：本入口不建模 provider 价格、不读取账单；调用数、超时与重试额度是误触发护栏，不是精确金额上限。';
@@ -108,8 +114,15 @@ function resolveProbe(scenario) {
 function buildPlan(opts) {
   const {
     scenarios, selection, model, thinking, runs, retries, callCap, baseline,
-    platform, target, scenariosFile,
+    platform, target, scenariosFile, candidateRef,
   } = opts;
+
+  let candidate = null;
+  if (candidateRef) {
+    const resolved = candidateLib.resolveCandidate({ ref: candidateRef });
+    const stage = require('../flow-scenarios').stageOf(resolved.ref, resolved.sha);
+    candidate = { ...resolved, stage: stage.stage, stageNote: stage.note };
+  }
 
   const chosen = selection == null || selection.length === 0
     ? scenarios
@@ -129,11 +142,16 @@ function buildPlan(opts) {
     runs,
     plannedCalls: s.callsPerRun * runs,
     callsPerRun: s.callsPerRun,
+    callsUnit: s.callsUnit || 'model-call',
     retries,
     attemptsPerRun: 1 + retries,
     attemptTimeoutMs: s.timeoutMs,
     concurrency: 1,
     writes: s.writes,
+    // 场景装置与被判对象：都进授权哈希（范围变了就得重新授权）。
+    fixture: s.fixture || null,
+    brief: s.brief || null,
+    judgement: s.judgement || null,
   }));
 
   const plannedCalls = entries.reduce((n, s) => n + s.plannedCalls, 0);
@@ -150,13 +168,24 @@ function buildPlan(opts) {
   const plan = {
     schema: PLAN_SCHEMA,
     target,
+    candidate: candidate
+      ? {
+        ref: candidate.ref,
+        sha: candidate.sha,
+        stage: candidate.stage,
+        match: candidate.match,
+        contentId: candidate.contentId,
+        refContentId: candidate.refContentId,
+        mismatched: candidate.mismatched,
+        note: `${candidate.note} ${candidate.stageNote}`,
+      }
+      : null,
     platform: { binary: platform.binary, version: platform.version, model, thinking },
     comparison: {
-      mode: baseline ? 'before-after' : 'none',
+      mode: baseline || candidate ? 'before-after' : 'none',
       baseline: baseline || null,
-      note: baseline
-        ? `对照基线 ${baseline}：只记录该基线标识供报告绑定（本入口不执行对照运行）`
-        : '本轮无对照：只记录被测版本（本入口不做优化前后对照运行）',
+      candidate: candidate ? candidate.ref : null,
+      note: candidateLib.comparisonNote({ baseline, candidate: candidate ? candidate.ref : null }),
     },
     scenarios: entries,
     counts: {
@@ -166,6 +195,7 @@ function buildPlan(opts) {
       callCap: cap,
       retryBudget: retries,
       concurrency: 1,
+      callsUnitNote: CALLS_UNIT_NOTE,
     },
     feasibility: {
       partial,
@@ -185,6 +215,31 @@ function buildPlan(opts) {
       artifacts: '证据目录 + 每次尝试的日志（仓库内被 git 忽略的运行目录，或 --out 指定目录）；不进源码提交面、不进 npm 包',
     },
     harness: { scenariosFile: displayPath(scenariosFile), node: process.version },
+    // 对照条件：记录并尽量固定模型、thinking、平台、任务书、fixture、权限与环境；
+    // 固定不了的（provider 侧实际模型版本、平台子会话与网络出口）如实列出。
+    pinned: {
+      model,
+      thinking,
+      platformBinary: platform.binary,
+      platformVersion: platform.version,
+      scenariosFile: displayPath(scenariosFile),
+      node: process.version,
+      os: `${process.platform}-${process.arch}`,
+      taskBrief: entries.every((s) => s.brief)
+        ? '每场景任务书内容固定并哈希进计划（不指路）'
+        : '场景自带探针输入（无导航任务书）',
+      fixture: entries.some((s) => s.fixture)
+        ? '每场景独立临时项目，fixed 初始状态与清单哈希进计划'
+        : '无场景装置',
+      permissions: 'fixture 在临时目录，PATH 上的 gh / glab 是记录桩；不授予额外权限，会话按其自身权限运行',
+      environment: '调用方环境随批次传递；候选、fixture 与任务书标识进授权哈希',
+      notFrozen: [
+        'provider 侧模型的实际版本与路由（入口只能按标识记录）',
+        '平台已安装的包来源：本入口不安装任何候选，被测候选需由调用方按受支持方式安装',
+        '平台子会话的内部形态与网络出口',
+        '宿主时钟与并发调度（影响耗时，不影响判定口径）',
+      ],
+    },
   };
 
   return { plan, approvalHash: approvalHashOf(plan) };
@@ -200,7 +255,13 @@ function renderPlan({ plan, approvalHash, artifactsDir, invocation, state }) {
   lines.push('');
   lines.push(`执行状态   ${state || '预检：未执行任何场景，未产生任何模型调用'}`);
   lines.push(`被测版本   ${plan.target.name} ${plan.target.version} @ ${plan.target.headSha}${plan.target.dirty ? '（工作区有未提交改动）' : ''}`);
-  lines.push(`对照范围   ${plan.comparison.mode === 'none' ? '无' : plan.comparison.baseline} —— ${plan.comparison.note}`);
+  if (plan.candidate) {
+    lines.push(`阶段候选   ${plan.candidate.ref} @ ${plan.candidate.sha.slice(0, 12)}（stage ${plan.candidate.stage}，内容标识 ${plan.candidate.contentId.slice(0, 12)}${plan.candidate.match ? '' : '，与工作区不一致'}）`);
+    lines.push(`           ${plan.candidate.note}`);
+  } else {
+    lines.push('阶段候选   未命名（结果只绑定工作区 HEAD，不声称检验了任何已登记阶段）');
+  }
+  lines.push(`对照范围   ${plan.comparison.mode === 'none' ? '无' : (plan.comparison.candidate || '') + (plan.comparison.baseline ? `（基线 ${plan.comparison.baseline}）` : '')} —— ${plan.comparison.note}`);
   lines.push(`平台       ${plan.platform.binary} ${plan.platform.version}；模型 ${plan.platform.model}；thinking ${plan.platform.thinking}`);
   lines.push(`场景（${plan.scenarios.length}）`);
   for (const s of plan.scenarios) {
@@ -208,8 +269,20 @@ function renderPlan({ plan, approvalHash, artifactsDir, invocation, state }) {
     lines.push(`      ${s.title}`);
     lines.push(`      边界：${s.claim}`);
     lines.push(`      写入：文件 ${s.writes.files}；网络 ${s.writes.network}；远程 ${s.writes.remote}`);
+    if (s.fixture) lines.push(`      fixture：${s.fixture.id}（tracker 桩 ${s.fixture.trackerStub}，测试命令 ${s.fixture.testCommand}，哈希 ${s.fixture.sha256.slice(0, 12)}）`);
+    if (s.brief) lines.push(`      任务书：${s.brief.id}（哈希 ${s.brief.sha256.slice(0, 12)}；不指路：任务书不出现指令文档路径）`);
+    if (s.judgement) {
+      lines.push(`      判定：动作前读取 ${s.judgement.requiredReadsBefore.length} 项；安全边界 ${s.judgement.safety.join('、') || '无'}；角色职责 ${s.judgement.roleDuties.join('、') || '无'}${s.judgement.readOnly ? '；只读推演' : ''}`);
+    }
   }
   lines.push(`调用上限   ${plan.counts.callCap}（计划内 ${plan.counts.plannedCalls}；计划尝试上限 ${plan.counts.plannedAttempts} 次，并发 ${plan.counts.concurrency}）`);
+  lines.push(`计费单位   ${plan.counts.callsUnitNote}`);
+  if (plan.pinned) {
+    lines.push(`对照条件   模型 ${plan.pinned.model}（thinking ${plan.pinned.thinking}）；平台 ${plan.pinned.platformBinary} ${plan.pinned.platformVersion}；Node ${plan.pinned.node}；平台面 ${plan.pinned.os}`);
+    lines.push(`           ${plan.pinned.taskBrief}；${plan.pinned.fixture}`);
+    lines.push(`           权限与环境 ${plan.pinned.permissions}；${plan.pinned.environment}`);
+    lines.push(`           未固定：${plan.pinned.notFrozen.join('；')}`);
+  }
   if (plan.feasibility.partial) lines.push(`额度提示   ${plan.feasibility.note}`);
   lines.push(`重试额度   ${plan.counts.retryBudget} 次/重复（重试计入调用上限；只用于无法判定的尝试）`);
   lines.push(`执行策略   ${plan.policy.note}`);
@@ -231,6 +304,7 @@ function renderPlan({ plan, approvalHash, artifactsDir, invocation, state }) {
 
 module.exports = {
   PLAN_SCHEMA,
+  CALLS_UNIT_NOTE,
   REPO_ROOT,
   DEFAULT_SCENARIOS_FILE,
   DEFAULT_MODEL,

@@ -12,10 +12,28 @@
 //   导航验收（模型能否从主干自行找到披露文档）与完整流程场景属于后续批次。
 // ============================================================================
 
+const flowScenarios = require('./flow-scenarios');
+const { fixtureFacts, fixtureManifest, judgementSummary } = require('./lib/fixture-spec');
+const { buildBrief } = require('./lib/navigation-brief');
+
 const AXES_PROBE = 'test/e2e/probes/repro-reviewer-axes.js';
 
-module.exports = {
-  scenarios: [
+// 流程 / 导航 / 角色场景：把场景定义翻成入口场景条目，并把 fixture 标识、任务书标识与
+// 判定契约摘要一并钉进计划（都不含副作用：只做纯计算，计划阶段不建目录、不跑模型）。
+function flowEntry(def) {
+  const entry = flowScenarios.scenarioEntry(def);
+  const facts = fixtureFacts(def);
+  const brief = buildBrief(def);
+  return {
+    ...entry,
+    fixtureFacts: facts,
+    fixture: fixtureManifest(def, facts),
+    brief: { id: brief.id, version: brief.version, sha256: brief.sha256, inputs: brief.inputs },
+    judgement: judgementSummary(def.expectations),
+  };
+}
+
+const SCENARIOS = [
     {
       id: 'axes-keyless',
       title: '双轴派发契约：runs.all 条目缺 key 被平台拒绝（#6 缺陷 2 的契约事实）',
@@ -49,5 +67,7 @@ module.exports = {
       claim: '局部平台契约探针：从一个真实派发提取轴契约并在真实平台实例化。不是完整 final-reviewer 验收，也不是流程 E2E。',
       writes: { files: '临时会话目录（探针证据，/tmp 下）', network: '模型 provider API（探针会话）', remote: '无' },
     },
-  ],
-};
+    ...flowScenarios.ENTRIES.map(flowEntry),
+];
+
+module.exports = { scenarios: SCENARIOS };

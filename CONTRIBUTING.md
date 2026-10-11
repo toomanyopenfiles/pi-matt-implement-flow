@@ -27,7 +27,11 @@ implementation stage of [Matt Pocock's engineering flow](https://github.com/matt
   for a CLI black-box suite. Real-model acceptance lives in its own area, `test/e2e/`, behind a single
   authorized entry (`node test/e2e/accept.js`; the legacy `npm run repro` alias runs the same entry):
   it makes no model call until you approve the exact batch plan, and it is never part of `npm test`
-  or CI. See [`docs/agents/real-model-acceptance.md`](./docs/agents/real-model-acceptance.md).
+  or CI — including its six flow scenarios, both reviewer-role scenarios and the navigation
+  acceptance (tiers, fixtures, candidate selection and the trace rules are in
+  [`docs/agents/real-model-acceptance.md`](./docs/agents/real-model-acceptance.md)). The scenario
+  harness itself is covered by `test/e2e-flow-scenarios.test.js`, which runs inside `npm test` with
+  zero model calls: real scratch projects, synthetic traces and call-boundary stubs.
   None of `test/` ships in the npm package.
 - Orientation for agents and humans alike: [`AGENTS.md`](./AGENTS.md) points at the issue-tracker
   setup, the triage label vocabulary, and the domain docs; [`CONTEXT.md`](./CONTEXT.md) holds the
