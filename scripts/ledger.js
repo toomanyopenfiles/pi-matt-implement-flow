@@ -13,7 +13,7 @@
 //
 // 事件流（events.jsonl）与台账（ledger.md）同置 --runtime-dir（被 gitignore 的编排运行时状态目录）。
 // 台账写入一律临时文件 + 原子替换——中断不留撕裂文件。无任何绕过校验的旗标；
-// 与校验器分歧时的唯一逃生通道：add anomaly --note "..." 并停下上报。
+// 对账差异保留非零报告；核实后可直接恢复，不绕过校验（ADR-0009）。
 
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -104,9 +104,9 @@ init（run 初始化，票 04——契约驱动）:
               # 重跑安全（幂等规划只补未完成的动作）。同步成功后输出清理指引。
               # run 已封账或 PR 已标 ready 时拒绝执行（同步须在两时点之前）。
 
-占坑 (claim，run 的第一个 tracker 写动作，先于快照拉取——ADR-0003 锁实时):
+占坑 (claim，run 的第一个 tracker 写动作，先于快照拉取——ADR-0003 占坑实时):
   claim --spec <契约声明的 spec 引用形态>
-              # 把 spec 母票认领到 @me（契约 claim 模板执行；tracker 侧的 feature 级并发锁）。
+              # 把 spec 母票认领到 @me（契约 claim 模板执行；tracker 侧的 feature 级协作式认领，advisory 非互斥）。
               # 先读状态再写入：他人已在位 → 拒绝并点名在位者（不猜测覆盖他人占坑；
               # 同一占坑者续跑该步幂等可跳过）。进度与合并同步归 sync；封账/放弃时释放。
               # local 契约无 tracker 写面——占坑不存在（票文件即真相层）。
@@ -123,7 +123,7 @@ init（run 初始化，票 04——契约驱动）:
            成功后打印清理指引（快照与 review bundle 清理、findings 与账本三件套留存）
   claim    占坑：spec 母票认领到 @me（契约 claim 模板；先读状态再写入，冲突拒绝）
   时间不由 LLM 提供；自由文本统一 --note；校验拒绝时给出原因，修正后重试；
-  与校验器分歧 → add anomaly --note "..." 并停下上报（无任何绕过旗标）。
+  与校验器分歧 → add anomaly --note "..." 记录，核实后按证据恢复（无任何绕过旗标）。
 `;
 
 // --- 输出与退出码 ---
@@ -543,7 +543,7 @@ function recordEvent({ runtimeDir, type, payload }) {
     out(
       `✗ 拒绝（未入账）：`,
       ...gate.reasons.map((r) => `  - ${r}`),
-      `  校验器与你的分歧没有旗标可绕——确有依据时：add anomaly --note "..." 并停下上报`
+      `  校验器与你的分歧没有旗标可绕——确有依据时：add anomaly --note "..." 记录分歧，核实后按证据恢复`
     );
     return 1;
   }
@@ -903,7 +903,7 @@ function executeSyncAction(action, contract, repo) {
   }
 }
 
-// 同步成功后的清理指引（CONTEXT.md 运行时三分：tracker 快照是第三类而非传输件，同步成功
+// 同步成功后的清理指引（SKILL.md 收尾步骤：tracker 快照是第三类而非传输件，同步成功
 // 后清理；review bundle 用后即弃；findings 留存因事件流引用其路径；账本三件套长存）。
 // 只指引不代删——清理动作属编排流程（票 07 的清理清单）。
 function syncCleanupLines(mode, runtimeDir) {
@@ -1112,9 +1112,9 @@ function cmdSync({ runtimeDir, rest }) {
   return 0;
 }
 
-// --- 占坑（票 05）：契约 claim 模板的 run 第一写动作（tracker 侧的 feature 级并发锁）---
+// --- 占坑（票 05）：契约 claim 模板的 run 第一写动作（tracker 侧的协作式认领）---
 //
-// 占坑是 run 在 tracker 上的第一个写动作（先于快照拉取，ADR-0003：锁实时、进度延迟）；
+// 占坑是 run 在 tracker 上的第一个写动作（先于快照拉取，ADR-0003：占坑实时、进度延迟）；
 // 进度与合并同步归 sync，封账/放弃时释放。本子命令只做契约模板执行的写面：
 // 先读 spec 母票状态（冲突不猜测覆盖）→ 无人占坑才执行 claim 模板；占坑约定的协商语义
 //（接管/改目标/协调）属 SKILL 叙事（票 07），不在脚本面。幂等：已在位 → 拒绝而非重复写。
@@ -1187,7 +1187,7 @@ function cmdClaim({ runtimeDir, rest }) {
   //（best-effort；跨仓引用必须打到契约仓，不能落在 cwd）。
   const repo = tset.repoOfSpecRef(flags.spec, { contract }) ?? cliRepoView(contract, []);
 
-  // 先读状态再写入（冲突检查不可用时不盲写）：占坑是并发锁的占有面，他人已在位即停下。
+  // 先读状态再写入（冲突检查不可用时不盲写）：他人已在位即停下，但读写非原子，不保证互斥。
   // view 字段名从契约 viewShape 适配（票 06）——GitLab 的 assignees[].username 与 GitHub 的
   //  assignees[].login 同过一张契约表，零 if-tracker。
   try {
@@ -1196,7 +1196,7 @@ function cmdClaim({ runtimeDir, rest }) {
     if (assignees.length) {
       out(
         `✗ 占坑冲突：spec ${specNum} 已在 tracker 上被认领（${assignees.join('、')}）——`,
-        '  占坑是 feature 级并发锁的占有面：不猜测覆盖他人占坑；',
+        '  占坑是 feature 级协作式认领的占有面（advisory，非互斥）：不猜测覆盖他人占坑；',
         '  若确为本 run 续跑（同一占坑者），该步幂等可直接跳过；',
         '  若要接管或换目标：按占坑约定与在位者（或用户）确认后处理。'
       );
@@ -1216,7 +1216,7 @@ function cmdClaim({ runtimeDir, rest }) {
     return 1;
   }
   out(
-    `✓ 占坑：spec ${specNum} 已认领到 @me（契约 claim 模板；tracker 侧的 feature 级并发锁，ADR-0003）。`
+    `✓ 占坑：spec ${specNum} 已认领到 @me（契约 claim 模板；tracker 侧 feature 级协作式认领，ADR-0003）。`
   );
   return 0;
 }

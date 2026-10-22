@@ -20,7 +20,7 @@ Follow the workspace named in your brief: a ticket uses an isolated pi-managed w
 
 ## Before writing code
 
-- Read the ticket file and the spec section it names, then the code at the seams the brief names. When `CONTEXT.md` or `docs/adr/` exist, read the parts that touch this area: use the glossary's terms in names and tests, and flag any ADR your change would contradict.
+- Read the ticket file and the spec section it names, then the code at the seams the brief names. When `GLOSSARY.md` or `docs/adr/` exist, read the parts that touch this area: use the glossary's terms in names and tests, and flag any ADR your change would contradict.
 - If the ticket points at a `prototype/<name>` branch, read it as a primary source for the decisions it encodes.
 - Seams are pre-agreed: the brief or the ticket names them. When it names none, test at the public boundary where the acceptance criteria are observable, and name that boundary in your report.
 
