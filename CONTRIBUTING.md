@@ -22,8 +22,9 @@ implementation stage of [Matt Pocock's engineering flow](https://github.com/matt
   for a CLI black-box suite. `test/repro-*.js` are manual acceptance probes (`npm run repro`, real model
   calls) and are never part of `npm test`. None of `test/` ships in the npm package.
 - Orientation for agents and humans alike: [`AGENTS.md`](./AGENTS.md) points at the issue-tracker
-  setup, the triage label vocabulary, and the domain docs; [`CONTEXT.md`](./CONTEXT.md) holds the
-  glossary and the flow's vocabulary.
+  setup, the triage label vocabulary, and the domain docs. [`GLOSSARY.md`](./GLOSSARY.md) defines
+  domain terms; [`SKILL.md`](./SKILL.md) describes operating steps; [`docs/adr/`](./docs/adr/) records
+  design decisions and their trade-offs.
 - Dogfooding a pre-release locally: [`dev/dogfood-update.sh`](./dev/dogfood-update.sh) rolls a packed
   tarball into a fixed local mirror directory (one-time `pi install`, per-release update, instant
   rollback — see the script header).

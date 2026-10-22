@@ -6,7 +6,8 @@
 - **Context tags:** tracker, snapshot, sync, run-continuation, matt-principle
 
 > **后续调整：** [ADR-0009](0009-prompt-driven-repair-and-run-continuation.md)（spec #12）。
-> 保留快照真相、封账前同步与不重拉；阶段性交付保持 run 开放，不同步、关闭 spec 或清理快照，尚未结束其生命周期。
+> 保留快照真相、封账前同步与不重拉；阶段性交付保持 run 开放：不同步、不关闭 spec、不清理快照，其生命周期未结束。
+> 文中「锁实时」「并发锁」为历史表述：占坑是先查后写的协作式认领（advisory，非原子互斥锁），见 [GLOSSARY.md](../../GLOSSARY.md)。
 > 以下保留本 ADR 当时的决策与理由，不覆写历史解释。
 
 ## Context

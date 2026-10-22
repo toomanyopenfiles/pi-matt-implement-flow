@@ -1,6 +1,6 @@
 # ADR-0009: Prompt-driven 修复与未封账 run 续跑——可靠事实不等于机械编排判断
 
-- **Status:** accepted（spec #12 已确认；本 ADR 先于组件实现落盘，不表示代码已完成切换）
+- **Status:** accepted（已实现；验证范围见 [回归覆盖矩阵](../agents/regression-coverage.md)）
 - **Date:** 2026-10-07
 - **Deciders:** 本包维护者（spec #12 需求与测试边界确认；正常封账门在实现前置设计中确认）
 - **Context tags:** repair, formal-review, run-continuation, reconciliation, partial-delivery, abandonment

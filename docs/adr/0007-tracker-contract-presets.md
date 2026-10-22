@@ -34,15 +34,16 @@ tracker 支持（local markdown / GitHub Issues）长在两类地方：`gh` 命�
    编辑、锚点不可缺；同时承担 triage-labels.md 的严格解析（ADR-0006 落地，见下）。
    判型失败发生在任何 tracker 调用与落盘之前——**零半成品**。
 2. **三份契约预设，随包发布的声明式数据**（`scripts/tracker-contracts.js`）：local /
-   github / gitlab。字段覆盖六个维度——detection（范本判据）、identity（票号语法、
+   github / gitlab。字段包括 detection（范本判据）、identity（票号语法、
    spec 引用语法、原址 URL 形态）、mapping（label→canonical 五角色、closed→本地
    Status、type 来源、阻塞边来源、viewShape 适配面）、ticketSet（票集边三层兜底链）、
    capabilities（占坑强度、closeWithComment、收尾面 PR/MR/none）、commands（取数/占坑/
-   留评/关票/撤认领/changing 探测的 argv 命令模板；local 全 null——票文件即真相）、
+   留评/关票/撤认领/收尾面探测的 argv 命令模板；local 全 null——票文件即真相）、
    idempotency（marker 模板与载体）、lifecycle（spec 关票时点、abandon 语义）。
    预设是数据不是代码分支：**支持一个新 tracker = 新增一份预设数据 + 范本判据，不碰
    引擎代码**（spec User Story 23）。schema 校验档
-   （`validateContract`）是三预设与合成契约同过的唯一校验点。
+   （`validateContract`）是三预设与合成契约同过的唯一校验点。占坑强度均为 advisory，
+   不提供原子互斥保证；具体字段以该校验函数与预设数据为准。
 3. **词表解析落地 ADR-0006**：`parseTriageLabels(mdText)` 按表头定位列、恰好五行、
    label 唯一，违约报错到文件+行+列+期望；文件缺失落 canonical 默认并注记警告；解析
    结果覆盖预设的 canonical 默认，随快照钉死（拉取时钉死）。落地位置即本模块，ADR-0006

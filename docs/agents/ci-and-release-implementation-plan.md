@@ -1,28 +1,16 @@
-# CI 与版本发布实施计划
+# CI 与版本发布历史计划
 
-## 1. 新 session 接续入口
+本文件保留 2026-10-08 的设计与实施记录，**不是新 session 的接续指令或当前待办清单**。
+CI 与发布 workflow 已落地；后续工作从 [CONTRIBUTING.md](../../CONTRIBUTING.md)、
+[CI workflow](../../.github/workflows/ci.yml) 和 [发布 workflow](../../.github/workflows/release.yml)
+读取当前规则。下文原计划中的 OIDC 自动发布方案已被附录记录的维护者人工发布方案取代。
 
-本文件记录用户已确认的方向，供下一次 session 实施。先重新读取仓库指令和当前状态，再按阶段推进。
+## 1. 设计基线
 
-- 仓库：`toomanyopenfiles/pi-matt-implement-flow`，公开仓库。
-- 本计划编写时，本地与远端 `main` 为 `113df1ea262f23cf3a541476897475198ea83cfe`。
-- PR #19 已合并；本地与远端 `implement/spec-12-prompt-driven` 已删除。
-- 实现工作树已清理；保留的 `pi-subagents/*` 本地历史分支不属于本次必须清理项。
-- 当前包版本为 `0.3.1`，新功能在 `CHANGELOG.md` 的 `Unreleased` 中。
-- 本地验收归档：`.pi/matt-implement/spec12-acceptance/`，保持私有、保留，不上传 CI。
-- 归档证明旧候选 `cc37d385` 的测试为 483/483；不能代替新发布候选的验证。
-- 当前未建立 Actions workflow、CI 必需检查或自动发布门。
-- 本文件是计划，不代表用户已经授权 npm 发布、创建正式 Release、修改账户权限或产生费用。
-
-### 首次操作
-
-1. 读取 `AGENTS.md`、`CONTEXT.md`、`CONTRIBUTING.md` 和 `docs/agents/issue-tracker.md`。
-2. 涉及 pi 平台集成时，按全局指令读取对应的 pi 官方本地文档；本轮无需改平台集成接口。
-3. 检查 `git status`、当前分支、远端 HEAD、`package.json`、现有测试与 `.github/workflows/`。
-4. 核对本计划中的快照事实，记录变化，不覆盖用户已有修改。
-5. 用户在新 session 明确要求开始实施后，在功能分支工作，通过 PR 接入 `main`。
-
-**完成标准：** 能明确指出实施基线、工作区状态和与本计划的差异。
+- 仓库：`toomanyopenfiles/pi-matt-implement-flow`。
+- 原计划基线：`113df1ea262f23cf3a541476897475198ea83cfe`，不是当前 HEAD。
+- 私有验收归档的结果只证明对应候选，不代替后续候选的验证，也不上传 CI。
+- 本文件不授予 npm 发布、创建正式 Release、修改账户权限或产生费用的权限。
 
 ## 2. 已确认的范围与边界
 
@@ -304,7 +292,7 @@ Workflow 文件不能单独禁止合并，需要 GitHub 规则配合。
 
 每个阶段报告：修改文件、测试命令/结果、远端 run URL、未配置事项、保证边界。不要把“YAML已提交”当成“远端CI验收完成”。
 
-## 11. 最终验收清单
+## 11. 原计划验收清单（非当前待办）
 
 - [ ] 主体能力矩阵完整，缺口已补或注明真实模型边界。
 - [ ] 所有已关闭issue按最终决定分类；#10不是实现承诺。
@@ -325,7 +313,7 @@ Workflow 文件不能单独禁止合并，需要 GitHub 规则配合。
 - [ ] CI不上传私有验收归档、凭证或敏感原始会话。
 - [ ] 正式发布已得到用户明确授权。
 
-## 12. 成本与待确认事项
+## 12. 制定计划时的成本与待确认事项
 
 仓库公开。标准GitHub-hosted Linux/macOS执行时间按当前官方规则免费；larger runners收费。Artifact存储仍需控制，初版建议7天保留期，不配置不必要缓存。实施时复核最新计费规则与账户预算，不承诺账户整体零费用。
 
@@ -351,7 +339,7 @@ Workflow 文件不能单独禁止合并，需要 GitHub 规则配合。
 - Actions计费：https://docs.github.com/en/billing/concepts/product-billing/github-actions
 - 免费额度：https://docs.github.com/en/billing/reference/product-usage-included
 
-相关本仓文档：`CONTEXT.md`、`docs/adr/0009-prompt-driven-repair-and-run-continuation.md`、`docs/agents/prompt-driven-scenario-acceptance.md`。已有场景证据只作历史背景，不执行归档workflow脚本作为新的run。
+相关本仓文档：`GLOSSARY.md`、`docs/adr/0009-prompt-driven-repair-and-run-continuation.md`、`docs/agents/prompt-driven-scenario-acceptance.md`。已有场景证据只作历史背景，不执行归档workflow脚本作为新的run。
 
 ---
 
@@ -359,8 +347,8 @@ Workflow 文件不能单独禁止合并，需要 GitHub 规则配合。
 
 - 阶段 A：`docs/agents/regression-coverage.md` 已建（矩阵 + 基线 483/483 + 边界分类）。
 - 阶段 B：包清单检查 + 包级系统回归 5 场景已落（`test/package-*.test.js`），套件 495/495。
-  揭示并修复两个 audit-report 缺陷（缺 runId 崩溃、仅升级票丢失）；另发现"完全未开工票
-  不进审计票清单"边界，待用户决策。
+  揭示并修复两个 audit-report 缺陷（缺 runId 崩溃、仅升级票丢失）；"完全未开工票
+  不进审计票清单"随后经用户裁定一并修复，见同日追记。
 - 阶段 C：`.github/workflows/ci.yml` 落地，PR #20 首跑双平台绿（macos-15 arm64 / ubuntu-24.04 x86_64，
   Node 24）。npm test 一套入口（含包级），CI 不重复跑。
 - 阶段 D：main 规则集已建（PR 必需 + `ci-success` 必需 + 严格最新 + 禁 force push/删分支；
@@ -370,10 +358,8 @@ Workflow 文件不能单独禁止合并，需要 GitHub 规则配合。
   **用户裁定偏离计划的 OIDC 方案**：npm publish 由维护者人工执行，自动化只做验证、tarball、
   tag 与 GitHub Release；finalize 用确定性重打包摘要与 `npm dist.shasum` 比对（不只看版本存在）。
   因此不使用 npm Trusted Publishing / 发布环境 / OIDC。
-- 阶段 F：版本 0.4.0、CHANGELOG 小节（2026-10-08，发布日期若推迟需改）、双语 README 安装章节
+- 阶段 F：准备版本 0.4.0、CHANGELOG 小节（2026-10-08）和双语 README，安装章节
   删除可选 `npm test`（安装包不含测试文件，该指引无效）。
-- 待办：发布门负向验收（release.yml 失败不进收尾）在 PR 合并后做；人工发布向导（wizard）与
-  正式发版授权另行确认。
 - 追记（同日）：发布门负向验收已完成（失败候选 → pack/package-regression/finalize 全 skipped，
   run 37680969944 / 37680982235）；人工发布向导已生成 `.scratch/release-0.4.0-wizard.sh`（8 stage）；
   审计票清单缺口经用户裁定修进 0.4.0（票清单 = 事件触及 ∪ 票文件）。

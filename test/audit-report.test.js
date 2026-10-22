@@ -998,6 +998,28 @@ test('i18n：zh/en 文案目录键集完全一致；归一、回落、词形占�
   assert.equal(makeT('fr').lang, 'zh', '未知语言回落中文（行为基线）');
 });
 
+test('glossary：编排续跑与子代理接续分别可查，双语定义不再使用旧验收字段清单', () => {
+  const { TERMS, lookup } = require('../audit-report/glossary');
+  const { makeT } = require('../audit-report/i18n');
+  assert.equal(new Set(TERMS.map((term) => term.id)).size, TERMS.length, '词条 ID 唯一');
+  assert.equal(lookup('续跑').id, 'run-continuation');
+  assert.equal(lookup('run continuation').id, 'run-continuation');
+  assert.equal(lookup('子代理接续').id, 'resume');
+  assert.equal(lookup('resume').id, 'resume', '旧英文名与词条 ID 保持可查');
+  assert.notEqual(lookup('续跑'), lookup('resume'));
+  for (const lang of ['zh', 'en']) {
+    for (const term of TERMS) assert.ok(term.def[lang].trim(), `${term.id} 缺少 ${lang} 定义`);
+    assert.doesNotMatch(lookup('acceptance-contract').def[lang], /no-staged-files|residualRisks/,
+      '平台验收合同不再描述废弃的模型手写报告字段');
+    assert.match(makeT(lang)('gl.intro'), /GLOSSARY\.md/);
+    assert.doesNotMatch(makeT(lang)('gl.intro'), /CONTEXT\.md/);
+  }
+  const { glossaryGroups } = require('../audit-report/render');
+  const grouped = glossaryGroups(makeT('zh')).flatMap(([, terms]) => terms.map((term) => term.id));
+  assert.deepEqual([...grouped].sort(), TERMS.map((term) => term.id).sort(),
+    '每个词条恰好进入一个渲染分组（否则词条不上术语页、term() 链接是死锚点）');
+});
+
 test('collect + render：lang=en 产出英文站点，lang 缺省保持中文基线', () => {
   const fx = makeFixture();
   const out = path.join(fx.dir, 'out-en');

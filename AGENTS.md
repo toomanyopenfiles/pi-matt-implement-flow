@@ -3,7 +3,7 @@
 pi 的 implement 阶段编排器：读 spec + 票 → 算前沿 → 并行派 coder（各自 worktree）→
 逐个 review（可配置关闭，`mattImplementFlow.reviewer`，final-reviewer 固定不设开关）→
 接回同一 coder 修复 → 合并 + 集成测试门 → 重算前沿 → 最终双轴 review。
-流程开关/预算/并发的生效语义见 CONTEXT.md「流程形态」。
+流程开关、并发和运行时限的生效语义见 SKILL.md「Flow configuration」与「Run deadline」。
 
 ## Agent skills
 
@@ -19,7 +19,7 @@ The five canonical roles, label strings equal to their names
 
 ### Domain docs
 
-Single-context layout: `CONTEXT.md` + `docs/adr/` at the repo root.
+Single-context layout: `GLOSSARY.md` + `docs/adr/` at the repo root.
 See `docs/agents/domain.md`.
 
 ## README languages
@@ -41,7 +41,7 @@ Applies to everything a package user reads: `README*.md`, `audit-report/README*.
   and what to do when something goes wrong (keep a FAQ / troubleshooting section).
 - **Internal implementation stays out of user docs.** Mechanism prose (algorithms, internal
   identifiers and field names, sync protocols, packaging details, test fixtures) belongs in
-  `docs/adr/`, `CONTEXT.md`, or contributor docs; link there if a user truly needs it. The test:
+  `docs/adr/` or contributor docs; link there if a user truly needs it. The test:
   a sentence that explains *how the package does it* rather than *what happens for the user* gets
   cut or moved.
 - **Plain language over coined jargon.** Name the concrete thing (PR / MR, the run finishing

@@ -5,7 +5,7 @@
 // 分支：引擎（票 04-07 接线）只读契约对象取能力、映射与命令，代码里零 per-tracker 分支；
 // 支持一个新 tracker = 新增一份预设数据 + 范本判据（spec User Story 23），不碰引擎代码。
 //
-// schema 六维（字段语义详见 tracker-contract-core.validateContract——契约对象的唯一校验点）：
+// 契约 schema（字段语义详见 tracker-contract-core.validateContract——契约对象的唯一校验点）：
 //   detection    —— 范本判据：H1 标题行（小写、空白归一后的形态）+ 少量锚点短语（全部
 //                   命中才判型成功）。判据只依赖 H1 + 锚点，正文可被用户编辑（票 01）。
 //   identity     —— 标识与引用：票号语法、spec 引用语法、原址语法（Source 行 / 收尾定位）。

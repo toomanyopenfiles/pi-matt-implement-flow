@@ -2,8 +2,9 @@
 
 Use this guide when validating repair/pause choices, cold continuation, final-review repair,
 partial delivery, or abandonment. Read [ADR-0009](../adr/0009-prompt-driven-repair-and-run-continuation.md)
-and the corresponding steps in [SKILL.md](../../SKILL.md) before choosing a scenario; domain terms
-and evidence lifetimes are defined in [CONTEXT.md](../../CONTEXT.md).
+and the corresponding steps in [SKILL.md](../../SKILL.md) before choosing a scenario.
+[GLOSSARY.md](../../GLOSSARY.md) defines domain terms; SKILL.md's closing steps and ADR-0009 define
+evidence retention and cleanup.
 
 This is a contributor acceptance procedure, not a runtime decision engine or required model CI.
 Separate what the model recommended from what actually ran. A deterministic test or a green

@@ -12,6 +12,10 @@ implementation history live in [`docs/adr/`](./docs/adr/).
 
 ### Changed
 
+- The audit report glossary separates run continuation (续跑) from a subagent's retained-context
+  resume (子代理接续), and its wording follows the project glossary (`GLOSSARY.md`, renamed from
+  `CONTEXT.md`). Report collection and risk scoring are unchanged.
+
 - Subagent runs get a 4-hour run deadline by default instead of 1 hour (`coder`, `reviewer`, and
   `final-reviewer`). Long tickets are cut off far less often. (#26)
   (Design: [ADR-0010](./docs/adr/0010-configurable-subagent-run-deadline.md).)

@@ -275,7 +275,7 @@ function narrateEvent(e, T) {
     }
     case 'fix': return T('ev.fix', {
       ticket: esc(p.ticket), fix: t('修复轮', 'fix round'), fixNo: esc(p.fixNo),
-      resume: t('续跑', 'resume'), key: esc(p.key),
+      resume: t('子代理接续', 'resume'), key: esc(p.key),
       note: p.note ? T('ev.noteSuffix', { note: esc(p.note) }) : '',
     });
     case 'merge': return T('ev.merge', {
@@ -328,12 +328,16 @@ function renderCost(model, T) {
 </section>`;
 }
 
-function renderGlossary(model, T) {
-  const groups = [
+function glossaryGroups(T) {
+  return [
     [T('gl.group.domain'), TERMS.filter((t) => ['ledger', 'event-stream', 'notes', 'record', 'close', 'reconcile', 'flow-shape'].includes(t.id))],
     [T('gl.group.flow'), TERMS.filter((t) => ['frontier', 'dispatch', 'settled', 'verdict', 'two-axis', 'fix-round', 'escalate', 'integration-gate', 'final-review', 'anomaly'].includes(t.id))],
-    [T('gl.group.platform'), TERMS.filter((t) => ['acceptance-contract', 'structured-output', 'worktree', 'gate', 'run', 'resume'].includes(t.id))],
+    [T('gl.group.platform'), TERMS.filter((t) => ['acceptance-contract', 'structured-output', 'worktree', 'gate', 'run', 'run-continuation', 'resume'].includes(t.id))],
   ];
+}
+
+function renderGlossary(model, T) {
+  const groups = glossaryGroups(T);
   return `
 <section class="section" id="glossary">
   <h2>${T('gl.title')}</h2>
@@ -649,4 +653,4 @@ details.fold > .fold-body { padding: 0 12px 12px; }
 .foot { max-width: 980px; margin: 0 auto; padding: 16px 20px 40px; color: var(--muted); font-size: 12px; }
 `;
 
-module.exports = { renderAll, esc, term };
+module.exports = { renderAll, esc, term, glossaryGroups };
