@@ -13,6 +13,9 @@ docs/promo/
 # 项目设置不共享
 .pi/settings.json
 
+# pi-unipi 扩展的本地迁移状态
+.unipi/
+
 # pi-subagents 运行期状态（pi 自身已排除，这里让我们的自检口径一致）
 .pi/subagents/
 
